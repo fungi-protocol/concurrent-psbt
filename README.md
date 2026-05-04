@@ -12,7 +12,7 @@ But PSBT itself is completely agnostic about semantics. It doesn’t express any
 
 This becomes a problem for collaborative transaction construction protocols where multiple parties cooperate in a privacy-preserving manner to construct a transaction without a central coordinator. Two concrete examples:
 
-- Silent Payments: outputs depend on the full set of inputs, so all inputs must be known and sorted before an output key can even be derived.
+- Silent Payments: outputs depend on the full set of inputs, so all inputs must be known before an output key can even be derived.
 - Coordinator-less CoinJoins: peers learn and merge transaction fragments incrementally, requiring deterministic merge and ordering semantics that still respect inner-transaction dependencies.
 
 Without a shared model for how PSBTs are constructed and merged over time, each protocol is forced to reinvent ad-hoc solutions. This fragments the ecosystem and makes wallet interoperability much harder.
@@ -40,11 +40,9 @@ For more information on CRDTs please see this [comprehensive write up](https://i
 ## TODOs
 
 CRDT correctness:
-
+  * [ ] 
 - [ ] Fix `BTreeMap::join`  currently non-commutative (last writer wins on key collision). Should return an error on conflicting values, consistent with how `Option<T>` join handles conflicts.
 - [ ] Add property tests verifying the semilattice laws (commutativity, associativity, idempotency) across all `Join` impls. Without these, convergence is asserted by intuition rather than checked.
-- [ ] Document explicitly that `join` is a conflict-detecting partial join rather than a total one. Convergence is guaranteed only over mutually compatible states a conflict is a protocol violation, not something to resolve.
-
 Protocol / features
 
 - [ ] Convert to PSBTv0 alongside PSBTv2
