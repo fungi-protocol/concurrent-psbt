@@ -1,5 +1,5 @@
 mod collections;
-mod constructor;
+pub mod constructor;
 // TODO move to psbt mod
 pub mod fields;
 mod global;
