@@ -87,6 +87,8 @@ pub fn psbt_out_sort_key() -> ProprietaryKey {
 const INPUTS_MODIFIABLE: u8 = 0x01;
 const OUTPUTS_MODIFIABLE: u8 = 0x02;
 
+// FIXME these should be methods in the extension trait which we provide anyway, not standalone
+// functions and certainly not pub functions
 pub fn is_inputs_modifiable(global: &Global) -> bool {
     global.tx_modifiable_flags & INPUTS_MODIFIABLE != 0
 }
