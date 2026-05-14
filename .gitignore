@@ -2,6 +2,8 @@
 /fuzz/target
 /fuzz/corpus
 /fuzz/artifacts
+/hfuzz/target
+/hfuzz/hfuzz_workspace
 .direnv
 PROMPT.md
 QUESTIONS.md

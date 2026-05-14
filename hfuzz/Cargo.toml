@@ -1,0 +1,23 @@
+[package]
+name = "lattice-psbt-hfuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+honggfuzz = "0.5"
+arbitrary = { version = "1", features = ["derive"] }
+lattice-psbt = { path = "..", features = ["_internal"] }
+bitcoin = "0.32.2"
+psbt-v2 = { git = "https://github.com/arminsabouri/rust-psbt", branch = "update-consensus-decode-trait-bound" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "hfuzz_join_inputs"
+path = "src/bin/hfuzz_join_inputs.rs"
+
+[[bin]]
+name = "hfuzz_join_outputs"
+path = "src/bin/hfuzz_join_outputs.rs"
