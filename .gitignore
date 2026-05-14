@@ -4,6 +4,9 @@
 /fuzz/artifacts
 /hfuzz/target
 /hfuzz/hfuzz_workspace
+/afl/target
+/afl/out
+/afl/in
 .direnv
 PROMPT.md
 QUESTIONS.md

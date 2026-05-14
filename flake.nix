@@ -21,12 +21,6 @@
         ./nix/treefmt.nix
       ];
 
-      # TODO
-      # - format nix and rust code using treefmt flake
-      # - flake checks for:
-      #   - tests
-      #   - test coverage (cargo-llvm-cov, produce artifacts suitable for export in CI)
-      #   - mutation testing
-      #   - fuzzing (cargo-fuzz, honggfuzz, afl)
+
     };
 }
