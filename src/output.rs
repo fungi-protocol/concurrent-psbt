@@ -13,6 +13,12 @@ use crate::collections::option::ResultOptionExt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputSet(HashMap<Vec<u8>, Output>);
 
+impl Default for OutputSet {
+    fn default() -> Self {
+        OutputSet(HashMap::new())
+    }
+}
+
 impl OutputSet {
     pub fn len(&self) -> usize {
         self.0.len()

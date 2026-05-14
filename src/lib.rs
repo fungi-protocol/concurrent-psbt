@@ -25,3 +25,6 @@ mod output;
 mod tx;
 
 pub mod constructor;
+
+#[cfg(test)]
+mod tests;

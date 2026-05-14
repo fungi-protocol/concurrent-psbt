@@ -33,6 +33,12 @@ impl IntoIterator for InputSet {
     }
 }
 
+impl Default for InputSet {
+    fn default() -> Self {
+        InputSet(HashMap::new())
+    }
+}
+
 impl InputSet {
     pub fn spends_outpoint(&self, outpoint: &OutPoint) -> bool {
         self.0.contains_key(outpoint)
