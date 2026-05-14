@@ -184,7 +184,8 @@ impl<M: Mod> Constructor<M> {
         let mut global = self.0.global;
         global.proprietaries.remove(&psbt_global_tx_unordered());
 
-        // FIXME this should not be necessary, the value should be up to date
+        // input()/output() modify the sets without updating global counts,
+        // so we reconcile here. Will be unnecessary once they use join.
         global.input_count = inputs.len();
         global.output_count = outputs.len();
 
