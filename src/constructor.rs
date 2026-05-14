@@ -4,7 +4,7 @@ use psbt_v2::v2::Creator as Bip370Creator;
 use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Psbt};
 
 use crate::fields::{
-    is_inputs_modifiable, is_outputs_modifiable, clear_inputs_modifiable, clear_outputs_modifiable,
+    GlobalModifiableExt as _,
     psbt_global_tx_unordered, psbt_global_sort_deterministic, psbt_in_sort_key, psbt_out_sort_key,
     psbt_out_unique_id, UNORDERED_VALUE,
 };
@@ -163,10 +163,10 @@ impl Constructor<Modifiable> {
         if !unordered.is_unordered() {
             return Err(Error::NotUnordered);
         }
-        if !is_inputs_modifiable(&unordered.global) {
+        if !unordered.global.is_inputs_modifiable() {
             return Err(Error::InputsNotModifiable);
         }
-        if !is_outputs_modifiable(&unordered.global) {
+        if !unordered.global.is_outputs_modifiable() {
             return Err(Error::OutputsNotModifiable);
         }
         Ok(Constructor(unordered, PhantomData))
@@ -188,13 +188,13 @@ impl Constructor<Modifiable> {
 
     /// Lock inputs: transition to `OutputsOnlyModifiable`.
     pub fn no_more_inputs(mut self) -> Constructor<OutputsOnlyModifiable> {
-        clear_inputs_modifiable(&mut self.0.global);
+        self.0.global.clear_inputs_modifiable();
         Constructor(self.0, PhantomData)
     }
 
     /// Lock outputs: transition to `InputsOnlyModifiable`.
     pub fn no_more_outputs(mut self) -> Constructor<InputsOnlyModifiable> {
-        clear_outputs_modifiable(&mut self.0.global);
+        self.0.global.clear_outputs_modifiable();
         Constructor(self.0, PhantomData)
     }
 }
@@ -213,7 +213,7 @@ impl Constructor<InputsOnlyModifiable> {
         if !unordered.is_unordered() {
             return Err(Error::NotUnordered);
         }
-        if !is_inputs_modifiable(&unordered.global) {
+        if !unordered.global.is_inputs_modifiable() {
             return Err(Error::InputsNotModifiable);
         }
         Ok(Constructor(unordered, PhantomData))
@@ -221,7 +221,7 @@ impl Constructor<InputsOnlyModifiable> {
 
     /// Lock inputs: both sides now locked, return the `UnorderedPsbt`.
     pub fn no_more_inputs(mut self) -> UnorderedPsbt {
-        clear_inputs_modifiable(&mut self.0.global);
+        self.0.global.clear_inputs_modifiable();
         self.0
     }
 }
@@ -242,7 +242,7 @@ impl Constructor<OutputsOnlyModifiable> {
         if !unordered.is_unordered() {
             return Err(Error::NotUnordered);
         }
-        if !is_outputs_modifiable(&unordered.global) {
+        if !unordered.global.is_outputs_modifiable() {
             return Err(Error::OutputsNotModifiable);
         }
         Ok(Constructor(unordered, PhantomData))
@@ -250,7 +250,7 @@ impl Constructor<OutputsOnlyModifiable> {
 
     /// Lock outputs: both sides now locked, return the `UnorderedPsbt`.
     pub fn no_more_outputs(mut self) -> UnorderedPsbt {
-        clear_outputs_modifiable(&mut self.0.global);
+        self.0.global.clear_outputs_modifiable();
         self.0
     }
 }
@@ -323,14 +323,14 @@ mod tests {
     #[test]
     fn new_modifiable_rejects_missing_inputs_flag() {
         let mut psbt = Creator::new().into_psbt().to_psbt();
-        clear_inputs_modifiable(&mut psbt.global);
+        psbt.global.clear_inputs_modifiable();
         assert_eq!(Constructor::<Modifiable>::new(psbt), Err(Error::InputsNotModifiable));
     }
 
     #[test]
     fn new_modifiable_rejects_missing_outputs_flag() {
         let mut psbt = Creator::new().into_psbt().to_psbt();
-        clear_outputs_modifiable(&mut psbt.global);
+        psbt.global.clear_outputs_modifiable();
         assert_eq!(Constructor::<Modifiable>::new(psbt), Err(Error::OutputsNotModifiable));
     }
 
@@ -339,8 +339,8 @@ mod tests {
         let c = Creator::new().constructor();
         let c = c.no_more_inputs(); // Modifiable → OutputsOnlyModifiable
         let unordered = c.no_more_outputs(); // OutputsOnlyModifiable → UnorderedPsbt
-        assert!(!is_inputs_modifiable(&unordered.global));
-        assert!(!is_outputs_modifiable(&unordered.global));
+        assert!(!unordered.global.is_inputs_modifiable());
+        assert!(!unordered.global.is_outputs_modifiable());
     }
 
     #[test]
@@ -348,8 +348,8 @@ mod tests {
         let c = Creator::new().constructor();
         let c = c.no_more_outputs(); // Modifiable → InputsOnlyModifiable
         let unordered = c.no_more_inputs(); // InputsOnlyModifiable → UnorderedPsbt
-        assert!(!is_inputs_modifiable(&unordered.global));
-        assert!(!is_outputs_modifiable(&unordered.global));
+        assert!(!unordered.global.is_inputs_modifiable());
+        assert!(!unordered.global.is_outputs_modifiable());
     }
 
     #[test]

@@ -87,28 +87,38 @@ pub fn psbt_out_sort_key() -> ProprietaryKey {
 const INPUTS_MODIFIABLE: u8 = 0x01;
 const OUTPUTS_MODIFIABLE: u8 = 0x02;
 
-// FIXME these should be methods in the extension trait which we provide anyway, not standalone
-// functions and certainly not pub functions
-pub fn is_inputs_modifiable(global: &Global) -> bool {
-    global.tx_modifiable_flags & INPUTS_MODIFIABLE != 0
+/// Extension trait for reading and writing the modifiable flags on `Global`.
+pub trait GlobalModifiableExt {
+    fn is_inputs_modifiable(&self) -> bool;
+    fn is_outputs_modifiable(&self) -> bool;
+    fn clear_inputs_modifiable(&mut self);
+    fn clear_outputs_modifiable(&mut self);
+    fn set_inputs_modifiable(&mut self);
+    fn set_outputs_modifiable(&mut self);
 }
 
-pub fn is_outputs_modifiable(global: &Global) -> bool {
-    global.tx_modifiable_flags & OUTPUTS_MODIFIABLE != 0
-}
+impl GlobalModifiableExt for Global {
+    fn is_inputs_modifiable(&self) -> bool {
+        self.tx_modifiable_flags & INPUTS_MODIFIABLE != 0
+    }
 
-pub fn clear_inputs_modifiable(global: &mut Global) {
-    global.tx_modifiable_flags &= !INPUTS_MODIFIABLE;
-}
+    fn is_outputs_modifiable(&self) -> bool {
+        self.tx_modifiable_flags & OUTPUTS_MODIFIABLE != 0
+    }
 
-pub fn clear_outputs_modifiable(global: &mut Global) {
-    global.tx_modifiable_flags &= !OUTPUTS_MODIFIABLE;
-}
+    fn clear_inputs_modifiable(&mut self) {
+        self.tx_modifiable_flags &= !INPUTS_MODIFIABLE;
+    }
 
-pub fn set_inputs_modifiable(global: &mut Global) {
-    global.tx_modifiable_flags |= INPUTS_MODIFIABLE;
-}
+    fn clear_outputs_modifiable(&mut self) {
+        self.tx_modifiable_flags &= !OUTPUTS_MODIFIABLE;
+    }
 
-pub fn set_outputs_modifiable(global: &mut Global) {
-    global.tx_modifiable_flags |= OUTPUTS_MODIFIABLE;
+    fn set_inputs_modifiable(&mut self) {
+        self.tx_modifiable_flags |= INPUTS_MODIFIABLE;
+    }
+
+    fn set_outputs_modifiable(&mut self) {
+        self.tx_modifiable_flags |= OUTPUTS_MODIFIABLE;
+    }
 }
