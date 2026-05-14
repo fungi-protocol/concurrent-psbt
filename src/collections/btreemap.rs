@@ -1,15 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::lattice::join::Join;
+use crate::lattice::join::{Join, JoinMut};
 use crate::lattice::partial::{JoinResult, PartialJoin};
 
 // TODO Deref newtype instead of extension traits?
-
-trait ResultCollection: Join {
-    type Item: PartialJoin;
-
-    fn try_unwrap(self) -> JoinResult<Self::Item>;
-}
 
 pub trait BTreeMapExt {
     type Key;
@@ -30,7 +24,8 @@ where
     }
 }
 
-pub trait Transpose: Sized {
+// FIXME extract to a separate mod, impl for all result container types, require Join
+pub trait ResultContainer: Sized {
     type Key;
     type Value: PartialJoin;
 
@@ -39,7 +34,7 @@ pub trait Transpose: Sized {
     fn is_ok(&self) -> bool;
 }
 
-impl<K, V> Transpose for BTreeMap<K, JoinResult<V>>
+impl<K, V> ResultContainer for BTreeMap<K, JoinResult<V>>
 where
     K: Ord,
     V: PartialJoin,
@@ -63,31 +58,28 @@ where
     }
 }
 
-impl<K, V> Join for BTreeMap<K, V>
+impl<K, V> JoinMut for BTreeMap<K, V>
 where
     K: Ord,
     V: Join,
 {
-    fn join(self, other: Self) -> Self {
-        let mut new: BTreeMap<K, V> = BTreeMap::new();
-
-        for (k, v) in self.into_iter().chain(other) {
-            // TODO itertools.merge_join_by to .collect() in one streaming pass
-            let lub = match new.remove(&k) {
+    fn join_mut(&mut self, other: Self) {
+        for (k, v) in other.into_iter() {
+            let lub = match self.remove(&k) {
                 Some(prev) => prev.join(v),
                 None => v,
             };
 
-            new.insert(k, lub);
+            self.insert(k, lub);
         }
-
-        new
     }
 }
 
 // TODO prop testing and full coverage
 #[test]
 fn test_btree() {
+    use crate::lattice::partial::Conflict;
+
     let a: BTreeMap<u8, ()> = [(0, ())].into();
     let b: BTreeMap<u8, ()> = [(1, ())].into();
 
@@ -97,36 +89,13 @@ fn test_btree() {
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct Foo(u8);
 
-    #[derive(Debug, PartialEq, Eq)]
-    struct FooErr(Vec<u8>);
-
     impl PartialJoin for Foo {
-        type Error = FooErr;
-
         fn try_join(self, other: Self) -> JoinResult<Self> {
             if self == other {
                 Ok(self)
             } else {
-                Err(FooErr(vec![self.0, other.0]))
+                Err(Conflict(vec![self, other]))
             }
-        }
-    }
-
-    impl crate::lattice::partial::Absorb<Foo> for FooErr {
-        fn absorb(self, other: Foo) -> Self {
-            self.join(FooErr(vec![other.0]))
-        }
-    }
-
-    impl Join for FooErr {
-        fn join(mut self, other: Self) -> Self {
-            for v in other.0 {
-                if !self.0.contains(&v) {
-                    self.0.push(v)
-                }
-            }
-
-            self
         }
     }
 
@@ -152,11 +121,11 @@ fn test_btree() {
 
     assert_eq!(
         a.clone().wrap().join(c.clone().wrap()),
-        [(0, Err(FooErr([0, 1].into())))].into()
+        [(0, Err(Conflict(vec![Foo(0), Foo(1)])))].into()
     );
 
     assert_eq!(
         a.clone().wrap().join(c.clone().wrap()).try_unwrap(),
-        Err([(0, Err(FooErr([0, 1].into())))].into())
+        Err([(0, Err(Conflict(vec![Foo(0), Foo(1)])))].into())
     );
 }

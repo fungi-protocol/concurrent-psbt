@@ -1,3 +1,5 @@
+# TODO make things more strict, like forbidding unsafe
+
 [package]
 name = "lattice-psbt"
 version = "0.1.0"
@@ -9,7 +11,6 @@ _internal = []
 [dependencies]
 bitcoin = "0.32.2"
 thiserror = "2.0.17"
-# FIXME no longer need the update-consensus-decode-trait-bound branch
 psbt-v2 = "0.3.0"
 
 [dev-dependencies]

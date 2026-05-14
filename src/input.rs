@@ -7,11 +7,11 @@ use crate::lattice::join::Join;
 use crate::lattice::partial::PartialJoin; // for wrap on values
 
 use crate::collections::btreemap::BTreeMapExt as _;
-use crate::collections::btreemap::Transpose as _;
+use crate::collections::btreemap::ResultContainer as _;
 use crate::collections::option::OptionExt as _;
 use crate::collections::option::ResultOptionExt as _;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct InputSet(HashMap<OutPoint, Input>);
 
 impl FromIterator<Input> for InputSet {
@@ -30,12 +30,6 @@ impl IntoIterator for InputSet {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_values()
-    }
-}
-
-impl Default for InputSet {
-    fn default() -> Self {
-        InputSet(HashMap::new())
     }
 }
 
@@ -418,7 +412,7 @@ impl ResultInput {
 
 #[test]
 fn test_input_set() {
-    use crate::lattice::partial::PartialJoin;
+    use crate::lattice::partial::{Conflict, PartialJoin};
 
     let mut oa = OutPoint::null();
     oa.vout = 0;
@@ -427,10 +421,7 @@ fn test_input_set() {
     assert_ne!(oa, ob);
 
     assert_eq!(PartialJoin::try_join(oa, oa), Ok(oa));
-    assert_eq!(
-        PartialJoin::try_join(oa, ob),
-        Err(crate::values::ConflictingValues([oa, ob].into()))
-    );
+    assert_eq!(PartialJoin::try_join(oa, ob), Err(Conflict(vec![oa, ob])));
 
     let ia = Input::new(&oa);
     let ib = Input::new(&ob);
@@ -443,7 +434,7 @@ fn test_input_set() {
     // Joining two differing inputs directly with one another is not allowed.
     // This shouldn't ever come up in practice since the outpoints are different
     let mut res = ia.clone().wrap();
-    res.spent_output_index = Err(crate::values::ConflictingValues([0, 1].into()));
+    res.spent_output_index = Err(Conflict(vec![0, 1]));
 
     assert_eq!(
         Join::join(ia.clone().wrap(), ib.clone().wrap()).try_unwrap(),
@@ -476,13 +467,10 @@ fn test_input_set() {
     ia_with_other_seq.sequence = Some(bitcoin::Sequence::ENABLE_LOCKTIME_NO_RBF);
 
     let mut conflict = ia.clone().wrap();
-    conflict.sequence = Some(Err(crate::values::ConflictingValues(
-        [
-            bitcoin::Sequence::MAX,
-            bitcoin::Sequence::ENABLE_LOCKTIME_NO_RBF,
-        ]
-        .into(),
-    )));
+    conflict.sequence = Some(Err(Conflict(vec![
+        bitcoin::Sequence::MAX,
+        bitcoin::Sequence::ENABLE_LOCKTIME_NO_RBF,
+    ])));
 
     assert_eq!(
         Join::join(ia_with_seq.clone().wrap(), ia_with_other_seq.clone().wrap()),
@@ -499,7 +487,7 @@ fn test_input_set() {
                 .wrap()
                 .join(ia_with_other_seq.clone().wrap())]
             .into_iter()
-            .map(|i| (oa.clone(), i))
+            .map(|i| (oa, i))
             .collect()
         ))
     );

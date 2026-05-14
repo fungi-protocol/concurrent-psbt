@@ -49,7 +49,7 @@ impl UnorderedPsbt {
         self.global
             .proprietaries
             .get(&crate::fields::psbt_global_tx_unordered())
-            .map_or(false, |v| v.as_slice() == [crate::fields::UNORDERED_VALUE])
+            .is_some_and(|v| v.as_slice() == [crate::fields::UNORDERED_VALUE])
     }
 }
 
@@ -93,7 +93,6 @@ impl ResultUnorderedPsbt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lattice::join::Join;
     use psbt_v2::v2::Creator as Bip370Creator;
 
     fn make_unordered() -> UnorderedPsbt {

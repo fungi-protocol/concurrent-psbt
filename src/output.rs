@@ -6,18 +6,12 @@ use crate::lattice::join::Join;
 use crate::lattice::partial::PartialJoin;
 
 use crate::collections::btreemap::BTreeMapExt;
-use crate::collections::btreemap::Transpose;
+use crate::collections::btreemap::ResultContainer;
 use crate::collections::option::OptionExt;
 use crate::collections::option::ResultOptionExt;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct OutputSet(HashMap<Vec<u8>, Output>);
-
-impl Default for OutputSet {
-    fn default() -> Self {
-        OutputSet(HashMap::new())
-    }
-}
 
 impl OutputSet {
     pub fn len(&self) -> usize {

@@ -4,7 +4,6 @@ use crate::lattice::partial::{Absorb, JoinResult, PartialJoin};
 impl<V> Join for JoinResult<V>
 where
     V: PartialJoin,
-    V::Error: Join + Absorb<V>,
 {
     fn join(self, other: Self) -> Self {
         match (self, other) {
@@ -47,14 +46,18 @@ fn test_join_result_option() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lattice::partial::Conflict;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct Foo(u8);
 
     impl PartialJoin for Foo {
-        type Error = ();
         fn try_join(self, other: Self) -> JoinResult<Self> {
-            if self == other { Ok(self) } else { Err(()) }
+            if self == other {
+                Ok(self)
+            } else {
+                Err(Conflict::from((self, other)))
+            }
         }
     }
 
@@ -64,9 +67,9 @@ mod tests {
         let b = Foo(1u8);
 
         assert_eq!(a.try_join(a), Ok(a));
-        assert_eq!(a.try_join(b), Err(()));
+        assert_eq!(a.try_join(b), Err(Conflict(vec![a, b])));
 
         assert_eq!(a.wrap().join(a.wrap()), Ok(a));
-        assert_eq!(a.wrap().join(b.wrap()), Err(()));
+        assert_eq!(a.try_join(b), Err(Conflict(vec![a, b])));
     }
 }

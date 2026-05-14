@@ -80,15 +80,19 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lattice::partial::Conflict;
     use std::collections::HashMap;
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct Val(u8);
 
     impl PartialJoin for Val {
-        type Error = ();
         fn try_join(self, other: Self) -> JoinResult<Self> {
-            if self == other { Ok(self) } else { Err(()) }
+            if self == other {
+                Ok(self)
+            } else {
+                Err(Conflict::from((self, other)))
+            }
         }
     }
 
@@ -121,7 +125,7 @@ mod tests {
     fn is_ok_false_when_any_err() {
         let mut wrapped: HashMap<&str, JoinResult<Val>> = HashMap::new();
         wrapped.insert("a", Ok(Val(1)));
-        wrapped.insert("b", Err(()));
+        wrapped.insert("b", Err(Conflict(vec![Val(2), Val(3)])));
         assert!(!wrapped.is_ok());
     }
 
@@ -137,7 +141,7 @@ mod tests {
     fn try_unwrap_fails_when_any_err() {
         let mut wrapped: HashMap<&str, JoinResult<Val>> = HashMap::new();
         wrapped.insert("a", Ok(Val(1)));
-        wrapped.insert("b", Err(()));
+        wrapped.insert("b", Err(Conflict(vec![Val(2), Val(3)])));
         assert!(wrapped.try_unwrap().is_err());
     }
 }

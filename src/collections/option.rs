@@ -1,5 +1,5 @@
 use crate::lattice::join::Join;
-use crate::lattice::partial::{JoinResult, PartialJoin};
+use crate::lattice::partial::{Conflict, JoinResult, PartialJoin};
 
 impl<V> Join for Option<V>
 where
@@ -30,15 +30,13 @@ impl<V: PartialJoin> OptionExt for Option<V> {
 
 pub trait ResultOptionExt {
     type Value;
-    type Error;
 
     fn is_ok(&self) -> bool;
-    fn try_unwrap(self) -> Result<Option<Self::Value>, Self::Error>;
+    fn try_unwrap(self) -> Result<Option<Self::Value>, Conflict<Self::Value>>;
 }
 
 impl<V: PartialJoin> ResultOptionExt for Option<JoinResult<V>> {
     type Value = V;
-    type Error = V::Error;
 
     fn is_ok(&self) -> bool {
         match self {
@@ -47,13 +45,15 @@ impl<V: PartialJoin> ResultOptionExt for Option<JoinResult<V>> {
         }
     }
 
-    fn try_unwrap(self) -> Result<Option<V>, V::Error> {
+    fn try_unwrap(self) -> Result<Option<V>, Conflict<V>> {
         self.transpose()
     }
 }
 
 #[test]
 fn test_join_option() {
+    use crate::lattice::partial::Conflict;
+
     assert_eq!(Join::join(None::<()>, None), None);
     assert_eq!(Join::join(Some(()), None), Some(()));
     assert_eq!(Join::join(None, Some(())), Some(()));
@@ -63,26 +63,34 @@ fn test_join_option() {
     struct Foo(u8);
 
     impl PartialJoin for Foo {
-        type Error = ();
-
         fn try_join(self, other: Self) -> JoinResult<Self> {
-            if self == other { Ok(self) } else { Err(()) }
+            if self == other {
+                Ok(self)
+            } else {
+                Err(Conflict::from((self, other)))
+            }
         }
     }
 
     assert_eq!(None::<Foo>.wrap(), None);
 
-    let a = Some(Foo(0u8));
+    let a = Some(Foo(0));
 
-    assert_eq!(a.wrap(), Some(Ok(Foo(0u8))));
+    assert_eq!(a.wrap(), Some(Ok(Foo(0))));
     assert_eq!(a.wrap().try_unwrap(), Ok(a));
     assert_eq!(a.wrap().join(None), a.wrap());
     assert_eq!(a.wrap().join(a.wrap()), a.wrap());
     assert_eq!(None::<Foo>.wrap().join(a.wrap()), a.wrap());
 
-    let b = Some(Foo(1u8));
-    assert_eq!(a.wrap().join(b.wrap()), Some(Err(())));
-    assert_eq!(a.wrap().join(b.wrap()).try_unwrap(), Err(()));
+    let b = Some(Foo(1));
+    assert_eq!(
+        a.wrap().join(b.wrap()),
+        Some(Err(Conflict(vec![Foo(0), Foo(1)])))
+    );
+    assert_eq!(
+        a.wrap().join(b.wrap()).try_unwrap(),
+        Err(Conflict(vec![Foo(0), Foo(1)]))
+    );
 }
 
 // let a = 1u8;

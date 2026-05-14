@@ -3,7 +3,6 @@ use crate::{
     input::{Input, InputExt as _, InputSet},
     lattice::join::Join,
     output::{Output, OutputExt as _, OutputSet},
-    tx::UnorderedPsbt,
 };
 use bitcoin::{
     Amount, OutPoint, PublicKey, ScriptBuf, Sequence, TapNodeHash, TxOut, Txid, Witness, absolute,
@@ -425,8 +424,8 @@ prop_compose! {
         input_count  in 0usize..4,
         output_count in 0usize..4,
         fallback_lock_time in proptest::option::of(prop_oneof![
-            arb_height().prop_map(|h| absolute::LockTime::Blocks(h)),
-            arb_time().prop_map(|t| absolute::LockTime::Seconds(t)),
+            arb_height().prop_map(absolute::LockTime::Blocks),
+            arb_time().prop_map(absolute::LockTime::Seconds),
         ]),
         tx_modifiable_flags in 0u8..4,
         unknowns      in proptest::collection::btree_map(arb_raw_key(), proptest::collection::vec(0u8..4, 0..4), 0..3),

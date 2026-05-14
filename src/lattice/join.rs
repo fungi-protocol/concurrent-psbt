@@ -7,10 +7,11 @@ pub trait Join: Sized {
     fn join(self, other: Self) -> Self;
 }
 
-#[allow(dead_code)]
 pub trait JoinMut: Join {
     fn join_mut(&mut self, other: Self);
+}
 
+impl<T: JoinMut> Join for T {
     fn join(mut self, other: Self) -> Self {
         self.join_mut(other);
         self

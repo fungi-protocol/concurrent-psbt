@@ -14,6 +14,7 @@ use crate::tx::UnorderedPsbt;
 
 use psbt_v2::v2::{Input, Output};
 
+// FIXME use thiserror instead of implementing manually
 /// Error returned when a PSBT is not suitable for an unordered Constructor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -38,6 +39,7 @@ impl core::fmt::Display for Error {
     }
 }
 
+// FIXME use thiserror instead of implementing manually
 /// Error returned when sorting an unordered Constructor into a fixed order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SortingError {
@@ -748,7 +750,7 @@ mod tests {
 
     #[test]
     fn finalize_order_inputs_only() {
-        use crate::fields::{psbt_global_sort_deterministic, psbt_in_sort_key, psbt_out_unique_id};
+        use crate::fields::{psbt_global_sort_deterministic, psbt_in_sort_key};
 
         let mut creator = Creator::new();
         creator

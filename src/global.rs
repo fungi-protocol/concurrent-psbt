@@ -4,7 +4,7 @@ use crate::lattice::join::Join;
 use crate::lattice::partial::PartialJoin;
 
 use crate::collections::btreemap::BTreeMapExt;
-use crate::collections::btreemap::Transpose;
+use crate::collections::btreemap::ResultContainer;
 use crate::collections::option::OptionExt;
 use crate::collections::option::ResultOptionExt;
 
