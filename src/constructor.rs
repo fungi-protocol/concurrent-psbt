@@ -1,5 +1,6 @@
 use core::marker::PhantomData;
 
+use psbt_v2::v2::Constructor as Bip370Constructor;
 use psbt_v2::v2::Creator as Bip370Creator;
 use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Psbt};
 
@@ -132,8 +133,7 @@ impl<M: Mod> Constructor<M> {
     ///
     /// Requires `PSBT_GLOBAL_SORT_DETERMINISTIC` = `0x00` (explicit sort keys).
     /// Deterministic derivation (`0x01`) is not yet implemented.
-    // FIXME should return a Bip370Constructor ready to be made into an updater
-    pub fn finalize_order(self) -> Result<Psbt, FinalizeError> {
+    fn finalize_order_inner(self) -> Result<Psbt, FinalizeError> {
         let det_key = psbt_global_sort_deterministic();
         let det_value = self
             .0
@@ -238,6 +238,13 @@ impl Constructor<Modifiable> {
         Ok(this)
     }
 
+    /// Sort inputs/outputs and produce a BIP 370 `Constructor<Modifiable>`.
+    pub fn finalize_order(self) -> Result<Bip370Constructor<Modifiable>, FinalizeError> {
+        let psbt = self.finalize_order_inner()?;
+        Ok(Bip370Constructor::<Modifiable>::new(psbt)
+            .expect("modifiable flags are preserved"))
+    }
+
     /// Lock inputs: transition to `OutputsOnlyModifiable`.
     pub fn no_more_inputs(mut self) -> Constructor<OutputsOnlyModifiable> {
         self.0.global.clear_inputs_modifiable();
@@ -271,6 +278,13 @@ impl Constructor<InputsOnlyModifiable> {
         Ok(Constructor(unordered, PhantomData))
     }
 
+    /// Sort inputs/outputs and produce a BIP 370 `Constructor<InputsOnlyModifiable>`.
+    pub fn finalize_order(self) -> Result<Bip370Constructor<InputsOnlyModifiable>, FinalizeError> {
+        let psbt = self.finalize_order_inner()?;
+        Ok(Bip370Constructor::<InputsOnlyModifiable>::new(psbt)
+            .expect("inputs-modifiable flag is preserved"))
+    }
+
     /// Lock inputs: both sides now locked, return the `UnorderedPsbt`.
     pub fn no_more_inputs(mut self) -> UnorderedPsbt {
         self.0.global.clear_inputs_modifiable();
@@ -300,7 +314,13 @@ impl Constructor<OutputsOnlyModifiable> {
         Ok(Constructor(unordered, PhantomData))
     }
 
-    // FIXME should return a Bip370Constructor ready to become an updater
+    /// Sort inputs/outputs and produce a BIP 370 `Constructor<OutputsOnlyModifiable>`.
+    pub fn finalize_order(self) -> Result<Bip370Constructor<OutputsOnlyModifiable>, FinalizeError> {
+        let psbt = self.finalize_order_inner()?;
+        Ok(Bip370Constructor::<OutputsOnlyModifiable>::new(psbt)
+            .expect("outputs-modifiable flag is preserved"))
+    }
+
     /// Lock outputs: both sides now locked, return the `UnorderedPsbt`.
     pub fn no_more_outputs(mut self) -> UnorderedPsbt {
         self.0.global.clear_outputs_modifiable();
@@ -473,7 +493,8 @@ mod tests {
         psbt.global.output_count = 2;
 
         let constructor = Constructor::<Modifiable>::new(psbt).unwrap();
-        let ordered = constructor.finalize_order().unwrap();
+        let bip370 = constructor.finalize_order().unwrap();
+        let ordered = bip370.psbt().unwrap();
 
         // After sorting: sort_key 0x01 (vout=0) before 0x02 (vout=1).
         assert_eq!(ordered.inputs[0].spent_output_index, 0);
@@ -482,6 +503,23 @@ mod tests {
         // After sorting: sort_key 0x01 (1000 sat) before 0x02 (2000 sat).
         assert_eq!(ordered.outputs[0].amount, bitcoin::Amount::from_sat(1000));
         assert_eq!(ordered.outputs[1].amount, bitcoin::Amount::from_sat(2000));
+    }
+
+    #[test]
+    fn finalize_order_produces_valid_updater() {
+        use crate::fields::psbt_global_sort_deterministic;
+
+        let mut creator = Creator::new();
+        creator
+            .0
+            .global
+            .proprietaries
+            .insert(psbt_global_sort_deterministic(), vec![0x00]);
+
+        let constructor = creator.constructor();
+        let bip370 = constructor.finalize_order().unwrap();
+        // Proceed through the BIP 370 pipeline to Updater.
+        let _updater = bip370.updater().unwrap();
     }
 
     #[test]
@@ -503,20 +541,20 @@ mod tests {
         psbt.global.input_count = 1;
 
         let constructor = Constructor::<Modifiable>::new(psbt).unwrap();
-        assert_eq!(
+        assert!(matches!(
             constructor.finalize_order(),
             Err(FinalizeError::MissingSortKey)
-        );
+        ));
     }
 
     #[test]
     fn finalize_order_rejects_missing_deterministic_field() {
         let psbt = Creator::new().into_unordered_psbt().to_psbt();
         let constructor = Constructor::<Modifiable>::new(psbt).unwrap();
-        assert_eq!(
+        assert!(matches!(
             constructor.finalize_order(),
             Err(FinalizeError::MissingSortDeterministic)
-        );
+        ));
     }
 
     #[test]
@@ -531,10 +569,10 @@ mod tests {
             .insert(psbt_global_sort_deterministic(), vec![0x01]);
         let psbt = creator.into_unordered_psbt().to_psbt();
         let constructor = Constructor::<Modifiable>::new(psbt).unwrap();
-        assert_eq!(
+        assert!(matches!(
             constructor.finalize_order(),
             Err(FinalizeError::DeterministicNotSupported)
-        );
+        ));
     }
 
     #[test]
