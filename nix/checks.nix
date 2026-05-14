@@ -2,21 +2,21 @@
   perSystem =
     {
       pkgs,
-      craneLib,
+      craneLibNightly,
       commonArgs,
       cargoArtifacts,
       ...
     }:
     {
       checks = {
-        tests = craneLib.cargoNextest (
+        tests = craneLibNightly.cargoNextest (
           commonArgs
           // {
             inherit cargoArtifacts;
           }
         );
 
-        mutants = craneLib.mkCargoDerivation (
+        mutants = craneLibNightly.mkCargoDerivation (
           commonArgs
           // {
             inherit cargoArtifacts;
@@ -32,7 +32,7 @@
           }
         );
 
-        coverage = craneLib.mkCargoDerivation (
+        coverage = craneLibNightly.mkCargoDerivation (
           commonArgs
           // {
             inherit cargoArtifacts;

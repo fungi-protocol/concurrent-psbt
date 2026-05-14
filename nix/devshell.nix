@@ -1,8 +1,8 @@
 {
   perSystem =
-    { pkgs, craneLib, ... }:
+    { pkgs, craneLibNightly, ... }:
     {
-      devShells.default = craneLib.devShell {
+      devShells.default = craneLibNightly.devShell {
         packages = with pkgs; [
           cargo-nextest
           rust-analyzer

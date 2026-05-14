@@ -15,6 +15,10 @@ psbt-v2 = { git = "https://github.com/arminsabouri/rust-psbt", branch = "update-
 members = ["."]
 
 [[bin]]
+name = "afl_crash_test"
+path = "src/bin/afl_crash_test.rs"
+
+[[bin]]
 name = "afl_join_inputs"
 path = "src/bin/afl_join_inputs.rs"
 

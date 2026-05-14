@@ -1,18 +1,18 @@
 { inputs, ... }:
 {
   perSystem =
-    { craneLib, ... }:
+    { craneLibNightly, ... }:
     let
-      src = craneLib.cleanCargoSource inputs.self;
+      src = craneLibNightly.cleanCargoSource inputs.self;
 
       commonArgs = {
         inherit src;
         strictDeps = true;
       };
 
-      cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+      cargoArtifacts = craneLibNightly.buildDepsOnly commonArgs;
 
-      lattice-psbt = craneLib.buildPackage (commonArgs // { inherit cargoArtifacts; });
+      lattice-psbt = craneLibNightly.buildPackage (commonArgs // { inherit cargoArtifacts; });
     in
     {
       _module.args = {

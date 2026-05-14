@@ -18,6 +18,11 @@ psbt-v2 = { git = "https://github.com/arminsabouri/rust-psbt", branch = "update-
 members = ["."]
 
 [[bin]]
+name = "fuzz_crash_test"
+path = "fuzz_targets/fuzz_crash_test.rs"
+doc = false
+
+[[bin]]
 name = "fuzz_join_inputs"
 path = "fuzz_targets/fuzz_join_inputs.rs"
 doc = false
