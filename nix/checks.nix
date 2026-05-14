@@ -16,6 +16,22 @@
           }
         );
 
+        mutants = craneLib.mkCargoDerivation (
+          commonArgs
+          // {
+            inherit cargoArtifacts;
+            pnameSuffix = "-mutants-smoke";
+            nativeBuildInputs = [ pkgs.cargo-mutants ];
+            buildPhaseCargoCommand = ''
+              timeout 10 cargo mutants --no-shuffle -vV || test $? -eq 124
+            '';
+            installPhase = ''
+              mkdir -p $out
+              cp -r mutants.out/* $out/ 2>/dev/null || true
+            '';
+          }
+        );
+
         coverage = craneLib.mkCargoDerivation (
           commonArgs
           // {

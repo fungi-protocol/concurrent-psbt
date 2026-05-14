@@ -16,6 +16,7 @@
         ./nix/toolchain.nix
         ./nix/package.nix
         ./nix/checks.nix
+        ./nix/apps.nix
         ./nix/devshell.nix
         ./nix/treefmt.nix
       ];
