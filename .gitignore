@@ -1,4 +1,7 @@
 /target
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
 .direnv
 PROMPT.md
 QUESTIONS.md

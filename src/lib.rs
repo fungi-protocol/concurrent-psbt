@@ -26,5 +26,16 @@ mod tx;
 
 pub mod constructor;
 
+/// Re-exports for fuzzing and internal tooling. Not part of the public API.
+#[cfg(feature = "_internal")]
+pub mod _internal {
+    pub use crate::global::{Global, GlobalExt, ResultGlobal};
+    pub use crate::input::{Input, InputSet, ResultInput, ResultInputSet};
+    pub use crate::lattice::join::Join;
+    pub use crate::lattice::partial::PartialJoin;
+    pub use crate::output::{Output, OutputSet, ResultOutput, ResultOutputSet};
+    pub use crate::tx::UnorderedPsbt;
+}
+
 #[cfg(test)]
 mod tests;

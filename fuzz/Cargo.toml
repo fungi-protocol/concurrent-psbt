@@ -1,0 +1,28 @@
+[package]
+name = "lattice-psbt-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+lattice-psbt = { path = "..", features = ["_internal"] }
+bitcoin = "=0.32.7"
+psbt-v2 = { git = "https://github.com/arminsabouri/rust-psbt", branch = "update-consensus-decode-trait-bound" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_join_inputs"
+path = "fuzz_targets/fuzz_join_inputs.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_join_outputs"
+path = "fuzz_targets/fuzz_join_outputs.rs"
+doc = false

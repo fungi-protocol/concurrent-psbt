@@ -3,6 +3,9 @@ name = "lattice-psbt"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+_internal = []
+
 [dependencies]
 bitcoin = "0.32.2"
 thiserror = "2.0.17"
