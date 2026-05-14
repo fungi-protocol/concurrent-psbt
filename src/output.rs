@@ -50,6 +50,8 @@ impl IntoIterator for OutputSet {
 
 pub trait OutputExt {
     fn unique_id(&self) -> Vec<u8>;
+    fn sort_key(&self) -> Option<&Vec<u8>>;
+    fn take_sort_key(&mut self) -> Option<Vec<u8>>;
 
     fn into_ok(self) -> ResultOutput;
 }
@@ -60,6 +62,14 @@ impl OutputExt for Output {
             .get(&crate::fields::psbt_out_unique_id())
             .expect("PSBT_OUT_UNIQUE_ID must be set (validate before constructing OutputSet)")
             .clone()
+    }
+
+    fn sort_key(&self) -> Option<&Vec<u8>> {
+        self.proprietaries.get(&crate::fields::psbt_out_sort_key())
+    }
+
+    fn take_sort_key(&mut self) -> Option<Vec<u8>> {
+        self.proprietaries.remove(&crate::fields::psbt_out_sort_key())
     }
 
     fn into_ok(self) -> ResultOutput {

@@ -5,9 +5,11 @@ use psbt_v2::v2::Creator as Bip370Creator;
 use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Psbt};
 
 use crate::fields::{
-    psbt_global_sort_deterministic, psbt_global_tx_unordered, psbt_in_sort_key, psbt_out_sort_key,
-    psbt_out_unique_id, GlobalModifiableExt as _, UNORDERED_VALUE,
+    psbt_global_sort_deterministic, psbt_global_tx_unordered, psbt_out_unique_id,
+    GlobalModifiableExt as _, UNORDERED_VALUE,
 };
+use crate::input::InputExt as _;
+use crate::output::OutputExt as _;
 use crate::tx::UnorderedPsbt;
 
 use psbt_v2::v2::{Input, Output};
@@ -44,7 +46,8 @@ pub enum FinalizeError {
     /// `PSBT_GLOBAL_SORT_DETERMINISTIC` has an unrecognized value.
     InvalidSortDeterministic,
     /// An input or output is missing its sort key.
-    MissingSortKey,
+    MissingSortKey, // FIXME split into MissingSortKeyForInput(OutPoint) and
+                    // MissingSortKeyForOutput(unique id)
 }
 
 impl core::fmt::Display for FinalizeError {
@@ -148,34 +151,30 @@ impl<M: Mod> Constructor<M> {
             _ => return Err(FinalizeError::InvalidSortDeterministic),
         }
 
-        let in_key = psbt_in_sort_key();
-        let out_key = psbt_out_sort_key();
-
         let mut inputs: Vec<_> = self.0.inputs.into_iter().collect();
         let mut outputs: Vec<_> = self.0.outputs.into_iter().collect();
 
-        // FIXME instead of checking all sort keys are defined, check depending
-        // on DETERMINISTIC flag's requirements (all defined, all missing and seed defined, or some missing and seed defined)
-        for input in &inputs {
-            // FIXME add InputExt method .has_sort_key()
-            if !input.proprietaries.contains_key(&in_key) {
-                return Err(FinalizeError::MissingSortKey);
-            }
-        }
-        for output in &outputs {
-            // FIXME add OutputExt method .has_sort_key()
-            if !output.proprietaries.contains_key(&out_key) {
-                return Err(FinalizeError::MissingSortKey);
-            }
-        }
+        // Take sort keys (scrubbing them), failing if any are missing.
+        // TODO when DETERMINISTIC=0x01, derive missing keys from seed instead of failing.
+        let mut keyed_inputs: Vec<_> = inputs
+            .into_iter()
+            .map(|mut inp| {
+                let k = inp.take_sort_key().ok_or(FinalizeError::MissingSortKey)?;
+                Ok((k, inp))
+            })
+            .collect::<Result<Vec<_>, FinalizeError>>()?;
+        keyed_inputs.sort_by(|(a, _), (b, _)| a.cmp(b));
+        let inputs: Vec<_> = keyed_inputs.into_iter().map(|(_, inp)| inp).collect();
 
-        // FIXME add an extension trait method to InputExt, OutputExt,
-        // .map(|x| (x.take_or_derive_sort_key(), x))
-        // then sort by .0.
-        // take_or_derive should scrub the sort key if it's set before producing
-        // the ordered PSBT
-        inputs.sort_by(|a, b| a.proprietaries[&in_key].cmp(&b.proprietaries[&in_key]));
-        outputs.sort_by(|a, b| a.proprietaries[&out_key].cmp(&b.proprietaries[&out_key]));
+        let mut keyed_outputs: Vec<_> = outputs
+            .into_iter()
+            .map(|mut out| {
+                let k = out.take_sort_key().ok_or(FinalizeError::MissingSortKey)?;
+                Ok((k, out))
+            })
+            .collect::<Result<Vec<_>, FinalizeError>>()?;
+        keyed_outputs.sort_by(|(a, _), (b, _)| a.cmp(b));
+        let outputs: Vec<_> = keyed_outputs.into_iter().map(|(_, out)| out).collect();
 
         let mut global = self.0.global;
         global.proprietaries.remove(&psbt_global_tx_unordered());
@@ -503,6 +502,12 @@ mod tests {
         // After sorting: sort_key 0x01 (1000 sat) before 0x02 (2000 sat).
         assert_eq!(ordered.outputs[0].amount, bitcoin::Amount::from_sat(1000));
         assert_eq!(ordered.outputs[1].amount, bitcoin::Amount::from_sat(2000));
+
+        // Sort keys are scrubbed from the ordered PSBT.
+        use crate::input::InputExt as _;
+        use crate::output::OutputExt as _;
+        assert!(ordered.inputs.iter().all(|i| i.sort_key().is_none()));
+        assert!(ordered.outputs.iter().all(|o| o.sort_key().is_none()));
     }
 
     #[test]

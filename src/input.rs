@@ -84,6 +84,8 @@ impl ResultInputSet {
 pub trait InputExt {
     // Input::out_point() exists but is private so we reimeplement it here
     fn out_point(&self) -> OutPoint;
+    fn sort_key(&self) -> Option<&Vec<u8>>;
+    fn take_sort_key(&mut self) -> Option<Vec<u8>>;
 
     fn into_ok(self) -> ResultInput;
 }
@@ -94,6 +96,14 @@ impl InputExt for Input {
             txid: self.previous_txid,
             vout: self.spent_output_index,
         }
+    }
+
+    fn sort_key(&self) -> Option<&Vec<u8>> {
+        self.proprietaries.get(&crate::fields::psbt_in_sort_key())
+    }
+
+    fn take_sort_key(&mut self) -> Option<Vec<u8>> {
+        self.proprietaries.remove(&crate::fields::psbt_in_sort_key())
     }
 
     fn into_ok(self) -> ResultInput {
