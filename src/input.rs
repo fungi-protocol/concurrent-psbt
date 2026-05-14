@@ -153,9 +153,7 @@ mod result {
     use bitcoin::key::{PublicKey, XOnlyPublicKey};
     use bitcoin::locktime::absolute;
     use bitcoin::taproot::{ControlBlock, LeafVersion, TapLeafHash, TapNodeHash};
-    use bitcoin::{
-        ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness, ecdsa, secp256k1, taproot,
-    };
+    use bitcoin::{ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness, ecdsa, taproot};
 
     use psbt_v2::PsbtSighashType;
     use psbt_v2::raw;

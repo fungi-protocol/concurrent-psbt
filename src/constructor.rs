@@ -218,25 +218,21 @@ impl Constructor<Modifiable> {
 
     /// Add an input.
     pub fn input(mut self, input: Input) -> Self {
-        /// FIXME
-        /// should be implemented by creating a new unordered PSBT with
-        /// the input and calling join.
-        ///
-        /// input count conflicts should be fixed by providing the correct
-        /// value, care must be taken that e.g. input_count 1 + input_count 1 is
-        /// not an error but the correct value could be 1 or 2 depending on
-        /// whether or not the input was the same.
+        // FIXME: should be implemented by creating a new unordered PSBT with
+        // the input and calling join.
+        //
+        // input count conflicts should be fixed by providing the correct
+        // value, care must be taken that e.g. input_count 1 + input_count 1 is
+        // not an error but the correct value could be 1 or 2 depending on
+        // whether or not the input was the same.
         self.0.inputs.insert(input);
         self
     }
 
     /// Add an output. Requires `PSBT_OUT_UNIQUE_ID`.
     pub fn output(self, output: Output) -> Result<Self, Error> {
-        /// FIXME
-        /// should be implemented by creating a new unordered PSBT with
-        /// the input and calling join.
-        ///
-        /// see input FIXME comment for details
+        // FIXME: should be implemented by creating a new unordered PSBT with
+        // the output and calling join. See input FIXME for details.
         validate_output_unique_id(&output)?;
         let mut this = self;
         this.0.outputs.insert(output);
