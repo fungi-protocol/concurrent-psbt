@@ -23,9 +23,9 @@ impl OutputSet {
         self.0.insert(key, output);
     }
 
-    pub fn into_ok(self) -> ResultOutputSet {
+    pub fn wrap(self) -> ResultOutputSet {
         // FIXME generic?
-        ResultOutputSet(self.0.into_iter().map(|(k, v)| (k, v.into_ok())).collect())
+        ResultOutputSet(self.0.into_iter().map(|(k, v)| (k, v.wrap())).collect())
     }
 }
 
@@ -53,7 +53,7 @@ pub(crate) trait OutputExt {
     fn sort_key(&self) -> Option<&Vec<u8>>;
     fn take_sort_key(&mut self) -> Option<Vec<u8>>;
 
-    fn into_ok(self) -> ResultOutput;
+    fn wrap(self) -> ResultOutput;
 }
 
 impl OutputExt for Output {
@@ -69,10 +69,11 @@ impl OutputExt for Output {
     }
 
     fn take_sort_key(&mut self) -> Option<Vec<u8>> {
-        self.proprietaries.remove(&crate::fields::psbt_out_sort_key())
+        self.proprietaries
+            .remove(&crate::fields::psbt_out_sort_key())
     }
 
-    fn into_ok(self) -> ResultOutput {
+    fn wrap(self) -> ResultOutput {
         ResultOutput {
             amount: self.amount.into_ok(),
             script_pubkey: self.script_pubkey.into_ok(),
@@ -233,4 +234,75 @@ impl ResultOutput {
     }
 }
 
-// TODO add tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fields::psbt_out_unique_id;
+
+    fn make_output(unique_id: u8, sats: u64) -> Output {
+        let mut out = Output::new(bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(sats),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        });
+        out.proprietaries
+            .insert(psbt_out_unique_id(), vec![unique_id; 16]);
+        out
+    }
+
+    #[test]
+    fn join_identical_outputs_is_idempotent() {
+        let a = make_output(0x01, 1000);
+        assert_eq!(
+            Join::join(a.clone().wrap(), a.clone().wrap()).transpose(),
+            Ok(a),
+        );
+    }
+
+    #[test]
+    fn join_outputs_with_conflicting_amount() {
+        let a = make_output(0x01, 1000);
+        let mut b = make_output(0x01, 2000);
+        // same unique_id so they'll be joined field-by-field
+        b.proprietaries = a.proprietaries.clone();
+
+        let joined = Join::join(a.clone().wrap(), b.clone().wrap());
+        assert!(!joined.is_ok());
+    }
+
+    #[test]
+    fn output_set_union_of_distinct_outputs() {
+        let a = make_output(0x01, 1000);
+        let b = make_output(0x02, 2000);
+
+        let sa = OutputSet::from_iter([a.clone()]);
+        let sb = OutputSet::from_iter([b.clone()]);
+
+        let joined = Join::join(sa.wrap(), sb.wrap()).transpose().unwrap();
+        assert_eq!(joined.len(), 2);
+    }
+
+    #[test]
+    fn output_set_join_same_output_is_idempotent() {
+        let a = make_output(0x01, 1000);
+
+        let sa = OutputSet::from_iter([a.clone()]);
+        let sb = OutputSet::from_iter([a.clone()]);
+
+        let joined = Join::join(sa.wrap(), sb.wrap()).transpose().unwrap();
+        assert_eq!(joined.len(), 1);
+    }
+
+    #[test]
+    fn output_set_join_conflicting_same_id() {
+        let a = make_output(0x01, 1000);
+        let mut b = make_output(0x01, 2000);
+        // force same unique_id
+        b.proprietaries.insert(psbt_out_unique_id(), vec![0x01; 16]);
+
+        let sa = OutputSet::from_iter([a]);
+        let sb = OutputSet::from_iter([b]);
+
+        let joined = Join::join(sa.wrap(), sb.wrap());
+        assert!(joined.transpose().is_err());
+    }
+}

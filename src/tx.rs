@@ -41,7 +41,7 @@ impl UnorderedPsbt {
         ResultUnorderedPsbt {
             global: self.global.into_ok(),
             inputs: self.inputs.into_ok(),
-            outputs: self.outputs.into_ok(),
+            outputs: self.outputs.wrap(),
         }
     }
 
