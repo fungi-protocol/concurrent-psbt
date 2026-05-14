@@ -107,7 +107,7 @@ impl InputExt for Input {
 
     fn into_ok(self) -> ResultInput {
         ResultInput {
-            // FIXME macro
+            // TODO macro
             previous_txid: self.previous_txid.into_ok(),
             spent_output_index: self.spent_output_index.into_ok(),
             sequence: self.sequence.into_ok(),
@@ -155,7 +155,7 @@ mod result {
 
     use crate::lattice::partial::JoinResult;
 
-    // FIXME macro
+    // TODO macro
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct ResultInput {
         /// The txid of the previous transaction whose output at `self.spent_output_index` is being spent.
@@ -240,7 +240,7 @@ pub use result::ResultInput;
 impl Join for ResultInput {
     fn join(self, other: Self) -> Self {
         ResultInput {
-            // FIXME macro
+            // TODO macro
             previous_txid: self.previous_txid.join(other.previous_txid),
             spent_output_index: self.spent_output_index.join(other.spent_output_index),
             sequence: self.sequence.join(other.sequence),
@@ -278,7 +278,7 @@ impl ResultInput {
         }
 
         Ok(Input {
-            // FIXME macro
+            // TODO macro
             previous_txid: self.previous_txid.expect("verified all fields are Ok"),
             spent_output_index: self.spent_output_index.expect("verified all fields are Ok"),
             sequence: self
@@ -381,7 +381,7 @@ impl ResultInput {
     }
 
     pub fn is_ok(&self) -> bool {
-        // FIXME macro
+        // TODO macro
         self.previous_txid.is_ok()
             && self.spent_output_index.is_ok()
             && self.sequence.is_ok()
@@ -507,4 +507,4 @@ fn test_input_set() {
     );
 }
 
-// FIXME add more unit tests
+// TODO add more unit tests

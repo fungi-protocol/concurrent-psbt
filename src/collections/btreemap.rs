@@ -85,7 +85,7 @@ where
     }
 }
 
-// FIXME prop testing and full coverage
+// TODO prop testing and full coverage
 #[test]
 fn test_btree() {
     let a: BTreeMap<u8, ()> = [(0, ())].into();
