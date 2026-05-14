@@ -67,11 +67,11 @@ pub trait PartialJoin: Sized {
     ///
     /// This operation should be associative, commutative and idempotent.
     fn try_join(self, other: Self) -> JoinResult<Self> {
-        self.into_ok().join(other.into_ok())
+        self.wrap().join(other.wrap())
     }
 
     /// Wrap a value in an `Ok`, injecting it into the Result co-domain lattice.
-    fn into_ok(self) -> JoinResult<Self> {
+    fn wrap(self) -> JoinResult<Self> {
         Ok(self)
     }
 }

@@ -4,7 +4,7 @@ use bitcoin::OutPoint;
 pub use psbt_v2::v2::Input;
 
 use crate::lattice::join::Join;
-use crate::lattice::partial::PartialJoin; // for into_ok on values
+use crate::lattice::partial::PartialJoin; // for wrap on values
 
 use crate::collections::btreemap::BTreeMapExt as _;
 use crate::collections::btreemap::Transpose as _;
@@ -46,9 +46,9 @@ impl InputSet {
         self.0.insert(input.out_point(), input);
     }
 
-    pub fn into_ok(self) -> ResultInputSet {
+    pub fn wrap(self) -> ResultInputSet {
         // FIXME can this be generic?
-        ResultInputSet(self.0.into_iter().map(|(k, v)| (k, v.into_ok())).collect())
+        ResultInputSet(self.0.into_iter().map(|(k, v)| (k, v.wrap())).collect())
     }
 }
 
@@ -62,7 +62,7 @@ impl Join for ResultInputSet {
 }
 
 impl ResultInputSet {
-    pub fn transpose(self) -> Result<InputSet, Self> {
+    pub fn try_unwrap(self) -> Result<InputSet, Self> {
         if !self.is_ok() {
             return Err(self);
         }
@@ -70,7 +70,7 @@ impl ResultInputSet {
         Ok(InputSet(
             self.0
                 .into_iter()
-                .map(|(k, v)| (k, v.transpose().expect("verified is_ok()")))
+                .map(|(k, v)| (k, v.try_unwrap().expect("verified is_ok()")))
                 .collect(),
         ))
     }
@@ -86,7 +86,7 @@ pub(crate) trait InputExt {
     fn sort_key(&self) -> Option<&Vec<u8>>;
     fn take_sort_key(&mut self) -> Option<Vec<u8>>;
 
-    fn into_ok(self) -> ResultInput;
+    fn wrap(self) -> ResultInput;
 }
 
 impl InputExt for Input {
@@ -105,35 +105,35 @@ impl InputExt for Input {
         self.proprietaries.remove(&crate::fields::psbt_in_sort_key())
     }
 
-    fn into_ok(self) -> ResultInput {
+    fn wrap(self) -> ResultInput {
         ResultInput {
             // TODO macro
-            previous_txid: self.previous_txid.into_ok(),
-            spent_output_index: self.spent_output_index.into_ok(),
-            sequence: self.sequence.into_ok(),
-            min_time: self.min_time.into_ok(),
-            min_height: self.min_height.into_ok(),
-            non_witness_utxo: self.non_witness_utxo.into_ok(),
-            witness_utxo: self.witness_utxo.into_ok(),
-            partial_sigs: self.partial_sigs.into_ok(),
-            sighash_type: self.sighash_type.into_ok(),
-            redeem_script: self.redeem_script.into_ok(),
-            witness_script: self.witness_script.into_ok(),
-            bip32_derivations: self.bip32_derivations.into_ok(),
-            final_script_sig: self.final_script_sig.into_ok(),
-            final_script_witness: self.final_script_witness.into_ok(),
-            ripemd160_preimages: self.ripemd160_preimages.into_ok(),
-            sha256_preimages: self.sha256_preimages.into_ok(),
-            hash160_preimages: self.hash160_preimages.into_ok(),
-            hash256_preimages: self.hash256_preimages.into_ok(),
-            tap_key_sig: self.tap_key_sig.into_ok(),
-            tap_script_sigs: self.tap_script_sigs.into_ok(),
-            tap_scripts: self.tap_scripts.into_ok(),
-            tap_key_origins: self.tap_key_origins.into_ok(),
-            tap_internal_key: self.tap_internal_key.into_ok(),
-            tap_merkle_root: self.tap_merkle_root.into_ok(),
-            proprietaries: self.proprietaries.into_ok(),
-            unknowns: self.unknowns.into_ok(),
+            previous_txid: self.previous_txid.wrap(),
+            spent_output_index: self.spent_output_index.wrap(),
+            sequence: self.sequence.wrap(),
+            min_time: self.min_time.wrap(),
+            min_height: self.min_height.wrap(),
+            non_witness_utxo: self.non_witness_utxo.wrap(),
+            witness_utxo: self.witness_utxo.wrap(),
+            partial_sigs: self.partial_sigs.wrap(),
+            sighash_type: self.sighash_type.wrap(),
+            redeem_script: self.redeem_script.wrap(),
+            witness_script: self.witness_script.wrap(),
+            bip32_derivations: self.bip32_derivations.wrap(),
+            final_script_sig: self.final_script_sig.wrap(),
+            final_script_witness: self.final_script_witness.wrap(),
+            ripemd160_preimages: self.ripemd160_preimages.wrap(),
+            sha256_preimages: self.sha256_preimages.wrap(),
+            hash160_preimages: self.hash160_preimages.wrap(),
+            hash256_preimages: self.hash256_preimages.wrap(),
+            tap_key_sig: self.tap_key_sig.wrap(),
+            tap_script_sigs: self.tap_script_sigs.wrap(),
+            tap_scripts: self.tap_scripts.wrap(),
+            tap_key_origins: self.tap_key_origins.wrap(),
+            tap_internal_key: self.tap_internal_key.wrap(),
+            tap_merkle_root: self.tap_merkle_root.wrap(),
+            proprietaries: self.proprietaries.wrap(),
+            unknowns: self.unknowns.wrap(),
         }
     }
 }
@@ -272,7 +272,7 @@ impl Join for ResultInput {
 }
 
 impl ResultInput {
-    pub fn transpose(self) -> Result<Input, Self> {
+    pub fn try_unwrap(self) -> Result<Input, Self> {
         if !self.is_ok() {
             return Err(self);
         }
@@ -283,99 +283,99 @@ impl ResultInput {
             spent_output_index: self.spent_output_index.expect("verified all fields are Ok"),
             sequence: self
                 .sequence
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             min_time: self
                 .min_time
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             min_height: self
                 .min_height
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             non_witness_utxo: self
                 .non_witness_utxo
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             witness_utxo: self
                 .witness_utxo
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             partial_sigs: self
                 .partial_sigs
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             sighash_type: self
                 .sighash_type
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             redeem_script: self
                 .redeem_script
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             witness_script: self
                 .witness_script
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             bip32_derivations: self
                 .bip32_derivations
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             final_script_sig: self
                 .final_script_sig
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             final_script_witness: self
                 .final_script_witness
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             ripemd160_preimages: self
                 .ripemd160_preimages
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             sha256_preimages: self
                 .sha256_preimages
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             hash160_preimages: self
                 .hash160_preimages
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             hash256_preimages: self
                 .hash256_preimages
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             tap_key_sig: self
                 .tap_key_sig
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             tap_script_sigs: self
                 .tap_script_sigs
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             tap_scripts: self
                 .tap_scripts
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             tap_key_origins: self
                 .tap_key_origins
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             tap_internal_key: self
                 .tap_internal_key
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             tap_merkle_root: self
                 .tap_merkle_root
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             proprietaries: self
                 .proprietaries
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             unknowns: self
                 .unknowns
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
         })
     }
@@ -431,17 +431,17 @@ fn test_input_set() {
     let ib = Input::new(&ob);
 
     assert_eq!(
-        Join::join(ia.clone().into_ok(), ia.clone().into_ok()).transpose(),
+        Join::join(ia.clone().wrap(), ia.clone().wrap()).try_unwrap(),
         Ok(ia.clone())
     );
 
     // Joining two differing inputs directly with one another is not allowed.
     // This shouldn't ever come up in practice since the outpoints are different
-    let mut res = ia.clone().into_ok();
+    let mut res = ia.clone().wrap();
     res.spent_output_index = Err(crate::values::ConflictingValues([0, 1].into()));
 
     assert_eq!(
-        Join::join(ia.clone().into_ok(), ib.clone().into_ok()).transpose(),
+        Join::join(ia.clone().wrap(), ib.clone().wrap()).try_unwrap(),
         Err(res),
     );
 
@@ -451,7 +451,7 @@ fn test_input_set() {
     assert_ne!(sa, sb);
 
     assert_eq!(
-        Join::join(sa.clone().into_ok(), sb.clone().into_ok()).transpose(),
+        Join::join(sa.clone().wrap(), sb.clone().wrap()).try_unwrap(),
         Ok(InputSet::from_iter([ia.clone(), ib.clone()])),
     );
 
@@ -460,8 +460,8 @@ fn test_input_set() {
     ia_with_seq.sequence = Some(bitcoin::Sequence::MAX);
     let sa_with_seq = InputSet::from_iter([ia_with_seq.clone()]);
 
-    let joined = Join::join(sa.clone().into_ok(), sa_with_seq.clone().into_ok());
-    let transposed = joined.transpose();
+    let joined = Join::join(sa.clone().wrap(), sa_with_seq.clone().wrap());
+    let transposed = joined.try_unwrap();
 
     assert_ne!(sa, sa_with_seq);
     assert_eq!(transposed, Ok(sa_with_seq.clone()));
@@ -470,7 +470,7 @@ fn test_input_set() {
     let mut ia_with_other_seq = ia.clone();
     ia_with_other_seq.sequence = Some(bitcoin::Sequence::ENABLE_LOCKTIME_NO_RBF);
 
-    let mut conflict = ia.clone().into_ok();
+    let mut conflict = ia.clone().wrap();
     conflict.sequence = Some(Err(crate::values::ConflictingValues(
         [
             bitcoin::Sequence::MAX,
@@ -481,8 +481,8 @@ fn test_input_set() {
 
     assert_eq!(
         Join::join(
-            ia_with_seq.clone().into_ok(),
-            ia_with_other_seq.clone().into_ok()
+            ia_with_seq.clone().wrap(),
+            ia_with_other_seq.clone().wrap()
         ),
         conflict,
     );
@@ -491,15 +491,15 @@ fn test_input_set() {
     assert_ne!(sa_with_seq, sa_with_other_seq);
     assert_eq!(
         Join::join(
-            sa_with_seq.clone().into_ok(),
-            sa_with_other_seq.clone().into_ok()
+            sa_with_seq.clone().wrap(),
+            sa_with_other_seq.clone().wrap()
         )
-        .transpose(),
+        .try_unwrap(),
         Err(ResultInputSet(
             [ia_with_seq
                 .clone()
-                .into_ok()
-                .join(ia_with_other_seq.clone().into_ok())]
+                .wrap()
+                .join(ia_with_other_seq.clone().wrap())]
             .into_iter()
             .map(|i| (oa.clone(), i))
             .collect()

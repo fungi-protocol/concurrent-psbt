@@ -8,13 +8,13 @@ use crate::lattice::partial::{JoinResult, PartialJoin};
 trait ResultCollection: Join {
     type Item: PartialJoin;
 
-    fn transpose(self) -> JoinResult<Self::Item>;
+    fn try_unwrap(self) -> JoinResult<Self::Item>;
 }
 
 pub trait BTreeMapExt {
     type Key;
     type Value: PartialJoin;
-    fn into_ok(self) -> BTreeMap<Self::Key, JoinResult<Self::Value>>;
+    fn wrap(self) -> BTreeMap<Self::Key, JoinResult<Self::Value>>;
 }
 
 impl<K, V> BTreeMapExt for BTreeMap<K, V>
@@ -25,8 +25,8 @@ where
     type Key = K;
     type Value = V;
 
-    fn into_ok(self) -> BTreeMap<K, JoinResult<V>> {
-        self.into_iter().map(|(k, v)| (k, v.into_ok())).collect()
+    fn wrap(self) -> BTreeMap<K, JoinResult<V>> {
+        self.into_iter().map(|(k, v)| (k, v.wrap())).collect()
     }
 }
 
@@ -34,7 +34,7 @@ pub trait Transpose: Sized {
     type Key;
     type Value: PartialJoin;
 
-    fn transpose(self) -> Result<BTreeMap<Self::Key, Self::Value>, Self>;
+    fn try_unwrap(self) -> Result<BTreeMap<Self::Key, Self::Value>, Self>;
 
     fn is_ok(&self) -> bool;
 }
@@ -51,7 +51,7 @@ where
         self.values().all(|v| v.is_ok())
     }
 
-    fn transpose(self) -> Result<BTreeMap<Self::Key, Self::Value>, Self> {
+    fn try_unwrap(self) -> Result<BTreeMap<Self::Key, Self::Value>, Self> {
         if !self.is_ok() {
             return Err(self);
         }
@@ -130,33 +130,33 @@ fn test_btree() {
         }
     }
 
-    let foo = Foo(0).into_ok();
-    _ = foo.join(Foo(0).into_ok());
+    let foo = Foo(0).wrap();
+    _ = foo.join(Foo(0).wrap());
 
     let a: BTreeMap<u8, Foo> = [(0, Foo(0))].into();
     let b: BTreeMap<u8, Foo> = [(1, Foo(0))].into();
 
     // Inject into a BTree<u8, Result<Foo, FooErr>>
     assert_eq!(
-        a.clone().into_ok().join(b.clone().into_ok()),
+        a.clone().wrap().join(b.clone().wrap()),
         [(0, Ok(Foo(0))), (1, Ok(Foo(0)))].into()
     );
 
     // Flatten a BTree<u8, Result<Foo, FooErr>> into a Result<BTree<u8, Foo>, Btree<u8, Result<Foo, FooErr>>
     assert_eq!(
-        a.clone().into_ok().join(b.clone().into_ok()).transpose(),
+        a.clone().wrap().join(b.clone().wrap()).try_unwrap(),
         Ok([(0, Foo(0)), (1, Foo(0))].into())
     );
 
     let c: BTreeMap<u8, Foo> = [(0, Foo(1))].into();
 
     assert_eq!(
-        a.clone().into_ok().join(c.clone().into_ok()),
+        a.clone().wrap().join(c.clone().wrap()),
         [(0, Err(FooErr([0, 1].into())))].into()
     );
 
     assert_eq!(
-        a.clone().into_ok().join(c.clone().into_ok()).transpose(),
+        a.clone().wrap().join(c.clone().wrap()).try_unwrap(),
         Err([(0, Err(FooErr([0, 1].into())))].into())
     );
 }

@@ -17,28 +17,38 @@ where
 pub trait OptionExt {
     type Item: PartialJoin;
 
-    fn into_ok(self) -> Option<JoinResult<Self::Item>>;
+    fn wrap(self) -> Option<JoinResult<Self::Item>>;
 }
 
 impl<V: PartialJoin> OptionExt for Option<V> {
     type Item = V;
 
-    // TODO rename into_ok to lift
-    fn into_ok(self) -> Option<JoinResult<V>> {
-        self.map(|v| v.into_ok())
+    fn wrap(self) -> Option<JoinResult<V>> {
+        self.map(|v| v.wrap())
     }
 }
 
 pub trait ResultOptionExt {
+    type Value;
+    type Error;
+
     fn is_ok(&self) -> bool;
+    fn try_unwrap(self) -> Result<Option<Self::Value>, Self::Error>;
 }
 
 impl<V: PartialJoin> ResultOptionExt for Option<JoinResult<V>> {
+    type Value = V;
+    type Error = V::Error;
+
     fn is_ok(&self) -> bool {
         match self {
             Some(Err(_)) => false,
             _ => true,
         }
+    }
+
+    fn try_unwrap(self) -> Result<Option<V>, V::Error> {
+        self.transpose()
     }
 }
 
@@ -64,19 +74,19 @@ fn test_join_option() {
         }
     }
 
-    assert_eq!(None::<Foo>.into_ok(), None);
+    assert_eq!(None::<Foo>.wrap(), None);
 
     let a = Some(Foo(0u8));
 
-    assert_eq!(a.into_ok(), Some(Ok(Foo(0u8))));
-    assert_eq!(a.into_ok().transpose(), Ok(a));
-    assert_eq!(a.into_ok().join(None), a.into_ok());
-    assert_eq!(a.into_ok().join(a.into_ok()), a.into_ok());
-    assert_eq!(None::<Foo>.into_ok().join(a.into_ok()), a.into_ok());
+    assert_eq!(a.wrap(), Some(Ok(Foo(0u8))));
+    assert_eq!(a.wrap().try_unwrap(), Ok(a));
+    assert_eq!(a.wrap().join(None), a.wrap());
+    assert_eq!(a.wrap().join(a.wrap()), a.wrap());
+    assert_eq!(None::<Foo>.wrap().join(a.wrap()), a.wrap());
 
     let b = Some(Foo(1u8));
-    assert_eq!(a.into_ok().join(b.into_ok()), Some(Err(())));
-    assert_eq!(a.into_ok().join(b.into_ok()).transpose(), Err(()));
+    assert_eq!(a.wrap().join(b.wrap()), Some(Err(())));
+    assert_eq!(a.wrap().join(b.wrap()).try_unwrap(), Err(()));
 }
 
 // let a = 1u8;

@@ -75,16 +75,16 @@ impl OutputExt for Output {
 
     fn wrap(self) -> ResultOutput {
         ResultOutput {
-            amount: self.amount.into_ok(),
-            script_pubkey: self.script_pubkey.into_ok(),
-            redeem_script: self.redeem_script.into_ok(),
-            witness_script: self.witness_script.into_ok(),
-            tap_internal_key: self.tap_internal_key.into_ok(),
-            tap_tree: self.tap_tree.into_ok(),
-            bip32_derivations: self.bip32_derivations.into_ok(),
-            tap_key_origins: self.tap_key_origins.into_ok(),
-            proprietaries: self.proprietaries.into_ok(),
-            unknowns: self.unknowns.into_ok(),
+            amount: self.amount.wrap(),
+            script_pubkey: self.script_pubkey.wrap(),
+            redeem_script: self.redeem_script.wrap(),
+            witness_script: self.witness_script.wrap(),
+            tap_internal_key: self.tap_internal_key.wrap(),
+            tap_tree: self.tap_tree.wrap(),
+            bip32_derivations: self.bip32_derivations.wrap(),
+            tap_key_origins: self.tap_key_origins.wrap(),
+            proprietaries: self.proprietaries.wrap(),
+            unknowns: self.unknowns.wrap(),
         }
     }
 }
@@ -99,7 +99,7 @@ impl Join for ResultOutputSet {
 }
 
 impl ResultOutputSet {
-    pub fn transpose(self) -> Result<OutputSet, Self> {
+    pub fn try_unwrap(self) -> Result<OutputSet, Self> {
         if !self.is_ok() {
             return Err(self);
         }
@@ -107,7 +107,7 @@ impl ResultOutputSet {
         Ok(OutputSet(
             self.0
                 .into_iter()
-                .map(|(k, v)| (k, v.transpose().expect("verified is_ok()")))
+                .map(|(k, v)| (k, v.try_unwrap().expect("verified is_ok()")))
                 .collect(),
         ))
     }
@@ -177,7 +177,7 @@ impl Join for ResultOutput {
 }
 
 impl ResultOutput {
-    pub fn transpose(self) -> Result<Output, ResultOutput> {
+    pub fn try_unwrap(self) -> Result<Output, ResultOutput> {
         if !self.is_ok() {
             return Err(self);
         }
@@ -187,35 +187,35 @@ impl ResultOutput {
             script_pubkey: self.script_pubkey.expect("verified all fields are Ok"), // FIXME allow empty to non-empty to behave like Option<ScriptBuf> instead of ScriptBuf under equality
             redeem_script: self
                 .redeem_script
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             witness_script: self
                 .witness_script
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             tap_internal_key: self
                 .tap_internal_key
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             tap_tree: self
                 .tap_tree
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             bip32_derivations: self
                 .bip32_derivations
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             tap_key_origins: self
                 .tap_key_origins
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             proprietaries: self
                 .proprietaries
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             unknowns: self
                 .unknowns
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
         })
     }
@@ -253,7 +253,7 @@ mod tests {
     fn join_identical_outputs_is_idempotent() {
         let a = make_output(0x01, 1000);
         assert_eq!(
-            Join::join(a.clone().wrap(), a.clone().wrap()).transpose(),
+            Join::join(a.clone().wrap(), a.clone().wrap()).try_unwrap(),
             Ok(a),
         );
     }
@@ -277,7 +277,7 @@ mod tests {
         let sa = OutputSet::from_iter([a.clone()]);
         let sb = OutputSet::from_iter([b.clone()]);
 
-        let joined = Join::join(sa.wrap(), sb.wrap()).transpose().unwrap();
+        let joined = Join::join(sa.wrap(), sb.wrap()).try_unwrap().unwrap();
         assert_eq!(joined.len(), 2);
     }
 
@@ -288,7 +288,7 @@ mod tests {
         let sa = OutputSet::from_iter([a.clone()]);
         let sb = OutputSet::from_iter([a.clone()]);
 
-        let joined = Join::join(sa.wrap(), sb.wrap()).transpose().unwrap();
+        let joined = Join::join(sa.wrap(), sb.wrap()).try_unwrap().unwrap();
         assert_eq!(joined.len(), 1);
     }
 
@@ -303,6 +303,6 @@ mod tests {
         let sb = OutputSet::from_iter([b]);
 
         let joined = Join::join(sa.wrap(), sb.wrap());
-        assert!(joined.transpose().is_err());
+        assert!(joined.try_unwrap().is_err());
     }
 }

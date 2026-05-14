@@ -70,7 +70,7 @@ mod tests {
         assert_eq!(a.try_join(a), Ok(a));
         assert_eq!(a.try_join(b), Err(()));
 
-        assert_eq!(a.into_ok().join(a.into_ok()), Ok(a));
-        assert_eq!(a.into_ok().join(b.into_ok()), Err(()));
+        assert_eq!(a.wrap().join(a.wrap()), Ok(a));
+        assert_eq!(a.wrap().join(b.wrap()), Err(()));
     }
 }

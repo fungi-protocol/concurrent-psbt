@@ -9,7 +9,7 @@ use crate::collections::option::OptionExt;
 use crate::collections::option::ResultOptionExt;
 
 pub trait GlobalExt {
-    fn into_ok(self) -> ResultGlobal;
+    fn wrap(self) -> ResultGlobal;
 
     // FIXME enable this, move from fields.rs
     // fn clear_inputs_ordered_flag(&mut self);
@@ -27,18 +27,17 @@ pub trait GlobalExt {
 // }
 
 impl GlobalExt for Global {
-    // FIXME rename to lift
-    fn into_ok(self) -> ResultGlobal {
+    fn wrap(self) -> ResultGlobal {
         ResultGlobal {
-            version: self.version.into_ok(),
-            tx_version: self.tx_version.into_ok(),
-            fallback_lock_time: self.fallback_lock_time.into_ok(),
-            xpubs: self.xpubs.into_ok(),
-            proprietaries: self.proprietaries.into_ok(),
-            unknowns: self.unknowns.into_ok(),
-            tx_modifiable_flags: self.tx_modifiable_flags.into_ok(),
-            input_count: self.input_count.into_ok(),
-            output_count: self.output_count.into_ok(),
+            version: self.version.wrap(),
+            tx_version: self.tx_version.wrap(),
+            fallback_lock_time: self.fallback_lock_time.wrap(),
+            xpubs: self.xpubs.wrap(),
+            proprietaries: self.proprietaries.wrap(),
+            unknowns: self.unknowns.wrap(),
+            tx_modifiable_flags: self.tx_modifiable_flags.wrap(),
+            input_count: self.input_count.wrap(),
+            output_count: self.output_count.wrap(),
         }
     }
 }
@@ -105,7 +104,7 @@ impl Join for ResultGlobal {
 }
 
 impl ResultGlobal {
-    pub fn transpose(self) -> Result<Global, Self> {
+    pub fn try_unwrap(self) -> Result<Global, Self> {
         if !self.is_ok() {
             return Err(self);
         }
@@ -115,21 +114,21 @@ impl ResultGlobal {
             tx_version: self.tx_version.expect("verified all fields are Ok"),
             fallback_lock_time: self
                 .fallback_lock_time
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             tx_modifiable_flags: self
                 .tx_modifiable_flags
                 .expect("verified all fields are Ok"),
             input_count: self.input_count.expect("verified all fields are Ok"),
             output_count: self.output_count.expect("verified all fields are Ok"),
-            xpubs: self.xpubs.transpose().expect("verified all fields are Ok"),
+            xpubs: self.xpubs.try_unwrap().expect("verified all fields are Ok"),
             proprietaries: self
                 .proprietaries
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
             unknowns: self
                 .unknowns
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
         })
     }

@@ -37,10 +37,10 @@ impl UnorderedPsbt {
         }
     }
 
-    pub fn into_ok(self) -> ResultUnorderedPsbt {
+    pub fn wrap(self) -> ResultUnorderedPsbt {
         ResultUnorderedPsbt {
-            global: self.global.into_ok(),
-            inputs: self.inputs.into_ok(),
+            global: self.global.wrap(),
+            inputs: self.inputs.wrap(),
             outputs: self.outputs.wrap(),
         }
     }
@@ -64,17 +64,17 @@ pub struct ResultUnorderedPsbt {
 }
 
 impl ResultUnorderedPsbt {
-    pub fn transpose(self) -> Result<UnorderedPsbt, Self> {
+    pub fn try_unwrap(self) -> Result<UnorderedPsbt, Self> {
         if !self.is_ok() {
             return Err(self);
         }
 
         Ok(UnorderedPsbt {
-            global: self.global.transpose().expect("verified all fields are Ok"),
-            inputs: self.inputs.transpose().expect("verified all fields are Ok"),
+            global: self.global.try_unwrap().expect("verified all fields are Ok"),
+            inputs: self.inputs.try_unwrap().expect("verified all fields are Ok"),
             outputs: self
                 .outputs
-                .transpose()
+                .try_unwrap()
                 .expect("verified all fields are Ok"),
         })
     }

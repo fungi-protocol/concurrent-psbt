@@ -28,7 +28,7 @@ where
 pub trait HashMapExt {
     type Key;
     type Value: PartialJoin;
-    fn into_ok(self) -> HashMap<Self::Key, JoinResult<Self::Value>>;
+    fn wrap(self) -> HashMap<Self::Key, JoinResult<Self::Value>>;
 }
 
 impl<K, V> HashMapExt for HashMap<K, V>
@@ -39,8 +39,8 @@ where
     type Key = K;
     type Value = V;
 
-    fn into_ok(self) -> HashMap<K, JoinResult<V>> {
-        self.into_iter().map(|(k, v)| (k, v.into_ok())).collect()
+    fn wrap(self) -> HashMap<K, JoinResult<V>> {
+        self.into_iter().map(|(k, v)| (k, v.wrap())).collect()
     }
 }
 
@@ -48,7 +48,7 @@ pub trait Transpose: Sized {
     type Key;
     type Value: PartialJoin;
 
-    fn transpose(self) -> Result<HashMap<Self::Key, Self::Value>, Self>;
+    fn try_unwrap(self) -> Result<HashMap<Self::Key, Self::Value>, Self>;
 
     fn is_ok(&self) -> bool;
 }
@@ -65,7 +65,7 @@ where
         self.values().all(|v| v.is_ok())
     }
 
-    fn transpose(self) -> Result<HashMap<Self::Key, Self::Value>, Self> {
+    fn try_unwrap(self) -> Result<HashMap<Self::Key, Self::Value>, Self> {
         if !self.is_ok() {
             return Err(self);
         }
