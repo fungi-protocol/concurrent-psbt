@@ -27,15 +27,11 @@ impl<T: IdempotentValue> Absorb<T> for ConflictingValues<T> {
     }
 }
 
-// struct IdempotentValueLattice<T : Clone + PartialEq>(T) + impl<T> PartialJoin for IdempotentValue<T>?
-// or just blanket impl for PartialEq + Clone?
-//
-// QuotientLattice -> pick arbitrarily? not partial
-
 /// A marker trait for value types that should have a trivial join based on equality.
 pub trait IdempotentValue: PartialJoin + PartialEq + Eq + Hash {}
 
 // Blanket impl conflicts with one based on T: Join, so replaced with macro
+// can/should this be reintroduced now that PartialJoin is no longer defined for all T : Join?
 //
 // impl<T> PartialJoin for T
 // where
@@ -108,9 +104,6 @@ impl_idempotent_value_for!(bitcoin::Witness);
 
 impl_idempotent_value_for!(psbt_v2::PsbtSighashType);
 impl_idempotent_value_for!(psbt_v2::Version);
-
-// impl_idempotent_value_for!(Vec<u8>);
-// impl_idempotent_value_for!(Vec<bitcoin::TapLeafHash>);
 
 #[test]
 fn test_idempotent_value_join() {

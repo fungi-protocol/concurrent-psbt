@@ -139,21 +139,6 @@ impl InputExt for Input {
     }
 }
 
-// impl FromIterator<Input> for VecWrapper<Input> {
-//     fn from_iter<T: IntoIterator<Item = Input>>(iter: T) -> Self {
-//         Self(iter.into_iter().collect())
-//     }
-// }
-
-// impl IntoIterator for VecWrapper<Input> {
-//     type Item = Input;
-//     type IntoIter = std::vec::IntoIter<Input>;
-
-//     fn into_iter(self) -> Self::IntoIter {
-//         self.0.into_iter()
-//     }
-// }
-
 mod result {
     pub use std::collections::BTreeMap;
 

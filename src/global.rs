@@ -27,6 +27,7 @@ pub trait GlobalExt {
 // }
 
 impl GlobalExt for Global {
+    // FIXME rename to lift
     fn into_ok(self) -> ResultGlobal {
         ResultGlobal {
             version: self.version.into_ok(),

@@ -1,12 +1,27 @@
+// TODO
+// - tech debt
+//   - remove commented out stuff
+//   - reorganize in logical order
+//   - decide where result lives
+// - ergonomics:
+//   - pub and re-exports
+//   - IntoJoin (uses .into_ok()) for PartialJoin?
+//   - operator overloading?
+//   - is transpose the right interface?
+//   - some method of extracting just the conflict errors? requires Box<dyn Error>
+
+mod lattice;
+
 mod collections;
-pub mod constructor;
-// TODO move to psbt mod
+
+mod values;
+
 pub mod fields;
+
+// TODO move to psbt mod
 mod global;
 mod input;
 mod output;
-mod partial_join;
 mod tx;
-mod values;
-#[cfg(test)]
-mod tests;
+
+pub mod constructor;
