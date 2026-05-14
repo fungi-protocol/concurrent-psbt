@@ -39,6 +39,7 @@ impl core::fmt::Display for Error {
 }
 
 /// Error returned when finalizing the order of an unordered Constructor.
+// FIXME finalization is an existing BIP 174 concept. this should be called `SortingError`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FinalizeError {
     /// `PSBT_GLOBAL_SORT_DETERMINISTIC` is not set.
@@ -64,6 +65,24 @@ impl core::fmt::Display for FinalizeError {
             }
         }
     }
+}
+
+// -- Helpers -----------------------------------------------------------------
+
+/// Extract sort keys from items via `take_key`, sort by key, return items in order.
+fn sort_by_extracted_key<T>(
+    items: impl IntoIterator<Item = T>,
+    mut take_key: impl FnMut(&mut T) -> Option<Vec<u8>>,
+) -> Result<Vec<T>, FinalizeError> {
+    use std::collections::BTreeMap;
+    let mut map: BTreeMap<Vec<u8>, Vec<T>> = BTreeMap::new(); //FIXME value should just be T, it
+                                                              //should be an error to have
+                                                              //duplicate sort keys
+    for mut item in items {
+        let key = take_key(&mut item).ok_or(FinalizeError::MissingSortKey)?;
+        map.entry(key).or_default().push(item); // TODO FinalizeError::DuplicateSortKey
+    }
+    Ok(map.into_values().flatten().collect())
 }
 
 // -- Validation --------------------------------------------------------------
@@ -151,30 +170,9 @@ impl<M: Mod> Constructor<M> {
             _ => return Err(FinalizeError::InvalidSortDeterministic),
         }
 
-        let mut inputs: Vec<_> = self.0.inputs.into_iter().collect();
-        let mut outputs: Vec<_> = self.0.outputs.into_iter().collect();
-
-        // Take sort keys (scrubbing them), failing if any are missing.
         // TODO when DETERMINISTIC=0x01, derive missing keys from seed instead of failing.
-        let mut keyed_inputs: Vec<_> = inputs
-            .into_iter()
-            .map(|mut inp| {
-                let k = inp.take_sort_key().ok_or(FinalizeError::MissingSortKey)?;
-                Ok((k, inp))
-            })
-            .collect::<Result<Vec<_>, FinalizeError>>()?;
-        keyed_inputs.sort_by(|(a, _), (b, _)| a.cmp(b));
-        let inputs: Vec<_> = keyed_inputs.into_iter().map(|(_, inp)| inp).collect();
-
-        let mut keyed_outputs: Vec<_> = outputs
-            .into_iter()
-            .map(|mut out| {
-                let k = out.take_sort_key().ok_or(FinalizeError::MissingSortKey)?;
-                Ok((k, out))
-            })
-            .collect::<Result<Vec<_>, FinalizeError>>()?;
-        keyed_outputs.sort_by(|(a, _), (b, _)| a.cmp(b));
-        let outputs: Vec<_> = keyed_outputs.into_iter().map(|(_, out)| out).collect();
+        let inputs = sort_by_extracted_key(self.0.inputs, |i| i.take_sort_key())?;
+        let outputs = sort_by_extracted_key(self.0.outputs, |o| o.take_sort_key())?;
 
         let mut global = self.0.global;
         global.proprietaries.remove(&psbt_global_tx_unordered());
