@@ -12,14 +12,13 @@
 
       cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-      lattice-psbt = craneLib.buildPackage (
-        commonArgs
-        // {
-          inherit cargoArtifacts;
-        }
-      );
+      lattice-psbt = craneLib.buildPackage (commonArgs // { inherit cargoArtifacts; });
     in
     {
+      _module.args = {
+        inherit commonArgs cargoArtifacts;
+      };
+
       packages.default = lattice-psbt;
     };
 }
