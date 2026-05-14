@@ -21,8 +21,7 @@ impl UnorderedPsbt {
     /// want `crate::Constructor` instead.
     ///
     /// This constructor does not check that the PSBT is marked as unordered.
-    // FIXME maybe shouldn't be pub? or be try_from_psbt? what does Psbt do?
-    pub fn from_psbt(psbt: Psbt) -> Self {
+    pub(crate) fn from_psbt(psbt: Psbt) -> Self {
         Self {
             global: psbt.global,
             inputs: psbt.inputs.into_iter().collect(),

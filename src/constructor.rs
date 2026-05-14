@@ -119,14 +119,14 @@ fn validate_output_unique_id(output: &Output) -> Result<(), Error> {
 /// Unordered Constructor, mirrors the BIP 370 Constructor but for unordered PSBTs.
 pub struct Constructor<M: Mod>(UnorderedPsbt, PhantomData<M>);
 
-// FIXME either derive or explain why this needs to be manually implemented
+// Manual impl: derive would add an unnecessary `M: Debug` bound.
 impl<M: Mod> core::fmt::Debug for Constructor<M> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("Constructor").field(&self.0).finish()
     }
 }
 
-// FIXME either derive or explain why this needs to be manually implemented
+// Manual impl: derive would add an unnecessary `M: PartialEq` bound.
 impl<M: Mod> PartialEq for Constructor<M> {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0

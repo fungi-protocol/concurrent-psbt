@@ -80,8 +80,7 @@ impl ResultInputSet {
     }
 }
 
-// FIXME should be pub(crate)
-pub trait InputExt {
+pub(crate) trait InputExt {
     // Input::out_point() exists but is private so we reimeplement it here
     fn out_point(&self) -> OutPoint;
     fn sort_key(&self) -> Option<&Vec<u8>>;

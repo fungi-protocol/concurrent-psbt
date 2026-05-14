@@ -48,7 +48,7 @@ impl IntoIterator for OutputSet {
     }
 }
 
-pub trait OutputExt {
+pub(crate) trait OutputExt {
     fn unique_id(&self) -> Vec<u8>;
     fn sort_key(&self) -> Option<&Vec<u8>>;
     fn take_sort_key(&mut self) -> Option<Vec<u8>>;
