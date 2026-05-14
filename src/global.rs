@@ -49,8 +49,8 @@ mod result {
     use bitcoin::locktime::absolute;
     use bitcoin::transaction;
 
-    use psbt_v2::raw;
     use psbt_v2::Version;
+    use psbt_v2::raw;
 
     use crate::lattice::partial::JoinResult;
 

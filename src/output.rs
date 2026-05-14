@@ -123,7 +123,7 @@ mod result {
     use bitcoin::bip32::KeySource;
     use bitcoin::key::XOnlyPublicKey;
     use bitcoin::taproot::{TapLeafHash, TapTree};
-    use bitcoin::{secp256k1, Amount, ScriptBuf};
+    use bitcoin::{Amount, ScriptBuf, secp256k1};
 
     use psbt_v2::raw;
 

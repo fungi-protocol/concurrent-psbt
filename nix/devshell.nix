@@ -1,5 +1,6 @@
 {
-  perSystem = { pkgs, craneLib, ... }:
+  perSystem =
+    { pkgs, craneLib, ... }:
     {
       devShells.default = craneLib.devShell {
         packages = with pkgs; [

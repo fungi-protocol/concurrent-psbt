@@ -102,7 +102,8 @@ impl InputExt for Input {
     }
 
     fn take_sort_key(&mut self) -> Option<Vec<u8>> {
-        self.proprietaries.remove(&crate::fields::psbt_in_sort_key())
+        self.proprietaries
+            .remove(&crate::fields::psbt_in_sort_key())
     }
 
     fn wrap(self) -> ResultInput {
@@ -147,11 +148,11 @@ mod result {
     use bitcoin::locktime::absolute;
     use bitcoin::taproot::{ControlBlock, LeafVersion, TapLeafHash, TapNodeHash};
     use bitcoin::{
-        ecdsa, secp256k1, taproot, ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness,
+        ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness, ecdsa, secp256k1, taproot,
     };
 
-    use psbt_v2::raw;
     use psbt_v2::PsbtSighashType;
+    use psbt_v2::raw;
 
     use crate::lattice::partial::JoinResult;
 
@@ -480,21 +481,14 @@ fn test_input_set() {
     )));
 
     assert_eq!(
-        Join::join(
-            ia_with_seq.clone().wrap(),
-            ia_with_other_seq.clone().wrap()
-        ),
+        Join::join(ia_with_seq.clone().wrap(), ia_with_other_seq.clone().wrap()),
         conflict,
     );
 
     let sa_with_other_seq = InputSet::from_iter([ia_with_other_seq.clone()]);
     assert_ne!(sa_with_seq, sa_with_other_seq);
     assert_eq!(
-        Join::join(
-            sa_with_seq.clone().wrap(),
-            sa_with_other_seq.clone().wrap()
-        )
-        .try_unwrap(),
+        Join::join(sa_with_seq.clone().wrap(), sa_with_other_seq.clone().wrap()).try_unwrap(),
         Err(ResultInputSet(
             [ia_with_seq
                 .clone()

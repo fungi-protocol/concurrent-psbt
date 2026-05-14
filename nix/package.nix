@@ -1,6 +1,7 @@
 { inputs, ... }:
 {
-  perSystem = { craneLib, ... }:
+  perSystem =
+    { craneLib, ... }:
     let
       src = craneLib.cleanCargoSource inputs.self;
 
@@ -11,9 +12,12 @@
 
       cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-      lattice-psbt = craneLib.buildPackage (commonArgs // {
-        inherit cargoArtifacts;
-      });
+      lattice-psbt = craneLib.buildPackage (
+        commonArgs
+        // {
+          inherit cargoArtifacts;
+        }
+      );
     in
     {
       packages.default = lattice-psbt;

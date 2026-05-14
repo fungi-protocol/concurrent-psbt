@@ -70,8 +70,14 @@ impl ResultUnorderedPsbt {
         }
 
         Ok(UnorderedPsbt {
-            global: self.global.try_unwrap().expect("verified all fields are Ok"),
-            inputs: self.inputs.try_unwrap().expect("verified all fields are Ok"),
+            global: self
+                .global
+                .try_unwrap()
+                .expect("verified all fields are Ok"),
+            inputs: self
+                .inputs
+                .try_unwrap()
+                .expect("verified all fields are Ok"),
             outputs: self
                 .outputs
                 .try_unwrap()

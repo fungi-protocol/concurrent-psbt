@@ -66,11 +66,7 @@ fn test_join_option() {
         type Error = ();
 
         fn try_join(self, other: Self) -> JoinResult<Self> {
-            if self == other {
-                Ok(self)
-            } else {
-                Err(())
-            }
+            if self == other { Ok(self) } else { Err(()) }
         }
     }
 

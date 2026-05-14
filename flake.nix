@@ -4,9 +4,11 @@
     flake-parts.url = "github:hercules-ci/flake-parts";
     rust-overlay.url = "github:oxalica/rust-overlay";
     crane.url = "github:ipetkov/crane";
+    treefmt-nix.url = "github:numtide/treefmt-nix";
   };
 
-  outputs = inputs:
+  outputs =
+    inputs:
     inputs.flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [ "x86_64-linux" ];
 
@@ -14,6 +16,7 @@
         ./nix/toolchain.nix
         ./nix/package.nix
         ./nix/devshell.nix
+        ./nix/treefmt.nix
       ];
 
       # TODO

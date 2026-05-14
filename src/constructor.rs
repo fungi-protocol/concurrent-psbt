@@ -5,8 +5,8 @@ use psbt_v2::v2::Creator as Bip370Creator;
 use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Psbt};
 
 use crate::fields::{
-    psbt_global_sort_deterministic, psbt_global_tx_unordered, psbt_out_unique_id,
-    GlobalModifiableExt as _, UNORDERED_VALUE,
+    GlobalModifiableExt as _, UNORDERED_VALUE, psbt_global_sort_deterministic,
+    psbt_global_tx_unordered, psbt_out_unique_id,
 };
 use crate::input::InputExt as _;
 use crate::output::OutputExt as _;
@@ -47,7 +47,7 @@ pub enum SortingError {
     InvalidSortDeterministic,
     /// An input or output is missing its sort key.
     MissingSortKey, // TODO split into MissingSortKeyForInput(OutPoint) and
-                    // MissingSortKeyForOutput(unique id)
+    // MissingSortKeyForOutput(unique id)
     /// Two inputs or two outputs share the same sort key.
     DuplicateSortKey, // TODO (OutPoint, OutPoint) or (unique id, unique id) poitning out which
                       // inputs/outputs collide
@@ -246,8 +246,7 @@ impl Constructor<Modifiable> {
     /// Sort inputs/outputs and produce a BIP 370 `Constructor<Modifiable>`.
     pub fn finalize_order(self) -> Result<Bip370Constructor<Modifiable>, SortingError> {
         let psbt = self.finalize_order_inner()?;
-        Ok(Bip370Constructor::<Modifiable>::new(psbt)
-            .expect("modifiable flags are preserved"))
+        Ok(Bip370Constructor::<Modifiable>::new(psbt).expect("modifiable flags are preserved"))
     }
 
     /// Lock inputs: transition to `OutputsOnlyModifiable`.
@@ -567,7 +566,6 @@ mod tests {
             Err(SortingError::MissingSortDeterministic)
         ));
     }
-
 
     #[test]
     fn finalize_order_rejects_invalid_deterministic_value() {
