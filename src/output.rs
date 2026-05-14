@@ -223,7 +223,4 @@ impl ResultOutput {
     }
 }
 
-#[test]
-fn test_output_set() {
-    // InputSet(todo!())
-}
+// FIXME add tests

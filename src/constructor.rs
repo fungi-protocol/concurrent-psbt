@@ -4,9 +4,8 @@ use psbt_v2::v2::Creator as Bip370Creator;
 use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Psbt};
 
 use crate::fields::{
-    GlobalModifiableExt as _,
-    psbt_global_tx_unordered, psbt_global_sort_deterministic, psbt_in_sort_key, psbt_out_sort_key,
-    psbt_out_unique_id, UNORDERED_VALUE,
+    psbt_global_sort_deterministic, psbt_global_tx_unordered, psbt_in_sort_key, psbt_out_sort_key,
+    psbt_out_unique_id, GlobalModifiableExt as _, UNORDERED_VALUE,
 };
 use crate::tx::UnorderedPsbt;
 
@@ -23,6 +22,17 @@ pub enum Error {
     OutputsNotModifiable,
     /// An output is missing the `PSBT_OUT_UNIQUE_ID` proprietary field.
     MissingOutputUniqueId,
+}
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Error::NotUnordered => f.write_str("PSBT is not marked unordered"),
+            Error::InputsNotModifiable => f.write_str("inputs are not modifiable"),
+            Error::OutputsNotModifiable => f.write_str("outputs are not modifiable"),
+            Error::MissingOutputUniqueId => f.write_str("an output is missing PSBT_OUT_UNIQUE_ID"),
+        }
+    }
 }
 
 /// Error returned when finalizing the order of an unordered Constructor.
@@ -47,19 +57,6 @@ impl core::fmt::Display for FinalizeError {
             }
             FinalizeError::MissingSortKey => {
                 f.write_str("an input or output is missing its sort key")
-            }
-        }
-    }
-}
-
-impl core::fmt::Display for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Error::NotUnordered => f.write_str("PSBT is not marked unordered"),
-            Error::InputsNotModifiable => f.write_str("inputs are not modifiable"),
-            Error::OutputsNotModifiable => f.write_str("outputs are not modifiable"),
-            Error::MissingOutputUniqueId => {
-                f.write_str("an output is missing PSBT_OUT_UNIQUE_ID")
             }
         }
     }
@@ -92,18 +89,39 @@ fn validate_output_unique_id(output: &Output) -> Result<(), Error> {
 /// Unordered Constructor, mirrors the BIP 370 Constructor but for unordered PSBTs.
 pub struct Constructor<M: Mod>(UnorderedPsbt, PhantomData<M>);
 
+// FIXME either derive or explain why this needs to be manually implemented
 impl<M: Mod> core::fmt::Debug for Constructor<M> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("Constructor").field(&self.0).finish()
     }
 }
 
+// FIXME either derive or explain why this needs to be manually implemented
 impl<M: Mod> PartialEq for Constructor<M> {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
     }
 }
 
+// TODO
+// `DETERMINISTIC` modeled as Option<bool> const generic? is that possible? and
+// whether or not a seed is set also makes sense to track in typestate
+//
+// the constructor should expose a JOIN operation and this should agree with the
+// constraints, not just based on the value conflicts the global fields would
+// generate, also represented in the type via generics so that JOIN is only defined
+// for constructors with the same type parameters.
+//
+// try_join on an enum of these variants can also be defined which provides
+// provides useful errors for the incompatible types
+//
+// this would facilitate ensuring invariants, such as all sort keys are defined
+// for non-deterministically sorted transactions
+//
+// this would also enable cleaner APIs, for example a deterministic constructor
+// could have a `set_seed()` and from that point behave as if the sort keys are
+// set via typestate, or provide a finalize_order(self, seed) that sets it (with
+// the typestate ensuring that it isn't set)
 impl<M: Mod> Constructor<M> {
     /// Return the inner `UnorderedPsbt`.
     pub fn into_psbt(self) -> UnorderedPsbt {
@@ -114,15 +132,20 @@ impl<M: Mod> Constructor<M> {
     ///
     /// Requires `PSBT_GLOBAL_SORT_DETERMINISTIC` = `0x00` (explicit sort keys).
     /// Deterministic derivation (`0x01`) is not yet implemented.
+    // FIXME should return a Bip370Constructor ready to be made into an updater
     pub fn finalize_order(self) -> Result<Psbt, FinalizeError> {
         let det_key = psbt_global_sort_deterministic();
-        let det_value = self.0.global.proprietaries.get(&det_key)
+        let det_value = self
+            .0
+            .global
+            .proprietaries
+            .get(&det_key)
             .ok_or(FinalizeError::MissingSortDeterministic)?;
 
         match det_value.as_slice() {
             [0x00] => {}
-            [0x01] => return Err(FinalizeError::DeterministicNotSupported),
-            _ => return Err(FinalizeError::MissingSortDeterministic),
+            [0x01] => return Err(FinalizeError::DeterministicNotSupported), // TODO implement Deterministic
+            _ => return Err(FinalizeError::MissingSortDeterministic), // FIXME error is misleading, what if it's set to something else
         }
 
         let in_key = psbt_in_sort_key();
@@ -131,29 +154,45 @@ impl<M: Mod> Constructor<M> {
         let mut inputs: Vec<_> = self.0.inputs.into_iter().collect();
         let mut outputs: Vec<_> = self.0.outputs.into_iter().collect();
 
-        // Check all sort keys are present before sorting.
+        // FIXME instead of checking all sort keys are defined, check depending
+        // on DETERMINISTIC flag's requirements (all defined, all missing and seed defined, or some missing and seed defined)
         for input in &inputs {
+            // FIXME add InputExt method .has_sort_key()
             if !input.proprietaries.contains_key(&in_key) {
                 return Err(FinalizeError::MissingSortKey);
             }
         }
         for output in &outputs {
+            // FIXME add OutputExt method .has_sort_key()
             if !output.proprietaries.contains_key(&out_key) {
                 return Err(FinalizeError::MissingSortKey);
             }
         }
 
+        // FIXME add an extension trait method to InputExt, OutputExt,
+        // .map(|x| (x.take_or_derive_sort_key(), x))
+        // then sort by .0.
+        // take_or_derive should scrub the sort key if it's set before producing
+        // the ordered PSBT
         inputs.sort_by(|a, b| a.proprietaries[&in_key].cmp(&b.proprietaries[&in_key]));
         outputs.sort_by(|a, b| a.proprietaries[&out_key].cmp(&b.proprietaries[&out_key]));
 
         let mut global = self.0.global;
         global.proprietaries.remove(&psbt_global_tx_unordered());
+
+        // FIXME this should not be necessary, the value should be up to date
         global.input_count = inputs.len();
         global.output_count = outputs.len();
 
-        Ok(Psbt { global, inputs, outputs })
+        Ok(Psbt {
+            global,
+            inputs,
+            outputs,
+        })
     }
 }
+
+// TODO enum of Constructor<Modifiable> etc constructible from a Psbt
 
 impl Constructor<Modifiable> {
     /// Wrap an existing PSBT, validating it is unordered and fully modifiable.
@@ -174,12 +213,25 @@ impl Constructor<Modifiable> {
 
     /// Add an input.
     pub fn input(mut self, input: Input) -> Self {
+        /// FIXME
+        /// should be implemented by creating a new unordered PSBT with
+        /// the input and calling join.
+        ///
+        /// input count conflicts should be fixed by providing the correct
+        /// value, care must be taken that e.g. input_count 1 + input_count 1 is
+        /// not an error but the correct value could be 1 or 2 depending on
+        /// whether or not the input was the same.
         self.0.inputs.insert(input);
         self
     }
 
     /// Add an output. Requires `PSBT_OUT_UNIQUE_ID`.
     pub fn output(self, output: Output) -> Result<Self, Error> {
+        /// FIXME
+        /// should be implemented by creating a new unordered PSBT with
+        /// the input and calling join.
+        ///
+        /// see input FIXME comment for details
         validate_output_unique_id(&output)?;
         let mut this = self;
         this.0.outputs.insert(output);
@@ -248,6 +300,7 @@ impl Constructor<OutputsOnlyModifiable> {
         Ok(Constructor(unordered, PhantomData))
     }
 
+    // FIXME should return a Bip370Constructor ready to become an updater
     /// Lock outputs: both sides now locked, return the `UnorderedPsbt`.
     pub fn no_more_outputs(mut self) -> UnorderedPsbt {
         self.0.global.clear_outputs_modifiable();
@@ -264,6 +317,7 @@ impl Constructor<OutputsOnlyModifiable> {
 pub struct Creator(UnorderedPsbt);
 
 impl Creator {
+    // FIXME allow specifying deterministic as Some(bool)
     pub fn new() -> Self {
         let psbt = Bip370Creator::new()
             .inputs_modifiable()
@@ -272,7 +326,8 @@ impl Creator {
 
         let mut unordered = UnorderedPsbt::from_psbt(psbt);
 
-        unordered.global
+        unordered
+            .global
             .proprietaries
             .insert(psbt_global_tx_unordered(), vec![UNORDERED_VALUE]);
 
@@ -280,7 +335,7 @@ impl Creator {
     }
 
     /// Consume the creator and return the `UnorderedPsbt`.
-    pub fn into_psbt(self) -> UnorderedPsbt {
+    pub fn into_unordered_psbt(self) -> UnorderedPsbt {
         self.0
     }
 
@@ -317,21 +372,30 @@ mod tests {
             .inputs_modifiable()
             .outputs_modifiable()
             .psbt();
-        assert_eq!(Constructor::<Modifiable>::new(psbt), Err(Error::NotUnordered));
+        assert_eq!(
+            Constructor::<Modifiable>::new(psbt),
+            Err(Error::NotUnordered)
+        );
     }
 
     #[test]
     fn new_modifiable_rejects_missing_inputs_flag() {
-        let mut psbt = Creator::new().into_psbt().to_psbt();
+        let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
         psbt.global.clear_inputs_modifiable();
-        assert_eq!(Constructor::<Modifiable>::new(psbt), Err(Error::InputsNotModifiable));
+        assert_eq!(
+            Constructor::<Modifiable>::new(psbt),
+            Err(Error::InputsNotModifiable)
+        );
     }
 
     #[test]
     fn new_modifiable_rejects_missing_outputs_flag() {
-        let mut psbt = Creator::new().into_psbt().to_psbt();
+        let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
         psbt.global.clear_outputs_modifiable();
-        assert_eq!(Constructor::<Modifiable>::new(psbt), Err(Error::OutputsNotModifiable));
+        assert_eq!(
+            Constructor::<Modifiable>::new(psbt),
+            Err(Error::OutputsNotModifiable)
+        );
     }
 
     #[test]
@@ -355,17 +419,17 @@ mod tests {
     #[test]
     fn finalize_order_sorts_by_explicit_sort_keys() {
         use crate::fields::{
-            psbt_global_sort_deterministic, psbt_in_sort_key, psbt_out_sort_key,
-            psbt_out_unique_id,
+            psbt_global_sort_deterministic, psbt_in_sort_key, psbt_out_sort_key, psbt_out_unique_id,
         };
 
         let mut creator = Creator::new();
-        creator.0.global.proprietaries.insert(
-            psbt_global_sort_deterministic(),
-            vec![0x00],
-        );
+        creator
+            .0
+            .global
+            .proprietaries
+            .insert(psbt_global_sort_deterministic(), vec![0x00]);
 
-        let mut psbt = creator.into_psbt().to_psbt();
+        let mut psbt = creator.into_unordered_psbt().to_psbt();
 
         // Two inputs: sort key 0x02 first, 0x01 second (reverse order).
         let mut oa = bitcoin::OutPoint::null();
@@ -387,15 +451,23 @@ mod tests {
             value: bitcoin::Amount::from_sat(2000),
             script_pubkey: bitcoin::ScriptBuf::from_bytes(vec![0xBB]),
         });
-        output_y.proprietaries.insert(psbt_out_sort_key(), vec![0x02]);
-        output_y.proprietaries.insert(psbt_out_unique_id(), vec![0x02; 16]);
+        output_y
+            .proprietaries
+            .insert(psbt_out_sort_key(), vec![0x02]);
+        output_y
+            .proprietaries
+            .insert(psbt_out_unique_id(), vec![0x02; 16]);
 
         let mut output_x = psbt_v2::v2::Output::new(bitcoin::TxOut {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::from_bytes(vec![0xAA]),
         });
-        output_x.proprietaries.insert(psbt_out_sort_key(), vec![0x01]);
-        output_x.proprietaries.insert(psbt_out_unique_id(), vec![0x01; 16]);
+        output_x
+            .proprietaries
+            .insert(psbt_out_sort_key(), vec![0x01]);
+        output_x
+            .proprietaries
+            .insert(psbt_out_unique_id(), vec![0x01; 16]);
 
         psbt.outputs = vec![output_y, output_x];
         psbt.global.output_count = 2;
@@ -417,12 +489,13 @@ mod tests {
         use crate::fields::psbt_global_sort_deterministic;
 
         let mut creator = Creator::new();
-        creator.0.global.proprietaries.insert(
-            psbt_global_sort_deterministic(),
-            vec![0x00],
-        );
+        creator
+            .0
+            .global
+            .proprietaries
+            .insert(psbt_global_sort_deterministic(), vec![0x00]);
 
-        let mut psbt = creator.into_psbt().to_psbt();
+        let mut psbt = creator.into_unordered_psbt().to_psbt();
 
         // Input without a sort key.
         let input = psbt_v2::v2::Input::new(&bitcoin::OutPoint::null());
@@ -430,14 +503,20 @@ mod tests {
         psbt.global.input_count = 1;
 
         let constructor = Constructor::<Modifiable>::new(psbt).unwrap();
-        assert_eq!(constructor.finalize_order(), Err(FinalizeError::MissingSortKey));
+        assert_eq!(
+            constructor.finalize_order(),
+            Err(FinalizeError::MissingSortKey)
+        );
     }
 
     #[test]
     fn finalize_order_rejects_missing_deterministic_field() {
-        let psbt = Creator::new().into_psbt().to_psbt();
+        let psbt = Creator::new().into_unordered_psbt().to_psbt();
         let constructor = Constructor::<Modifiable>::new(psbt).unwrap();
-        assert_eq!(constructor.finalize_order(), Err(FinalizeError::MissingSortDeterministic));
+        assert_eq!(
+            constructor.finalize_order(),
+            Err(FinalizeError::MissingSortDeterministic)
+        );
     }
 
     #[test]
@@ -445,18 +524,22 @@ mod tests {
         use crate::fields::psbt_global_sort_deterministic;
 
         let mut creator = Creator::new();
-        creator.0.global.proprietaries.insert(
-            psbt_global_sort_deterministic(),
-            vec![0x01],
-        );
-        let psbt = creator.into_psbt().to_psbt();
+        creator
+            .0
+            .global
+            .proprietaries
+            .insert(psbt_global_sort_deterministic(), vec![0x01]);
+        let psbt = creator.into_unordered_psbt().to_psbt();
         let constructor = Constructor::<Modifiable>::new(psbt).unwrap();
-        assert_eq!(constructor.finalize_order(), Err(FinalizeError::DeterministicNotSupported));
+        assert_eq!(
+            constructor.finalize_order(),
+            Err(FinalizeError::DeterministicNotSupported)
+        );
     }
 
     #[test]
     fn new_modifiable_rejects_missing_output_unique_id() {
-        let mut psbt = Creator::new().into_psbt().to_psbt();
+        let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
 
         // Add an output without PSBT_OUT_UNIQUE_ID.
         let output = psbt_v2::v2::Output::new(bitcoin::TxOut {
@@ -476,13 +559,15 @@ mod tests {
     fn new_modifiable_accepts_output_with_unique_id() {
         use crate::fields::psbt_out_unique_id;
 
-        let mut psbt = Creator::new().into_psbt().to_psbt();
+        let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
 
         let mut output = psbt_v2::v2::Output::new(bitcoin::TxOut {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::from_bytes(vec![0xAA]),
         });
-        output.proprietaries.insert(psbt_out_unique_id(), vec![0x01; 16]);
+        output
+            .proprietaries
+            .insert(psbt_out_unique_id(), vec![0x01; 16]);
         psbt.outputs = vec![output];
         psbt.global.output_count = 1;
 
@@ -493,14 +578,20 @@ mod tests {
     fn inputs_only_new_rejects_locked_inputs() {
         let c = Creator::new().constructor();
         let unordered = c.no_more_inputs().no_more_outputs();
-        assert_eq!(Constructor::<InputsOnlyModifiable>::new(unordered.to_psbt()), Err(Error::InputsNotModifiable));
+        assert_eq!(
+            Constructor::<InputsOnlyModifiable>::new(unordered.to_psbt()),
+            Err(Error::InputsNotModifiable)
+        );
     }
 
     #[test]
     fn outputs_only_new_rejects_locked_outputs() {
         let c = Creator::new().constructor();
         let unordered = c.no_more_outputs().no_more_inputs();
-        assert_eq!(Constructor::<OutputsOnlyModifiable>::new(unordered.to_psbt()), Err(Error::OutputsNotModifiable));
+        assert_eq!(
+            Constructor::<OutputsOnlyModifiable>::new(unordered.to_psbt()),
+            Err(Error::OutputsNotModifiable)
+        );
     }
 
     #[test]
@@ -521,7 +612,9 @@ mod tests {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
-        output.proprietaries.insert(psbt_out_unique_id(), vec![0xAA; 16]);
+        output
+            .proprietaries
+            .insert(psbt_out_unique_id(), vec![0xAA; 16]);
         let c = c.output(output).unwrap();
         let psbt = c.into_psbt();
         assert_eq!(psbt.outputs.len(), 1);
@@ -555,7 +648,9 @@ mod tests {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
-        output.proprietaries.insert(psbt_out_unique_id(), vec![0xBB; 16]);
+        output
+            .proprietaries
+            .insert(psbt_out_unique_id(), vec![0xBB; 16]);
         let c = c.output(output).unwrap();
         let psbt = c.no_more_outputs();
         assert_eq!(psbt.outputs.len(), 1);

@@ -80,6 +80,7 @@ impl ResultInputSet {
     }
 }
 
+// FIXME should be pub(crate)
 pub trait InputExt {
     // Input::out_point() exists but is private so we reimeplement it here
     fn out_point(&self) -> OutPoint;
@@ -511,3 +512,5 @@ fn test_input_set() {
         ))
     );
 }
+
+// FIXME add more unit tests

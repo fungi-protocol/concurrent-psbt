@@ -9,6 +9,7 @@ use psbt_v2::v2::Global;
 /// Prefix for all proprietary keys defined by this specification.
 const PREFIX: &[u8] = b"lattice";
 
+// TODO can this be const?
 fn prop(subtype: u8, key: &[u8]) -> ProprietaryKey {
     ProprietaryKey {
         prefix: PREFIX.to_vec(),
@@ -88,6 +89,7 @@ const INPUTS_MODIFIABLE: u8 = 0x01;
 const OUTPUTS_MODIFIABLE: u8 = 0x02;
 
 /// Extension trait for reading and writing the modifiable flags on `Global`.
+// FIXME should be pub(crate)
 pub trait GlobalModifiableExt {
     fn is_inputs_modifiable(&self) -> bool;
     fn is_outputs_modifiable(&self) -> bool;
