@@ -41,8 +41,8 @@ impl core::fmt::Display for Error {
 pub enum FinalizeError {
     /// `PSBT_GLOBAL_SORT_DETERMINISTIC` is not set.
     MissingSortDeterministic,
-    /// Deterministic mode (`0x01`) is not yet supported.
-    DeterministicNotSupported,
+    /// `PSBT_GLOBAL_SORT_DETERMINISTIC` has an unrecognized value.
+    InvalidSortDeterministic,
     /// An input or output is missing its sort key.
     MissingSortKey,
 }
@@ -53,8 +53,8 @@ impl core::fmt::Display for FinalizeError {
             FinalizeError::MissingSortDeterministic => {
                 f.write_str("PSBT_GLOBAL_SORT_DETERMINISTIC is not set")
             }
-            FinalizeError::DeterministicNotSupported => {
-                f.write_str("deterministic sort key derivation (0x01) is not yet supported")
+            FinalizeError::InvalidSortDeterministic => {
+                f.write_str("PSBT_GLOBAL_SORT_DETERMINISTIC has an unrecognized value")
             }
             FinalizeError::MissingSortKey => {
                 f.write_str("an input or output is missing its sort key")
@@ -144,8 +144,8 @@ impl<M: Mod> Constructor<M> {
 
         match det_value.as_slice() {
             [0x00] => {}
-            [0x01] => return Err(FinalizeError::DeterministicNotSupported), // TODO implement Deterministic
-            _ => return Err(FinalizeError::MissingSortDeterministic), // FIXME error is misleading, what if it's set to something else
+            [0x01] => todo!("deterministic not supported"),
+            _ => return Err(FinalizeError::InvalidSortDeterministic),
         }
 
         let in_key = psbt_in_sort_key();
@@ -557,8 +557,9 @@ mod tests {
         ));
     }
 
+
     #[test]
-    fn finalize_order_rejects_deterministic_mode() {
+    fn finalize_order_rejects_invalid_deterministic_value() {
         use crate::fields::psbt_global_sort_deterministic;
 
         let mut creator = Creator::new();
@@ -566,12 +567,12 @@ mod tests {
             .0
             .global
             .proprietaries
-            .insert(psbt_global_sort_deterministic(), vec![0x01]);
+            .insert(psbt_global_sort_deterministic(), vec![0xFF]);
         let psbt = creator.into_unordered_psbt().to_psbt();
         let constructor = Constructor::<Modifiable>::new(psbt).unwrap();
         assert!(matches!(
             constructor.finalize_order(),
-            Err(FinalizeError::DeterministicNotSupported)
+            Err(FinalizeError::InvalidSortDeterministic)
         ));
     }
 
