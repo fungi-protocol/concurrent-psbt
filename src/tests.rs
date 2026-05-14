@@ -82,7 +82,10 @@ impl_wrap_join!(Global, wrap_global, join_global, try_unwrap_global);
 fn wrap_input(i: Input) -> crate::input::ResultInput {
     i.wrap()
 }
-fn join_input(a: crate::input::ResultInput, b: crate::input::ResultInput) -> crate::input::ResultInput {
+fn join_input(
+    a: crate::input::ResultInput,
+    b: crate::input::ResultInput,
+) -> crate::input::ResultInput {
     Join::join(a, b)
 }
 fn try_unwrap_input(r: crate::input::ResultInput) -> Result<Input, crate::input::ResultInput> {
@@ -120,7 +123,12 @@ fn try_unwrap_input_set(
 ) -> Result<InputSet, crate::input::ResultInputSet> {
     r.try_unwrap()
 }
-impl_wrap_join!(InputSet, wrap_input_set, join_input_set, try_unwrap_input_set);
+impl_wrap_join!(
+    InputSet,
+    wrap_input_set,
+    join_input_set,
+    try_unwrap_input_set
+);
 
 fn wrap_output_set(s: OutputSet) -> crate::output::ResultOutputSet {
     s.wrap()

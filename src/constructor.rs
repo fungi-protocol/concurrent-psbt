@@ -772,7 +772,10 @@ mod tests {
         let c = Constructor::<InputsOnlyModifiable>::new(psbt).unwrap();
         let ordered = c.finalize_order().unwrap().psbt().unwrap();
         assert_eq!(ordered.inputs.len(), 1);
-        assert_eq!(ordered.inputs[0].previous_txid, bitcoin::OutPoint::null().txid);
+        assert_eq!(
+            ordered.inputs[0].previous_txid,
+            bitcoin::OutPoint::null().txid
+        );
     }
 
     #[test]
@@ -794,9 +797,7 @@ mod tests {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
-        output
-            .proprietaries
-            .insert(psbt_out_sort_key(), vec![0x01]);
+        output.proprietaries.insert(psbt_out_sort_key(), vec![0x01]);
         output
             .proprietaries
             .insert(psbt_out_unique_id(), vec![0x01; 16]);
