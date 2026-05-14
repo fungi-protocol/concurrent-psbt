@@ -8,7 +8,12 @@
         overlays = [ inputs.rust-overlay.overlays.default ];
       };
 
-      rustToolchain = pkgs.rust-bin.selectLatestNightlyWith (t: t.default);
+      rustToolchain = pkgs.rust-bin.selectLatestNightlyWith (
+        t:
+        t.default.override {
+          extensions = [ "llvm-tools" ];
+        }
+      );
 
       craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
     in
