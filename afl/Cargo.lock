@@ -171,6 +171,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
+name = "miniscript"
+version = "12.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c14116d8342edd3626b0f8e84df16f4e6a76dc04799ba747493403236a1b8ac5"
+dependencies = [
+ "bech32",
+ "bitcoin",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -181,11 +191,12 @@ dependencies = [
 
 [[package]]
 name = "psbt-v2"
-version = "0.2.0"
-source = "git+https://github.com/arminsabouri/rust-psbt?branch=update-consensus-decode-trait-bound#9647b0866b7822b0c8fa1b97915bcd2eeaa62f79"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e075616cae99e29d70960a6374c2757dff4dd6b646dd0398ce1012666231c7aa"
 dependencies = [
  "bitcoin",
- "bitcoin-internals",
+ "miniscript",
 ]
 
 [[package]]

@@ -206,7 +206,7 @@ mod result {
         pub witness_script: Option<JoinResult<ScriptBuf>>,
         /// A map from public keys needed to sign this input to their corresponding
         /// master key fingerprints and derivation paths.
-        pub bip32_derivations: BTreeMap<secp256k1::PublicKey, JoinResult<KeySource>>,
+        pub bip32_derivations: BTreeMap<PublicKey, JoinResult<KeySource>>,
         /// The finalized, fully-constructed scriptSig with signatures and any other
         /// scripts necessary for this input to pass validation.
         pub final_script_sig: Option<JoinResult<ScriptBuf>>,

@@ -127,7 +127,7 @@ mod result {
     pub use std::collections::BTreeMap;
 
     use bitcoin::bip32::KeySource;
-    use bitcoin::key::XOnlyPublicKey;
+    use bitcoin::key::{PublicKey, XOnlyPublicKey};
     use bitcoin::taproot::{TapLeafHash, TapTree};
     use bitcoin::{Amount, ScriptBuf, secp256k1};
 
@@ -149,7 +149,7 @@ mod result {
         pub witness_script: Option<JoinResult<ScriptBuf>>,
         /// A map from public keys needed to spend this output to their
         /// corresponding master key fingerprints and derivation paths.
-        pub bip32_derivations: BTreeMap<secp256k1::PublicKey, JoinResult<KeySource>>,
+        pub bip32_derivations: BTreeMap<PublicKey, JoinResult<KeySource>>,
         /// The internal pubkey.
         pub tap_internal_key: Option<JoinResult<XOnlyPublicKey>>,
         /// Taproot Output tree.

@@ -12,7 +12,7 @@ afl = "0.15"
 arbitrary = { version = "1", features = ["derive"] }
 lattice-psbt = { path = "..", features = ["_internal"] }
 bitcoin = "0.32.2"
-psbt-v2 = { git = "https://github.com/arminsabouri/rust-psbt", branch = "update-consensus-decode-trait-bound" }
+psbt-v2 = "0.3.0"
 
 [workspace]
 members = ["."]

@@ -10,7 +10,7 @@ _internal = []
 bitcoin = "0.32.2"
 thiserror = "2.0.17"
 # FIXME no longer need the update-consensus-decode-trait-bound branch
-psbt-v2 = { git = "https://github.com/arminsabouri/rust-psbt", branch = "update-consensus-decode-trait-bound" }
+psbt-v2 = "0.3.0"
 
 [dev-dependencies]
 proptest = "1"

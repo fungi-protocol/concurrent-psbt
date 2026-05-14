@@ -72,23 +72,24 @@
       };
 
       apps = {
-        mutants = mkApp "run-mutants" "Run cargo-mutants mutation testing"
-          (pkgs.writeShellScript "run-mutants" ''
+        mutants = mkApp "run-mutants" "Run cargo-mutants mutation testing" (
+          pkgs.writeShellScript "run-mutants" ''
             export PATH="${pkgs.cargo-mutants}/bin:${rustNightly}/bin:$PATH"
             exec cargo mutants --no-shuffle -vV "$@"
-          '');
+          ''
+        );
 
-        fuzz-libfuzzer = mkApp "fuzz-libfuzzer"
-          "Run libFuzzer via cargo-fuzz: nix run .#fuzz-libfuzzer -- <target>"
-          fuzz-libfuzzer-script;
+        fuzz-libfuzzer =
+          mkApp "fuzz-libfuzzer" "Run libFuzzer via cargo-fuzz: nix run .#fuzz-libfuzzer -- <target>"
+            fuzz-libfuzzer-script;
 
-        fuzz-honggfuzz = mkApp "fuzz-honggfuzz"
-          "Run honggfuzz: nix run .#fuzz-honggfuzz -- <target>"
-          fuzz-honggfuzz-script;
+        fuzz-honggfuzz =
+          mkApp "fuzz-honggfuzz" "Run honggfuzz: nix run .#fuzz-honggfuzz -- <target>"
+            fuzz-honggfuzz-script;
 
-        fuzz-afl = mkApp "fuzz-afl"
-          "Run AFL++ via cargo-afl: nix run .#fuzz-afl -- <target>"
-          fuzz-afl-script;
+        fuzz-afl =
+          mkApp "fuzz-afl" "Run AFL++ via cargo-afl: nix run .#fuzz-afl -- <target>"
+            fuzz-afl-script;
       };
     };
 }

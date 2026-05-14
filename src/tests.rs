@@ -337,7 +337,7 @@ prop_compose! {
         tap_internal_key     in proptest::option::of(arb_xonly_pubkey()),
         tap_merkle_root      in proptest::option::of(arb_tap_node_hash()),
         partial_sigs      in proptest::collection::btree_map(arb_bitcoin_pubkey(), arb_ecdsa_sig(), 0..3),
-        bip32_derivations in proptest::collection::btree_map(arb_secp256k1_pubkey(), arb_key_source(), 0..3),
+        bip32_derivations in proptest::collection::btree_map(arb_bitcoin_pubkey(), arb_key_source(), 0..3),
         tap_key_origins   in proptest::collection::btree_map(
             arb_xonly_pubkey(),
             (proptest::collection::vec(arb_tap_leaf_hash(), 0..3), arb_key_source()),
@@ -376,7 +376,7 @@ prop_compose! {
         redeem_script     in proptest::option::of(arb_script()),
         witness_script    in proptest::option::of(arb_script()),
         tap_internal_key  in proptest::option::of(arb_xonly_pubkey()),
-        bip32_derivations in proptest::collection::btree_map(arb_secp256k1_pubkey(), arb_key_source(), 0..3),
+        bip32_derivations in proptest::collection::btree_map(arb_bitcoin_pubkey(), arb_key_source(), 0..3),
         tap_key_origins   in proptest::collection::btree_map(
             arb_xonly_pubkey(),
             (proptest::collection::vec(arb_tap_leaf_hash(), 0..3), arb_key_source()),
