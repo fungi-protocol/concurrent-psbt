@@ -38,30 +38,35 @@ impl core::fmt::Display for Error {
     }
 }
 
-/// Error returned when finalizing the order of an unordered Constructor.
-// FIXME finalization is an existing BIP 174 concept. this should be called `SortingError`
+/// Error returned when sorting an unordered Constructor into a fixed order.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FinalizeError {
+pub enum SortingError {
     /// `PSBT_GLOBAL_SORT_DETERMINISTIC` is not set.
     MissingSortDeterministic,
     /// `PSBT_GLOBAL_SORT_DETERMINISTIC` has an unrecognized value.
     InvalidSortDeterministic,
     /// An input or output is missing its sort key.
-    MissingSortKey, // FIXME split into MissingSortKeyForInput(OutPoint) and
+    MissingSortKey, // TODO split into MissingSortKeyForInput(OutPoint) and
                     // MissingSortKeyForOutput(unique id)
+    /// Two inputs or two outputs share the same sort key.
+    DuplicateSortKey, // TODO (OutPoint, OutPoint) or (unique id, unique id) poitning out which
+                      // inputs/outputs collide
 }
 
-impl core::fmt::Display for FinalizeError {
+impl core::fmt::Display for SortingError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            FinalizeError::MissingSortDeterministic => {
+            SortingError::MissingSortDeterministic => {
                 f.write_str("PSBT_GLOBAL_SORT_DETERMINISTIC is not set")
             }
-            FinalizeError::InvalidSortDeterministic => {
+            SortingError::InvalidSortDeterministic => {
                 f.write_str("PSBT_GLOBAL_SORT_DETERMINISTIC has an unrecognized value")
             }
-            FinalizeError::MissingSortKey => {
+            SortingError::MissingSortKey => {
                 f.write_str("an input or output is missing its sort key")
+            }
+            SortingError::DuplicateSortKey => {
+                f.write_str("two inputs or two outputs share the same sort key")
             }
         }
     }
@@ -70,19 +75,21 @@ impl core::fmt::Display for FinalizeError {
 // -- Helpers -----------------------------------------------------------------
 
 /// Extract sort keys from items via `take_key`, sort by key, return items in order.
+///
+/// Fails if any key is missing or if two items share the same sort key.
 fn sort_by_extracted_key<T>(
     items: impl IntoIterator<Item = T>,
     mut take_key: impl FnMut(&mut T) -> Option<Vec<u8>>,
-) -> Result<Vec<T>, FinalizeError> {
+) -> Result<Vec<T>, SortingError> {
     use std::collections::BTreeMap;
-    let mut map: BTreeMap<Vec<u8>, Vec<T>> = BTreeMap::new(); //FIXME value should just be T, it
-                                                              //should be an error to have
-                                                              //duplicate sort keys
+    let mut map: BTreeMap<Vec<u8>, T> = BTreeMap::new();
     for mut item in items {
-        let key = take_key(&mut item).ok_or(FinalizeError::MissingSortKey)?;
-        map.entry(key).or_default().push(item); // TODO FinalizeError::DuplicateSortKey
+        let key = take_key(&mut item).ok_or(SortingError::MissingSortKey)?;
+        if map.insert(key, item).is_some() {
+            return Err(SortingError::DuplicateSortKey);
+        }
     }
-    Ok(map.into_values().flatten().collect())
+    Ok(map.into_values().collect())
 }
 
 // -- Validation --------------------------------------------------------------
@@ -155,19 +162,19 @@ impl<M: Mod> Constructor<M> {
     ///
     /// Requires `PSBT_GLOBAL_SORT_DETERMINISTIC` = `0x00` (explicit sort keys).
     /// Deterministic derivation (`0x01`) is not yet implemented.
-    fn finalize_order_inner(self) -> Result<Psbt, FinalizeError> {
+    fn finalize_order_inner(self) -> Result<Psbt, SortingError> {
         let det_key = psbt_global_sort_deterministic();
         let det_value = self
             .0
             .global
             .proprietaries
             .get(&det_key)
-            .ok_or(FinalizeError::MissingSortDeterministic)?;
+            .ok_or(SortingError::MissingSortDeterministic)?;
 
         match det_value.as_slice() {
             [0x00] => {}
             [0x01] => todo!("deterministic not supported"),
-            _ => return Err(FinalizeError::InvalidSortDeterministic),
+            _ => return Err(SortingError::InvalidSortDeterministic),
         }
 
         // TODO when DETERMINISTIC=0x01, derive missing keys from seed instead of failing.
@@ -236,7 +243,7 @@ impl Constructor<Modifiable> {
     }
 
     /// Sort inputs/outputs and produce a BIP 370 `Constructor<Modifiable>`.
-    pub fn finalize_order(self) -> Result<Bip370Constructor<Modifiable>, FinalizeError> {
+    pub fn finalize_order(self) -> Result<Bip370Constructor<Modifiable>, SortingError> {
         let psbt = self.finalize_order_inner()?;
         Ok(Bip370Constructor::<Modifiable>::new(psbt)
             .expect("modifiable flags are preserved"))
@@ -276,7 +283,7 @@ impl Constructor<InputsOnlyModifiable> {
     }
 
     /// Sort inputs/outputs and produce a BIP 370 `Constructor<InputsOnlyModifiable>`.
-    pub fn finalize_order(self) -> Result<Bip370Constructor<InputsOnlyModifiable>, FinalizeError> {
+    pub fn finalize_order(self) -> Result<Bip370Constructor<InputsOnlyModifiable>, SortingError> {
         let psbt = self.finalize_order_inner()?;
         Ok(Bip370Constructor::<InputsOnlyModifiable>::new(psbt)
             .expect("inputs-modifiable flag is preserved"))
@@ -312,7 +319,7 @@ impl Constructor<OutputsOnlyModifiable> {
     }
 
     /// Sort inputs/outputs and produce a BIP 370 `Constructor<OutputsOnlyModifiable>`.
-    pub fn finalize_order(self) -> Result<Bip370Constructor<OutputsOnlyModifiable>, FinalizeError> {
+    pub fn finalize_order(self) -> Result<Bip370Constructor<OutputsOnlyModifiable>, SortingError> {
         let psbt = self.finalize_order_inner()?;
         Ok(Bip370Constructor::<OutputsOnlyModifiable>::new(psbt)
             .expect("outputs-modifiable flag is preserved"))
@@ -546,7 +553,7 @@ mod tests {
         let constructor = Constructor::<Modifiable>::new(psbt).unwrap();
         assert!(matches!(
             constructor.finalize_order(),
-            Err(FinalizeError::MissingSortKey)
+            Err(SortingError::MissingSortKey)
         ));
     }
 
@@ -556,7 +563,7 @@ mod tests {
         let constructor = Constructor::<Modifiable>::new(psbt).unwrap();
         assert!(matches!(
             constructor.finalize_order(),
-            Err(FinalizeError::MissingSortDeterministic)
+            Err(SortingError::MissingSortDeterministic)
         ));
     }
 
@@ -575,7 +582,37 @@ mod tests {
         let constructor = Constructor::<Modifiable>::new(psbt).unwrap();
         assert!(matches!(
             constructor.finalize_order(),
-            Err(FinalizeError::InvalidSortDeterministic)
+            Err(SortingError::InvalidSortDeterministic)
+        ));
+    }
+
+    #[test]
+    fn finalize_order_rejects_duplicate_input_sort_keys() {
+        use crate::fields::{psbt_global_sort_deterministic, psbt_in_sort_key};
+
+        let mut creator = Creator::new();
+        creator
+            .0
+            .global
+            .proprietaries
+            .insert(psbt_global_sort_deterministic(), vec![0x00]);
+        let mut psbt = creator.into_unordered_psbt().to_psbt();
+
+        let mut input_a = psbt_v2::v2::Input::new(&bitcoin::OutPoint::null());
+        input_a.proprietaries.insert(psbt_in_sort_key(), vec![0x01]);
+
+        let mut ob = bitcoin::OutPoint::null();
+        ob.vout = 1;
+        let mut input_b = psbt_v2::v2::Input::new(&ob);
+        input_b.proprietaries.insert(psbt_in_sort_key(), vec![0x01]); // same key
+
+        psbt.inputs = vec![input_a, input_b];
+        psbt.global.input_count = 2;
+
+        let constructor = Constructor::<Modifiable>::new(psbt).unwrap();
+        assert!(matches!(
+            constructor.finalize_order(),
+            Err(SortingError::DuplicateSortKey)
         ));
     }
 
