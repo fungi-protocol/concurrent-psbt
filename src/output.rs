@@ -311,4 +311,19 @@ mod tests {
         let joined = Join::join(sa.wrap(), sb.wrap());
         assert!(joined.try_unwrap().is_err());
     }
+
+    #[test]
+    fn sort_key_accessors() {
+        let mut output = make_output(0x01, 1000);
+        assert!(output.sort_key().is_none());
+
+        output
+            .proprietaries
+            .insert(crate::fields::psbt_out_sort_key(), vec![0x42]);
+        assert_eq!(output.sort_key(), Some(&vec![0x42]));
+
+        let taken = output.take_sort_key();
+        assert_eq!(taken, Some(vec![0x42]));
+        assert!(output.sort_key().is_none());
+    }
 }

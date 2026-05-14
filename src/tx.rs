@@ -90,5 +90,41 @@ impl ResultUnorderedPsbt {
     }
 }
 
-#[test]
-fn test_tx() {}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lattice::join::Join;
+    use psbt_v2::v2::Creator as Bip370Creator;
+
+    fn make_unordered() -> UnorderedPsbt {
+        let psbt = Bip370Creator::new().psbt();
+        UnorderedPsbt::from_psbt(psbt)
+    }
+
+    #[test]
+    fn wrap_try_unwrap_roundtrip() {
+        let u = make_unordered();
+        let wrapped = u.clone().wrap();
+        assert!(wrapped.is_ok());
+        let unwrapped = wrapped.try_unwrap().unwrap();
+        assert_eq!(unwrapped, u);
+    }
+
+    #[test]
+    fn is_ok_false_when_global_conflicts() {
+        use crate::lattice::join::Join;
+
+        let mut a = make_unordered();
+        let mut b = make_unordered();
+        a.global.input_count = 1;
+        b.global.input_count = 2;
+
+        let result = ResultUnorderedPsbt {
+            global: a.global.wrap().join(b.global.wrap()),
+            inputs: a.inputs.wrap(),
+            outputs: a.outputs.wrap(),
+        };
+        assert!(!result.is_ok());
+        assert!(result.try_unwrap().is_err());
+    }
+}

@@ -123,3 +123,54 @@ impl GlobalModifiableExt for Global {
         self.tx_modifiable_flags |= OUTPUTS_MODIFIABLE;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use psbt_v2::v2::Creator as Bip370Creator;
+
+    fn make_global() -> Global {
+        Bip370Creator::new().psbt().global
+    }
+
+    #[test]
+    fn set_and_clear_inputs_modifiable() {
+        let mut g = make_global();
+        g.tx_modifiable_flags = 0;
+        assert!(!g.is_inputs_modifiable());
+
+        g.set_inputs_modifiable();
+        assert!(g.is_inputs_modifiable());
+
+        g.clear_inputs_modifiable();
+        assert!(!g.is_inputs_modifiable());
+    }
+
+    #[test]
+    fn set_and_clear_outputs_modifiable() {
+        let mut g = make_global();
+        g.tx_modifiable_flags = 0;
+        assert!(!g.is_outputs_modifiable());
+
+        g.set_outputs_modifiable();
+        assert!(g.is_outputs_modifiable());
+
+        g.clear_outputs_modifiable();
+        assert!(!g.is_outputs_modifiable());
+    }
+
+    #[test]
+    fn set_preserves_other_flag() {
+        let mut g = make_global();
+        g.tx_modifiable_flags = 0;
+
+        g.set_inputs_modifiable();
+        g.set_outputs_modifiable();
+        assert!(g.is_inputs_modifiable());
+        assert!(g.is_outputs_modifiable());
+
+        g.clear_inputs_modifiable();
+        assert!(!g.is_inputs_modifiable());
+        assert!(g.is_outputs_modifiable());
+    }
+}

@@ -733,4 +733,80 @@ mod tests {
         let psbt = c.no_more_outputs();
         assert_eq!(psbt.outputs.len(), 1);
     }
+
+    #[test]
+    fn constructor_eq_reflexive() {
+        let a = Creator::new().constructor();
+        let b = Creator::new().constructor();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn constructor_eq_differs_after_input() {
+        let a = Creator::new().constructor();
+        let b = Creator::new()
+            .constructor()
+            .input(psbt_v2::v2::Input::new(&bitcoin::OutPoint::null()));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn finalize_order_inputs_only() {
+        use crate::fields::{psbt_global_sort_deterministic, psbt_in_sort_key, psbt_out_unique_id};
+
+        let mut creator = Creator::new();
+        creator
+            .0
+            .global
+            .proprietaries
+            .insert(psbt_global_sort_deterministic(), vec![0x00]);
+
+        let mut psbt = creator.into_unordered_psbt().to_psbt();
+
+        let mut input = psbt_v2::v2::Input::new(&bitcoin::OutPoint::null());
+        input.proprietaries.insert(psbt_in_sort_key(), vec![0x01]);
+        psbt.inputs = vec![input];
+        psbt.global.input_count = 1;
+        psbt.global.clear_outputs_modifiable();
+
+        let c = Constructor::<InputsOnlyModifiable>::new(psbt).unwrap();
+        let ordered = c.finalize_order().unwrap().psbt().unwrap();
+        assert_eq!(ordered.inputs.len(), 1);
+        assert_eq!(ordered.inputs[0].previous_txid, bitcoin::OutPoint::null().txid);
+    }
+
+    #[test]
+    fn finalize_order_outputs_only() {
+        use crate::fields::{
+            psbt_global_sort_deterministic, psbt_out_sort_key, psbt_out_unique_id,
+        };
+
+        let mut creator = Creator::new();
+        creator
+            .0
+            .global
+            .proprietaries
+            .insert(psbt_global_sort_deterministic(), vec![0x00]);
+
+        let mut psbt = creator.into_unordered_psbt().to_psbt();
+
+        let mut output = psbt_v2::v2::Output::new(bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(1000),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        });
+        output
+            .proprietaries
+            .insert(psbt_out_sort_key(), vec![0x01]);
+        output
+            .proprietaries
+            .insert(psbt_out_unique_id(), vec![0x01; 16]);
+        psbt.outputs = vec![output];
+        psbt.global.output_count = 1;
+        psbt.global.clear_inputs_modifiable();
+
+        let c = Constructor::<OutputsOnlyModifiable>::new(psbt).unwrap();
+        let ordered = c.finalize_order().unwrap().psbt().unwrap();
+        assert_eq!(ordered.outputs.len(), 1);
+        assert_eq!(ordered.outputs[0].amount, bitcoin::Amount::from_sat(1000));
+    }
 }

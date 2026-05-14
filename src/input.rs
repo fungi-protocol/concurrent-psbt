@@ -507,4 +507,35 @@ fn test_input_set() {
     );
 }
 
-// TODO add more unit tests
+#[test]
+fn test_input_set_accessors() {
+    let mut oa = OutPoint::null();
+    oa.vout = 0;
+    let ia = Input::new(&oa);
+
+    let set = InputSet::from_iter([ia]);
+    assert_eq!(set.len(), 1);
+    assert!(set.spends_outpoint(&oa));
+
+    let mut ob = OutPoint::null();
+    ob.vout = 1;
+    assert!(!set.spends_outpoint(&ob));
+
+    let empty = InputSet::from_iter([]);
+    assert_eq!(empty.len(), 0);
+}
+
+#[test]
+fn test_input_sort_key() {
+    let mut input = Input::new(&OutPoint::null());
+    assert!(input.sort_key().is_none());
+
+    input
+        .proprietaries
+        .insert(crate::fields::psbt_in_sort_key(), vec![0x42]);
+    assert_eq!(input.sort_key(), Some(&vec![0x42]));
+
+    let taken = input.take_sort_key();
+    assert_eq!(taken, Some(vec![0x42]));
+    assert!(input.sort_key().is_none());
+}

@@ -146,7 +146,41 @@ impl ResultGlobal {
     }
 }
 
-#[test]
-fn test_global_fields() {
-    // Global(todo!())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lattice::join::Join;
+    use psbt_v2::v2::Creator as Bip370Creator;
+
+    fn make_global() -> Global {
+        Bip370Creator::new().psbt().global
+    }
+
+    #[test]
+    fn wrap_try_unwrap_roundtrip() {
+        let g = make_global();
+        let wrapped = g.clone().wrap();
+        assert!(wrapped.is_ok());
+        let unwrapped = wrapped.try_unwrap().unwrap();
+        assert_eq!(unwrapped, g);
+    }
+
+    #[test]
+    fn join_identical_globals_is_ok() {
+        let g = make_global();
+        let joined = g.clone().wrap().join(g.clone().wrap());
+        assert!(joined.is_ok());
+        assert_eq!(joined.try_unwrap().unwrap(), g);
+    }
+
+    #[test]
+    fn join_conflicting_globals_is_err() {
+        let mut a = make_global();
+        let mut b = make_global();
+        a.input_count = 1;
+        b.input_count = 2;
+        let joined = a.wrap().join(b.wrap());
+        assert!(!joined.is_ok());
+        assert!(joined.try_unwrap().is_err());
+    }
 }

@@ -76,3 +76,68 @@ where
             .map_err(|_| panic!("all entries verified to be Ok"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct Val(u8);
+
+    impl PartialJoin for Val {
+        type Error = ();
+        fn try_join(self, other: Self) -> JoinResult<Self> {
+            if self == other { Ok(self) } else { Err(()) }
+        }
+    }
+
+    #[test]
+    fn wrap_preserves_entries() {
+        let mut m = HashMap::new();
+        m.insert("a", Val(1));
+        m.insert("b", Val(2));
+
+        let wrapped = m.clone().wrap();
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(wrapped.get("a"), Some(&Ok(Val(1))));
+    }
+
+    #[test]
+    fn wrap_empty_is_empty() {
+        let m: HashMap<&str, Val> = HashMap::new();
+        assert!(m.wrap().is_empty());
+    }
+
+    #[test]
+    fn is_ok_true_when_all_ok() {
+        let mut m = HashMap::new();
+        m.insert("a", Val(1));
+        let wrapped = m.wrap();
+        assert!(wrapped.is_ok());
+    }
+
+    #[test]
+    fn is_ok_false_when_any_err() {
+        let mut wrapped: HashMap<&str, JoinResult<Val>> = HashMap::new();
+        wrapped.insert("a", Ok(Val(1)));
+        wrapped.insert("b", Err(()));
+        assert!(!wrapped.is_ok());
+    }
+
+    #[test]
+    fn try_unwrap_succeeds_when_all_ok() {
+        let mut m = HashMap::new();
+        m.insert("a", Val(1));
+        let unwrapped = m.clone().wrap().try_unwrap().unwrap();
+        assert_eq!(unwrapped, m);
+    }
+
+    #[test]
+    fn try_unwrap_fails_when_any_err() {
+        let mut wrapped: HashMap<&str, JoinResult<Val>> = HashMap::new();
+        wrapped.insert("a", Ok(Val(1)));
+        wrapped.insert("b", Err(()));
+        assert!(wrapped.try_unwrap().is_err());
+    }
+}
