@@ -7,6 +7,9 @@ publish = false
 [package.metadata]
 cargo-fuzz = true
 
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(fuzzer_verify_crash)'] }
+
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }

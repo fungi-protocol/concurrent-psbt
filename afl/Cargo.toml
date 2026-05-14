@@ -4,6 +4,9 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(fuzzer_verify_crash)'] }
+
 [dependencies]
 afl = "0.15"
 arbitrary = { version = "1", features = ["derive"] }
