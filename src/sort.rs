@@ -22,9 +22,11 @@ mod sealed {
 ///
 /// `try_sort` always fails in this state; call `set_seed` to transition to
 /// [`Seeded`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Unseeded;
 
 /// Seed state: seed has been provided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Seeded;
 
 impl sealed::SeedState for Unseeded {}
@@ -42,6 +44,7 @@ impl SeedState for Seeded {}
 /// Both `sort()` (infallible) and `try_sort()` are available.
 ///
 /// Corresponds to `PSBT_GLOBAL_SORT_DETERMINISTIC = 0x00`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExplicitSortKeys;
 
 /// Sort keys are derived deterministically from a seed.
@@ -49,12 +52,14 @@ pub struct ExplicitSortKeys;
 /// Explicit sort keys on individual inputs/outputs are **not** permitted.
 ///
 /// Corresponds to `PSBT_GLOBAL_SORT_DETERMINISTIC = 0x01`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Deterministic<T: SeedState>(core::marker::PhantomData<T>);
 
 /// Sort keys are derived from a seed, but individual inputs/outputs may also
 /// carry explicit sort keys (which take precedence).
 ///
 /// Corresponds to `PSBT_GLOBAL_SORT_DETERMINISTIC` being **unset**.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Relaxed<T: SeedState>(core::marker::PhantomData<T>);
 
 impl sealed::SortMode for ExplicitSortKeys {}
