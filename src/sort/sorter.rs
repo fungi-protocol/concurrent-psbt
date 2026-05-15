@@ -117,4 +117,8 @@ impl<S: SortMode> Sorter<S> {
     pub fn into_psbt(self) -> UnorderedPsbt {
         self.0
     }
+
+    // FIXME add into_shuffled_psbt(self) -> Psbt, returns psbt without sorting
+
+    // FIXME add try_into_sorted_psbt(self) -> Result<Psbt, UnsortedPsbt>
 }

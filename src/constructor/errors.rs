@@ -24,10 +24,6 @@ pub enum Error {
     #[error("joining the new input or output produced a conflict")]
     JoinConflict(crate::tx::ResultUnorderedPsbt),
 
-    /// Neither the inputs-modifiable nor the outputs-modifiable flag is set.
-    #[error("neither inputs-modifiable nor outputs-modifiable flag is set")]
-    NeitherModifiable,
-
     /// A locked (non-modifiable) set contained items not present in the other side.
     #[error("a locked set contained items not present in the other constructor")]
     LockedSetMismatch,
@@ -42,7 +38,6 @@ impl PartialEq for Error {
                 | (Error::OutputsNotModifiable, Error::OutputsNotModifiable)
                 | (Error::MissingOutputUniqueId, Error::MissingOutputUniqueId)
                 | (Error::JoinConflict(_), Error::JoinConflict(_))
-                | (Error::NeitherModifiable, Error::NeitherModifiable)
                 | (Error::LockedSetMismatch, Error::LockedSetMismatch)
         )
     }

@@ -24,7 +24,7 @@ pub(crate) use sorter::{derive_sort_key, OutPointIdentifier};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constructor::Creator;
+    use crate::creator::Creator;
     use crate::input::InputExt as _;
 
     fn assert_sort_mode<S: SortMode>() {}

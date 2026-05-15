@@ -27,20 +27,14 @@ pub use errors::{Error, SortingError};
 
 // -- Validation --------------------------------------------------------------
 
-// FIXME move to extension trait
-/// Check that every output in a raw `Psbt` carries `PSBT_OUT_UNIQUE_ID`.
 fn validate_output_unique_ids(psbt: &Psbt) -> Result<(), Error> {
-    // FIXME .outputs.all(|o| o.has_unique_id()).ok_or(Err(...))
-    for output in &psbt.outputs {
-        if !output.has_unique_id() {
-            return Err(Error::MissingOutputUniqueId);
-        }
+    if psbt.outputs.iter().all(|o| o.has_unique_id()) {
+        Ok(())
+    } else {
+        Err(Error::MissingOutputUniqueId)
     }
-    Ok(())
 }
 
-// FIXME move to OutputExt
-/// Check that a single output carries `PSBT_OUT_UNIQUE_ID`.
 fn validate_output_unique_id(output: &Output) -> Result<(), Error> {
     if output.has_unique_id() {
         Ok(())
@@ -206,6 +200,7 @@ impl<S: SortMode> Constructor<InputsOnlyModifiable, S> {
     }
 
     /// Lock inputs: both sides now locked, return the `UnorderedPsbt`.
+    /// FIXME return Sorter<S>
     pub fn no_more_inputs(mut self) -> UnorderedPsbt {
         self.0.global.clear_inputs_modifiable();
         self.0
@@ -241,17 +236,12 @@ impl<S: SortMode> Constructor<OutputsOnlyModifiable, S> {
     }
 
     /// Lock outputs: both sides now locked, return the `UnorderedPsbt`.
+    /// FIXME return Sorter<S>
     pub fn no_more_outputs(mut self) -> UnorderedPsbt {
         self.0.global.clear_outputs_modifiable();
         self.0
     }
 }
-
-// FIXME remove this reexport
-// -- Creator / CreatorWith ---------------------------------------------------
-// Defined in src/creator.rs; re-exported here for a flat public API.
-
-pub use crate::creator::{Creator, CreatorWith};
 
 // -- Bip370ConstructorExt -------------------------------------------------------
 // Sealed trait that wraps a sorted `Psbt` into `Bip370Constructor<M>`.
@@ -280,7 +270,6 @@ impl Bip370ConstructorExt for OutputsOnlyModifiable {
     }
 }
 
-// FIXME move to sort.rrs
 // -- try_sort / sort on Constructor -----------------------------------------
 // Blanket impls via TrySortable / Sortable + Bip370ConstructorExt.
 
@@ -312,6 +301,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::creator::Creator;
     use crate::fields::GlobalFieldsExt as _;
     use crate::input::InputExt as _;
     use psbt_v2::v2::Creator as Bip370Creator;
