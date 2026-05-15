@@ -28,6 +28,8 @@ pub enum Error {
     MissingOutputUniqueId,
     /// Joining the new input or output with the existing PSBT produced a conflict.
     JoinConflict(crate::tx::ResultUnorderedPsbt),
+    /// Neither the inputs-modifiable nor the outputs-modifiable flag is set.
+    NeitherModifiable,
 }
 
 impl core::fmt::Display for Error {
@@ -39,6 +41,9 @@ impl core::fmt::Display for Error {
             Error::MissingOutputUniqueId => f.write_str("an output is missing PSBT_OUT_UNIQUE_ID"),
             Error::JoinConflict(_) => {
                 f.write_str("joining the new input or output produced a conflict")
+            }
+            Error::NeitherModifiable => {
+                f.write_str("neither inputs-modifiable nor outputs-modifiable flag is set")
             }
         }
     }
@@ -53,6 +58,7 @@ impl PartialEq for Error {
                 | (Error::OutputsNotModifiable, Error::OutputsNotModifiable)
                 | (Error::MissingOutputUniqueId, Error::MissingOutputUniqueId)
                 | (Error::JoinConflict(_), Error::JoinConflict(_))
+                | (Error::NeitherModifiable, Error::NeitherModifiable)
         )
     }
 }
@@ -215,10 +221,6 @@ impl<M: Mod> Constructor<M> {
     }
 
     // FIXME
-    // - provide an enum wrapping Constructors with different modifiability. add
-    //   a constructor from Psbt for these, which allows matching to get the
-    //   right typestate, instead of knowing the right type a priori and using
-    //   its associated new()
     // - fn try_join() (but not impl PartialJoin due to trait coherence) to merge two Constructors
     //   - for the generic typestate Constructors:
     //     - if either inputs or outputs are unmodifiable statically, they will
@@ -390,6 +392,58 @@ impl Constructor<OutputsOnlyModifiable> {
     pub fn no_more_outputs(mut self) -> UnorderedPsbt {
         self.0.global.clear_outputs_modifiable();
         self.0
+    }
+}
+
+// -- AnyConstructor ----------------------------------------------------------
+
+/// An unordered Constructor whose modifiability typestate is determined at
+/// runtime from the PSBT's flags.
+///
+/// Use `AnyConstructor::from_psbt` when you do not know a priori which
+/// typestate applies; match on the variants to get a concrete
+/// `Constructor<M>`.
+#[derive(Debug)]
+pub enum AnyConstructor {
+    /// Both inputs and outputs are modifiable.
+    Modifiable(Constructor<Modifiable>),
+    /// Only inputs are modifiable (outputs locked).
+    InputsOnly(Constructor<InputsOnlyModifiable>),
+    /// Only outputs are modifiable (inputs locked).
+    OutputsOnly(Constructor<OutputsOnlyModifiable>),
+}
+
+impl AnyConstructor {
+    /// Construct from a raw `Psbt`, dispatching to the appropriate typestate
+    /// based on the modifiable flags.
+    ///
+    /// Errors:
+    /// - [`Error::NotUnordered`] — `PSBT_GLOBAL_TX_UNORDERED` is absent or wrong.
+    /// - [`Error::MissingOutputUniqueId`] — an output lacks `PSBT_OUT_UNIQUE_ID`.
+    /// - [`Error::NeitherModifiable`] — both modifiable flags are cleared.
+    pub fn from_psbt(psbt: Psbt) -> Result<Self, Error> {
+        validate_output_unique_ids(&psbt)?;
+        let unordered = UnorderedPsbt::from_psbt(psbt);
+        if !unordered.is_unordered() {
+            return Err(Error::NotUnordered);
+        }
+        let inputs_mod = unordered.global.is_inputs_modifiable();
+        let outputs_mod = unordered.global.is_outputs_modifiable();
+        match (inputs_mod, outputs_mod) {
+            (true, true) => Ok(AnyConstructor::Modifiable(Constructor(
+                unordered,
+                PhantomData,
+            ))),
+            (true, false) => Ok(AnyConstructor::InputsOnly(Constructor(
+                unordered,
+                PhantomData,
+            ))),
+            (false, true) => Ok(AnyConstructor::OutputsOnly(Constructor(
+                unordered,
+                PhantomData,
+            ))),
+            (false, false) => Err(Error::NeitherModifiable),
+        }
     }
 }
 
@@ -968,6 +1022,71 @@ mod tests {
             ordered.inputs[0].previous_txid,
             bitcoin::OutPoint::null().txid
         );
+    }
+
+    // -- AnyConstructor tests ------------------------------------------------
+
+    #[test]
+    fn any_constructor_from_psbt_fully_modifiable() {
+        let psbt = Creator::new().into_unordered_psbt().to_psbt();
+        let any = AnyConstructor::from_psbt(psbt).unwrap();
+        assert!(matches!(any, AnyConstructor::Modifiable(_)));
+    }
+
+    #[test]
+    fn any_constructor_from_psbt_inputs_only() {
+        let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
+        psbt.global.clear_outputs_modifiable();
+        let any = AnyConstructor::from_psbt(psbt).unwrap();
+        assert!(matches!(any, AnyConstructor::InputsOnly(_)));
+    }
+
+    #[test]
+    fn any_constructor_from_psbt_outputs_only() {
+        let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
+        psbt.global.clear_inputs_modifiable();
+        let any = AnyConstructor::from_psbt(psbt).unwrap();
+        assert!(matches!(any, AnyConstructor::OutputsOnly(_)));
+    }
+
+    #[test]
+    fn any_constructor_from_psbt_not_unordered() {
+        // A plain BIP370 PSBT (no UNORDERED field) must be rejected.
+        let psbt = Bip370Creator::new()
+            .inputs_modifiable()
+            .outputs_modifiable()
+            .psbt();
+        assert!(matches!(
+            AnyConstructor::from_psbt(psbt),
+            Err(Error::NotUnordered)
+        ));
+    }
+
+    #[test]
+    fn any_constructor_from_psbt_neither_modifiable() {
+        // Both flags cleared → neither typestate is valid → NotModifiable error.
+        let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
+        psbt.global.clear_inputs_modifiable();
+        psbt.global.clear_outputs_modifiable();
+        assert!(matches!(
+            AnyConstructor::from_psbt(psbt),
+            Err(Error::NeitherModifiable)
+        ));
+    }
+
+    #[test]
+    fn any_constructor_from_psbt_rejects_missing_output_unique_id() {
+        let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
+        // Add output without PSBT_OUT_UNIQUE_ID.
+        psbt.outputs = vec![psbt_v2::v2::Output::new(bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(1000),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        })];
+        psbt.global.output_count = 1;
+        assert!(matches!(
+            AnyConstructor::from_psbt(psbt),
+            Err(Error::MissingOutputUniqueId)
+        ));
     }
 
     #[test]
