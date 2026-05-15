@@ -49,7 +49,9 @@ impl<M: Mod, S: SortMode + 'static> PartialEq for Constructor<M, S> {
 
 impl<M: Mod, S: SortMode + 'static> Constructor<M, S> {
     /// Return the inner `UnorderedPsbt`.
-    pub fn into_psbt(self) -> UnorderedPsbt {
+    // TODO: becomes `pub` when UnorderedPsbt is published.
+    #[allow(dead_code)]
+    pub(crate) fn into_psbt(self) -> UnorderedPsbt {
         self.0
     }
 

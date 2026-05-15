@@ -161,7 +161,8 @@ pub struct Constructor {
     /// The sort mode in effect.
     pub sort_mode: AnySortMode,
     /// The underlying unordered PSBT (consistent with the two fields above).
-    pub psbt: UnorderedPsbt,
+    // TODO: becomes `pub` when UnorderedPsbt is published.
+    pub(crate) psbt: UnorderedPsbt,
 }
 
 impl Constructor {

@@ -24,6 +24,23 @@
         program = toString script;
       };
 
+      # FIXME
+      # add verify-commits app, which maps nix flake check success or failure
+      # status (failure should be recorded in git notes) in roughly bisect (or
+      # breadth first order as far as the git merge span/dlimiter hierarchy).
+      # 
+      # all scripted diffs should be verified.
+      #
+      # failing test commits should be verified to fail, but kept out of the
+      # main git history.
+
+      # TODO
+      # add archive-commits app. analyzes the history, and creates commit
+      # references from the worklog history to ensure that any commits
+      # referenced by text ID are not garbage collected by git. the worklog can
+      # the form of directories sorted in an ISO-8601 date hiearchy, containing
+      # text files that describe relations between git trees, commits etc.
+
       # Reusable setup scripts for each fuzzer. These are the single source
       # of truth for environment configuration. The apps exec into them, and
       # the checks invoke them with crash-test arguments.

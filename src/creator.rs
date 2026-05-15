@@ -56,7 +56,9 @@ impl Creator {
     }
 
     /// Consume the creator and return the `UnorderedPsbt`.
-    pub fn into_unordered_psbt(self) -> UnorderedPsbt {
+    // TODO: becomes `pub` when UnorderedPsbt is published.
+    #[allow(dead_code)]
+    pub(crate) fn into_unordered_psbt(self) -> UnorderedPsbt {
         self.0
     }
 
@@ -78,7 +80,9 @@ pub struct CreatorWith<S: SortMode>(pub(crate) UnorderedPsbt, pub(crate) Phantom
 
 impl<S: SortMode + 'static> CreatorWith<S> {
     /// Consume and return the `UnorderedPsbt`.
-    pub fn into_unordered_psbt(self) -> UnorderedPsbt {
+    // TODO: becomes `pub` when UnorderedPsbt is published.
+    #[allow(dead_code)]
+    pub(crate) fn into_unordered_psbt(self) -> UnorderedPsbt {
         self.0
     }
 

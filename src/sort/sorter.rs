@@ -136,7 +136,9 @@ impl<S: SortMode> Sorter<S> {
     }
 
     /// Consume the sorter and return the inner unordered PSBT.
-    pub fn into_psbt(self) -> UnorderedPsbt {
+    // TODO: becomes `pub` when UnorderedPsbt is published.
+    #[allow(dead_code)]
+    pub(crate) fn into_psbt(self) -> UnorderedPsbt {
         self.0
     }
 
