@@ -13,8 +13,10 @@ mod collections;
 
 mod values;
 
-// FIXME this pub stuff needs to be done deliberately, or its pubness should be
-// cfg(feature = _internal). fields are an implementation detail
+// Implementation detail. Public only for fuzzing/internal tooling via `_internal` feature.
+#[cfg(not(feature = "_internal"))]
+mod fields;
+#[cfg(feature = "_internal")]
 pub mod fields;
 
 // FIXME move the following modules under a `psbt` module
