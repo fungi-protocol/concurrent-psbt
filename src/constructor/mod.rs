@@ -3,12 +3,6 @@ use core::marker::PhantomData;
 use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Psbt};
 
 use crate::sort::SortMode;
-// Re-export sort-mode types so constructor users (and tests) don't need to
-// separately import crate::sort.
-pub use crate::sort::{
-    Deterministic, ExplicitSortKeys, Relaxed, Seeded, Sorter, SorterError, Unseeded,
-};
-
 use crate::fields::GlobalModifiableExt as _;
 use crate::psbt::tx::UnorderedPsbt;
 
@@ -239,6 +233,7 @@ mod tests {
     use crate::creator::Creator;
     use crate::fields::GlobalFieldsExt as _;
     use crate::psbt::input::InputExt as _;
+    use crate::sort::{Deterministic, ExplicitSortKeys, Relaxed, Seeded, Unseeded};
     use psbt_v2::v2::Creator as Bip370Creator;
 
     #[test]

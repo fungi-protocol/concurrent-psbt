@@ -8,14 +8,14 @@ use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, 
 use crate::constructor::{Constructor as StaticConstructor, Error};
 use crate::fields::{GlobalFieldsExt as _, GlobalModifiableExt as _};
 
-use crate::sort::{Deterministic, ExplicitSortKeys, Relaxed, Seeded, SortMode, Unseeded};
+use crate::sort::{Deterministic, ExplicitSortKeys, Relaxed, Seeded, Unseeded};
 use crate::psbt::tx::UnorderedPsbt;
 
 // Silence unused-import warnings for sort-mode types used only as type params.
 #[allow(unused_imports)]
 use crate::sort::{Sortable as _, TrySortable as _};
 
-// -- AnyModifiability --------------------------------------------------------
+// -- Modifiability --------------------------------------------------------
 
 /// Runtime representation of which inputs/outputs are still modifiable.
 ///
@@ -23,7 +23,7 @@ use crate::sort::{Sortable as _, TrySortable as _};
 /// is the top (both cleared). `InputsOnly` and `OutputsOnly` are incomparable
 /// intermediate elements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnyModifiability {
+pub enum Modifiability {
     /// Both inputs and outputs are modifiable (lattice bottom).
     Modifiable,
     /// Only inputs are modifiable (outputs locked).
@@ -35,15 +35,15 @@ pub enum AnyModifiability {
     NotModifiable,
 }
 
-impl AnyModifiability {
+impl Modifiability {
     /// Read from the tx-modifiable flags on a [`crate::psbt::global::Global`].
     pub fn from_global(global: &psbt_v2::v2::Global) -> Self {
         use crate::fields::GlobalModifiableExt as _;
         match (global.is_inputs_modifiable(), global.is_outputs_modifiable()) {
-            (true, true) => AnyModifiability::Modifiable,
-            (true, false) => AnyModifiability::InputsOnly,
-            (false, true) => AnyModifiability::OutputsOnly,
-            (false, false) => AnyModifiability::NotModifiable,
+            (true, true) => Modifiability::Modifiable,
+            (true, false) => Modifiability::InputsOnly,
+            (false, true) => Modifiability::OutputsOnly,
+            (false, false) => Modifiability::NotModifiable,
         }
     }
 
@@ -51,7 +51,7 @@ impl AnyModifiability {
     ///
     /// Locking is monotone — a side once locked stays locked in the join.
     pub fn join(self, other: Self) -> Self {
-        use AnyModifiability::*;
+        use Modifiability::*;
         match (self, other) {
             // Identical: identity element
             (Modifiable, Modifiable) => Modifiable,
@@ -79,11 +79,11 @@ pub enum SeedMode {
     Seeded,
 }
 
-// -- AnySortMode -------------------------------------------------------------
+// -- SortMode -------------------------------------------------------------
 
 /// Runtime representation of the sort mode encoded in the PSBT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnySortMode {
+pub enum SortMode {
     /// `PSBT_GLOBAL_SORT_DETERMINISTIC` absent — [`Relaxed<_>`].
     Relaxed(SeedMode),
 
@@ -109,39 +109,39 @@ pub enum IntoConstructorError {
 // -- ModifiabilityMarker / SortModeMarker ------------------------------------
 
 mod any_marker {
-    pub trait ModifiabilityMarker {
-        const ANY_MODIFIABILITY: super::AnyModifiability;
+    pub(crate) trait ModifiabilityMarker {
+        const ANY_MODIFIABILITY: super::Modifiability;
     }
-    pub trait SortModeMarker {
-        const ANY_SORT_MODE: super::AnySortMode;
+    pub(crate) trait SortModeMarker {
+        const ANY_SORT_MODE: super::SortMode;
     }
 }
-pub use any_marker::{ModifiabilityMarker, SortModeMarker};
+pub(crate) use any_marker::{ModifiabilityMarker, SortModeMarker};
 
 impl ModifiabilityMarker for Modifiable {
-    const ANY_MODIFIABILITY: AnyModifiability = AnyModifiability::Modifiable;
+    const ANY_MODIFIABILITY: Modifiability = Modifiability::Modifiable;
 }
 impl ModifiabilityMarker for InputsOnlyModifiable {
-    const ANY_MODIFIABILITY: AnyModifiability = AnyModifiability::InputsOnly;
+    const ANY_MODIFIABILITY: Modifiability = Modifiability::InputsOnly;
 }
 impl ModifiabilityMarker for OutputsOnlyModifiable {
-    const ANY_MODIFIABILITY: AnyModifiability = AnyModifiability::OutputsOnly;
+    const ANY_MODIFIABILITY: Modifiability = Modifiability::OutputsOnly;
 }
 
 impl SortModeMarker for Relaxed<Unseeded> {
-    const ANY_SORT_MODE: AnySortMode = AnySortMode::Relaxed(SeedMode::Unseeded);
+    const ANY_SORT_MODE: SortMode = SortMode::Relaxed(SeedMode::Unseeded);
 }
 impl SortModeMarker for Relaxed<Seeded> {
-    const ANY_SORT_MODE: AnySortMode = AnySortMode::Relaxed(SeedMode::Seeded);
+    const ANY_SORT_MODE: SortMode = SortMode::Relaxed(SeedMode::Seeded);
 }
 impl SortModeMarker for ExplicitSortKeys {
-    const ANY_SORT_MODE: AnySortMode = AnySortMode::Explicit;
+    const ANY_SORT_MODE: SortMode = SortMode::Explicit;
 }
 impl SortModeMarker for Deterministic<Unseeded> {
-    const ANY_SORT_MODE: AnySortMode = AnySortMode::Deterministic(SeedMode::Unseeded);
+    const ANY_SORT_MODE: SortMode = SortMode::Deterministic(SeedMode::Unseeded);
 }
 impl SortModeMarker for Deterministic<Seeded> {
-    const ANY_SORT_MODE: AnySortMode = AnySortMode::Deterministic(SeedMode::Seeded);
+    const ANY_SORT_MODE: SortMode = SortMode::Deterministic(SeedMode::Seeded);
 }
 
 // -- dynamic::Constructor ----------------------------------------------------------
@@ -157,9 +157,9 @@ impl SortModeMarker for Deterministic<Seeded> {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Constructor {
     /// Which inputs/outputs are still modifiable.
-    pub modifiable: AnyModifiability,
+    pub modifiable: Modifiability,
     /// The sort mode in effect.
-    pub sort_mode: AnySortMode,
+    pub sort_mode: SortMode,
     /// The underlying unordered PSBT (consistent with the two fields above).
     // TODO: becomes `pub` when UnorderedPsbt is published.
     pub(crate) psbt: UnorderedPsbt,
@@ -173,7 +173,7 @@ impl Constructor {
     /// - [`Error::MissingOutputUniqueId`] — an output lacks `PSBT_OUT_UNIQUE_ID`.
     ///
     /// When both modifiable flags are cleared, `modifiable` is set to
-    /// [`AnyModifiability::NotModifiable`] and `Ok` is still returned.
+    /// [`Modifiability::NotModifiable`] and `Ok` is still returned.
     pub fn from_psbt(psbt: Psbt) -> Result<Self, Error> {
         use crate::psbt::psbt_ext::PsbtExt as _;
         psbt.validate_all_outputs_have_unique_ids()?;
@@ -181,20 +181,20 @@ impl Constructor {
         if !unordered.is_unordered() {
             return Err(Error::NotUnordered);
         }
-        let modifiable = AnyModifiability::from_global(&unordered.global);
+        let modifiable = Modifiability::from_global(&unordered.global);
         let has_seed = unordered.global.deterministic_sort_seed().is_some();
         let sort_mode = if unordered.global.is_sort_explicit() {
-            AnySortMode::Explicit
+            SortMode::Explicit
         } else if unordered.global.is_sort_deterministic() {
             if has_seed {
-                AnySortMode::Deterministic(SeedMode::Seeded)
+                SortMode::Deterministic(SeedMode::Seeded)
             } else {
-                AnySortMode::Deterministic(SeedMode::Unseeded)
+                SortMode::Deterministic(SeedMode::Unseeded)
             }
         } else if has_seed {
-            AnySortMode::Relaxed(SeedMode::Seeded)
+            SortMode::Relaxed(SeedMode::Seeded)
         } else {
-            AnySortMode::Relaxed(SeedMode::Unseeded)
+            SortMode::Relaxed(SeedMode::Unseeded)
         };
         Ok(Constructor {
             modifiable,
@@ -207,12 +207,16 @@ impl Constructor {
     ///
     /// Returns `Err` if the runtime flags don't match `M` or `S`.
     /// The PSBT is returned inside the error so it isn't lost.
+    // ModifiabilityMarker and SortModeMarker are pub(crate) — the bounds are
+    // intentionally not nameable by downstream; they are an impl detail of the
+    // static-dispatch machinery.
+    #[allow(private_bounds)]
     pub fn try_into_constructor<M, S>(
         self,
     ) -> Result<StaticConstructor<M, S>, (IntoConstructorError, Self)>
     where
         M: Mod,
-        S: SortMode,
+        S: crate::sort::SortMode,
         M: ModifiabilityMarker,
         S: SortModeMarker + 'static,
     {
@@ -226,7 +230,7 @@ impl Constructor {
     }
 
     /// Convert into a `Sorter<S>` when modifiability is
-    /// [`AnyModifiability::NotModifiable`].
+    /// [`Modifiability::NotModifiable`].
     ///
     /// Returns `Err(self)` if the constructor is still modifiable (use
     /// [`StaticConstructor::into_sorter`] after downcasting via
@@ -237,7 +241,7 @@ impl Constructor {
     pub fn try_into_sorter<S: crate::sort::SortMode>(
         self,
     ) -> Result<crate::sort::Sorter<S>, Self> {
-        if self.modifiable != AnyModifiability::NotModifiable {
+        if self.modifiable != Modifiability::NotModifiable {
             return Err(self);
         }
         Ok(crate::sort::Sorter::new_unchecked(self.psbt))
@@ -245,22 +249,22 @@ impl Constructor {
 
     /// Merge two `dynamic::Constructor`s, raising both to the modifiability-lattice join.
     ///
-    /// Uses [`AnyModifiability::join`] to compute the result modifiability.
+    /// Uses [`Modifiability::join`] to compute the result modifiability.
     /// For each locked side the locked set must be a superset of the other's.
     /// Returns [`Error::JoinConflict`] on field-level conflicts.
     pub fn try_join(self, other: Self) -> Result<Self, Error> {
         let result_modifiable = self.modifiable.join(other.modifiable);
 
         let self_inputs_locked = matches!(self.modifiable,
-            AnyModifiability::OutputsOnly | AnyModifiability::NotModifiable);
+            Modifiability::OutputsOnly | Modifiability::NotModifiable);
         let self_outputs_locked = matches!(self.modifiable,
-            AnyModifiability::InputsOnly | AnyModifiability::NotModifiable);
+            Modifiability::InputsOnly | Modifiability::NotModifiable);
 
 
         let result_inputs_locked = matches!(result_modifiable,
-            AnyModifiability::OutputsOnly | AnyModifiability::NotModifiable);
+            Modifiability::OutputsOnly | Modifiability::NotModifiable);
         let result_outputs_locked = matches!(result_modifiable,
-            AnyModifiability::InputsOnly | AnyModifiability::NotModifiable);
+            Modifiability::InputsOnly | Modifiability::NotModifiable);
 
         // For each locked side: the locked constructor's set must be a superset
         // of the other's.
@@ -306,7 +310,8 @@ impl Constructor {
 mod tests {
     use super::Constructor as DynConstructor;
     use super::*;
-    use crate::constructor::{Constructor, Error, ExplicitSortKeys, Relaxed, Unseeded};
+    use crate::constructor::{Constructor, Error};
+    use crate::sort::{ExplicitSortKeys, Relaxed, Unseeded};
     use crate::creator::Creator;
     use crate::psbt::output::OutputExt as _;
 
@@ -314,7 +319,7 @@ mod tests {
         Creator as Bip370Creator, InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable,
     };
 
-    fn any<M: Mod + ModifiabilityMarker, S: SortMode + SortModeMarker + 'static>(
+    fn any<M: Mod + ModifiabilityMarker, S: crate::sort::SortMode + SortModeMarker + 'static>(
         c: Constructor<M, S>,
     ) -> DynConstructor {
         DynConstructor {
@@ -328,8 +333,8 @@ mod tests {
     fn any_constructor_from_psbt_fully_modifiable() {
         let psbt = Creator::new().into_unordered_psbt().to_psbt();
         let a = DynConstructor::from_psbt(psbt).unwrap();
-        assert_eq!(a.modifiable, AnyModifiability::Modifiable);
-        assert_eq!(a.sort_mode, AnySortMode::Relaxed(SeedMode::Unseeded));
+        assert_eq!(a.modifiable, Modifiability::Modifiable);
+        assert_eq!(a.sort_mode, SortMode::Relaxed(SeedMode::Unseeded));
     }
 
     #[test]
@@ -337,7 +342,7 @@ mod tests {
         let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
         psbt.global.clear_outputs_modifiable();
         let a = DynConstructor::from_psbt(psbt).unwrap();
-        assert_eq!(a.modifiable, AnyModifiability::InputsOnly);
+        assert_eq!(a.modifiable, Modifiability::InputsOnly);
     }
 
     #[test]
@@ -345,7 +350,7 @@ mod tests {
         let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
         psbt.global.clear_inputs_modifiable();
         let a = DynConstructor::from_psbt(psbt).unwrap();
-        assert_eq!(a.modifiable, AnyModifiability::OutputsOnly);
+        assert_eq!(a.modifiable, Modifiability::OutputsOnly);
     }
 
     #[test]
@@ -355,7 +360,7 @@ mod tests {
             .into_unordered_psbt()
             .to_psbt();
         let a = DynConstructor::from_psbt(psbt).unwrap();
-        assert_eq!(a.sort_mode, AnySortMode::Explicit);
+        assert_eq!(a.sort_mode, SortMode::Explicit);
     }
 
     #[test]
@@ -376,7 +381,7 @@ mod tests {
         psbt.global.clear_inputs_modifiable();
         psbt.global.clear_outputs_modifiable();
         let c = DynConstructor::from_psbt(psbt).unwrap();
-        assert_eq!(c.modifiable, AnyModifiability::NotModifiable);
+        assert_eq!(c.modifiable, Modifiability::NotModifiable);
     }
 
     #[test]
@@ -440,7 +445,7 @@ mod tests {
             .input(psbt_v2::v2::Input::new(&op_b))
             .unwrap());
         let joined = a.try_join(b).unwrap();
-        assert_eq!(joined.modifiable, AnyModifiability::Modifiable);
+        assert_eq!(joined.modifiable, Modifiability::Modifiable);
         assert_eq!(joined.psbt.inputs.len(), 2);
     }
 
@@ -454,7 +459,7 @@ mod tests {
             .unwrap()
             .no_more_outputs());
         let joined = a.try_join(b).unwrap();
-        assert_eq!(joined.modifiable, AnyModifiability::InputsOnly);
+        assert_eq!(joined.modifiable, Modifiability::InputsOnly);
     }
 
     #[test]
@@ -471,7 +476,7 @@ mod tests {
             .unwrap()
             .no_more_inputs());
         let joined = a.try_join(b).unwrap();
-        assert_eq!(joined.modifiable, AnyModifiability::OutputsOnly);
+        assert_eq!(joined.modifiable, Modifiability::OutputsOnly);
     }
 
     #[test]
@@ -480,7 +485,7 @@ mod tests {
         let a = any(Creator::new().constructor().no_more_outputs());
         let b = any(Creator::new().constructor().no_more_inputs());
         let joined = a.try_join(b).unwrap();
-        assert_eq!(joined.modifiable, AnyModifiability::NotModifiable);
+        assert_eq!(joined.modifiable, Modifiability::NotModifiable);
     }
 
     #[test]
@@ -537,7 +542,7 @@ mod tests {
         psbt.global.clear_inputs_modifiable();
         psbt.global.clear_outputs_modifiable();
         let c = DynConstructor::from_psbt(psbt).unwrap();
-        assert_eq!(c.modifiable, AnyModifiability::NotModifiable);
+        assert_eq!(c.modifiable, Modifiability::NotModifiable);
         let sorter = c
             .try_into_sorter::<crate::sort::Relaxed<crate::sort::Unseeded>>()
             .unwrap();
@@ -551,7 +556,7 @@ mod tests {
     fn try_into_sorter_fails_when_still_modifiable() {
         let psbt = Creator::new().into_unordered_psbt().to_psbt();
         let c = DynConstructor::from_psbt(psbt).unwrap();
-        assert_eq!(c.modifiable, AnyModifiability::Modifiable);
+        assert_eq!(c.modifiable, Modifiability::Modifiable);
         let result =
             c.try_into_sorter::<crate::sort::Relaxed<crate::sort::Unseeded>>();
         assert!(result.is_err());
