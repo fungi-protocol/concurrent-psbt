@@ -21,6 +21,7 @@ pub mod fields;
 mod global;
 mod input;
 mod output;
+mod psbt_ext;
 mod tx;
 
 pub mod sort;

@@ -109,6 +109,13 @@ pub(crate) trait InputExt {
     /// `seed` using `HMAC-SHA256(seed, outpoint_bytes)`.
     fn take_or_derive_sort_key(&mut self, seed: &[u8]) -> Vec<u8>;
 
+    /// Validate that this input is consistent with sort mode `S`.
+    ///
+    /// In `Deterministic<_>` mode, explicit sort keys are forbidden.
+    fn validate_sort_key<S: crate::sort::SortMode + 'static>(
+        &self,
+    ) -> Result<(), crate::constructor::Error>;
+
     fn wrap(self) -> ResultInput;
 }
 
@@ -140,6 +147,22 @@ impl InputExt for Input {
         }
         use crate::sort::OutPointIdentifier as _;
         crate::sort::derive_sort_key(seed, &self.out_point().to_identifier())
+    }
+
+    fn validate_sort_key<S: crate::sort::SortMode + 'static>(
+        &self,
+    ) -> Result<(), crate::constructor::Error> {
+        use crate::constructor::Error;
+        use crate::sort::{Deterministic, Seeded, Unseeded};
+        if self.sort_key().is_some()
+            && (core::any::TypeId::of::<S>()
+                == core::any::TypeId::of::<Deterministic<Unseeded>>()
+                || core::any::TypeId::of::<S>()
+                    == core::any::TypeId::of::<Deterministic<Seeded>>())
+        {
+            return Err(Error::SortKeyForbidden);
+        }
+        Ok(())
     }
 
     fn wrap(self) -> ResultInput {

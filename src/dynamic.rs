@@ -7,7 +7,9 @@ use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, 
 
 use crate::constructor::{Constructor as StaticConstructor, Error};
 use crate::fields::{GlobalFieldsExt as _, GlobalModifiableExt as _};
+use crate::input::InputExt as _;
 use crate::output::OutputExt as _;
+
 use crate::sort::{Deterministic, ExplicitSortKeys, Relaxed, Seeded, SortMode, Unseeded};
 use crate::tx::UnorderedPsbt;
 
@@ -174,11 +176,8 @@ impl Constructor {
     /// When both modifiable flags are cleared, `modifiable` is set to
     /// [`AnyModifiability::NotModifiable`] and `Ok` is still returned.
     pub fn from_psbt(psbt: Psbt) -> Result<Self, Error> {
-        for output in &psbt.outputs {
-            if !output.has_unique_id() {
-                return Err(Error::MissingOutputUniqueId);
-            }
-        }
+        use crate::psbt_ext::PsbtExt as _;
+        psbt.validate_all_outputs_have_unique_ids()?;
         let unordered = UnorderedPsbt::unchecked_from_psbt(psbt);
         if !unordered.is_unordered() {
             return Err(Error::NotUnordered);

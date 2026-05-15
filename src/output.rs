@@ -77,6 +77,16 @@ pub(crate) trait OutputExt {
     /// `seed` using `HMAC-SHA256(seed, unique_id)`.
     fn take_or_derive_sort_key(&mut self, seed: &[u8]) -> Vec<u8>;
 
+    /// Return `Err(MissingOutputUniqueId)` if `PSBT_OUT_UNIQUE_ID` is absent.
+    fn validate_has_unique_id(&self) -> Result<(), crate::constructor::Error>;
+
+    /// Validate that this output is consistent with sort mode `S`.
+    ///
+    /// In `Deterministic<_>` mode, explicit sort keys are forbidden.
+    fn validate_sort_key<S: crate::sort::SortMode + 'static>(
+        &self,
+    ) -> Result<(), crate::constructor::Error>;
+
     fn wrap(self) -> ResultOutput;
 }
 
@@ -117,6 +127,30 @@ impl OutputExt for Output {
             return key;
         }
         crate::sort::derive_sort_key(seed, &self.unique_id())
+    }
+
+    fn validate_has_unique_id(&self) -> Result<(), crate::constructor::Error> {
+        if self.has_unique_id() {
+            Ok(())
+        } else {
+            Err(crate::constructor::Error::MissingOutputUniqueId)
+        }
+    }
+
+    fn validate_sort_key<S: crate::sort::SortMode + 'static>(
+        &self,
+    ) -> Result<(), crate::constructor::Error> {
+        use crate::constructor::Error;
+        use crate::sort::{Deterministic, Seeded, Unseeded};
+        if self.sort_key().is_some()
+            && (core::any::TypeId::of::<S>()
+                == core::any::TypeId::of::<Deterministic<Unseeded>>()
+                || core::any::TypeId::of::<S>()
+                    == core::any::TypeId::of::<Deterministic<Seeded>>())
+        {
+            return Err(Error::SortKeyForbidden);
+        }
+        Ok(())
     }
 
     fn wrap(self) -> ResultOutput {

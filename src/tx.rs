@@ -91,6 +91,15 @@ impl UnorderedPsbt {
     ///
     /// `input_count` and `output_count` are taken from the post-join set
     /// sizes, so they never cause spurious conflicts.
+    // FIXME for now, just represent a duplicate key as a *single* conflicted
+    // value as there is no way to represent "long range" conflicts
+    //
+    // TODO conceptually this error needs to be enum { ResultUnorderedPsbt | DuplicateSortKey }.
+    // perhaps InputSet or OutputSet should already enforce this invariant. A
+    // Join can be defined by renaming Conflict to an enum Error, containing
+    // Conflict(Vec<V>) as it is currently defined as well as
+    // InvariantViolation(Vec<InvriantError>) where InvariantError is a  error
+    // type for InvariantChecks perhaps?
     pub fn try_join(self, other: Self) -> Result<Self, ResultUnorderedPsbt> {
         self.wrap().join(other.wrap()).try_unwrap()
     }
