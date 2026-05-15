@@ -60,11 +60,11 @@ mod sealed {
 /// `try_sort` always fails in this state; call `set_seed` to transition to
 /// [`Seeded`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Unseeded;
+pub struct Unseeded; // FIXME this should be an empty enum
 
 /// Seed state: seed has been provided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Seeded;
+pub struct Seeded; // FIXME this should be an empty enum
 
 impl sealed::SeedState for Unseeded {}
 impl sealed::SeedState for Seeded {}
@@ -82,7 +82,7 @@ impl SeedState for Seeded {}
 ///
 /// Corresponds to `PSBT_GLOBAL_SORT_DETERMINISTIC = 0x00`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExplicitSortKeys;
+pub struct ExplicitSortKeys; // FIXME this should be an empty enum
 
 /// Sort keys are derived deterministically from a seed.
 ///
@@ -90,14 +90,14 @@ pub struct ExplicitSortKeys;
 ///
 /// Corresponds to `PSBT_GLOBAL_SORT_DETERMINISTIC = 0x01`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Deterministic<T: SeedState>(core::marker::PhantomData<T>);
+pub struct Deterministic<T: SeedState>(core::marker::PhantomData<T>); // FIXME this should be an empty enum
 
 /// Sort keys are derived from a seed, but individual inputs/outputs may also
 /// carry explicit sort keys (which take precedence).
 ///
 /// Corresponds to `PSBT_GLOBAL_SORT_DETERMINISTIC` being **unset**.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Relaxed<T: SeedState>(core::marker::PhantomData<T>);
+pub struct Relaxed<T: SeedState>(core::marker::PhantomData<T>); // FIXME this should be an empty enum
 
 impl sealed::SortMode for ExplicitSortKeys {}
 impl<T: SeedState> sealed::SortMode for Deterministic<T> {}
@@ -119,6 +119,11 @@ pub trait CanSortInfallibly: SortMode {}
 impl CanSortInfallibly for ExplicitSortKeys {}
 impl CanSortInfallibly for Deterministic<Seeded> {}
 impl CanSortInfallibly for Relaxed<Seeded> {}
+
+// FIXME add a Sorter<SortMode> struct that owns an UnsortedPsbt and implements
+// a try_sort() and also sort if SortMode is infallible. the constructor should
+// use it, trying to transition through it but it should be usable independently
+// for just sorting without a constructor.
 
 #[cfg(test)]
 mod tests {

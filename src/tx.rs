@@ -2,10 +2,10 @@ pub use psbt_v2::v2::Psbt;
 
 use psbt_v2::v2::{Input, Output};
 
+use crate::fields::GlobalFieldsExt as _;
 use crate::global::Global;
 use crate::global::GlobalExt;
 use crate::global::ResultGlobal;
-use crate::fields::GlobalFieldsExt as _;
 use crate::input::{InputSet, ResultInputSet};
 use crate::lattice::join::Join;
 use crate::output::{OutputSet, ResultOutputSet};
@@ -27,6 +27,7 @@ impl UnorderedPsbt {
             .inputs_modifiable()
             .outputs_modifiable()
             .psbt();
+        // FIXME first add the input, *then* convert to unordered
         let mut u = Self::unchecked_from_psbt(psbt);
         u.global.set_tx_unordered();
         u.global.input_count = 1;
@@ -41,6 +42,7 @@ impl UnorderedPsbt {
             .inputs_modifiable()
             .outputs_modifiable()
             .psbt();
+        // FIXME first add the output, *then* convert to unordered
         let mut u = Self::unchecked_from_psbt(psbt);
         u.global.set_tx_unordered();
         u.global.input_count = 0;
@@ -64,7 +66,12 @@ impl UnorderedPsbt {
     pub fn to_psbt(self) -> Psbt {
         // TODO
         // if all sort keys are defined and distinct, sort inputs/outputs by
-        // sort key
+        // sort key.
+        self //.try_sort().ok_or_else
+            .to_shuffled_psbt()
+    }
+
+    pub fn to_shuffled_psbt(self) -> Psbt {
         Psbt {
             global: self.global,
             inputs: self.inputs.into_iter().collect(),

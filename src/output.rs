@@ -278,7 +278,6 @@ impl ResultOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fields::psbt_out_unique_id;
 
     fn make_output(unique_id: u8, sats: u64) -> Output {
         let mut out = Output::new(bitcoin::TxOut {

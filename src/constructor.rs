@@ -733,7 +733,6 @@ mod tests {
 
     #[test]
     fn creator_default_does_not_set_sort_deterministic_field() {
-        use crate::fields::psbt_global_sort_deterministic;
         let psbt = Creator::new().into_unordered_psbt();
         assert!(psbt.global.sort_deterministic_absent());
     }
@@ -809,7 +808,6 @@ mod tests {
 
     #[test]
     fn try_sort_sorts_by_explicit_sort_keys() {
-        use crate::fields::{psbt_in_sort_key, psbt_out_sort_key, psbt_out_unique_id};
 
         let mut psbt = Creator::new()
             .explicit_sort_keys()
@@ -900,7 +898,6 @@ mod tests {
 
     #[test]
     fn try_sort_rejects_duplicate_input_sort_keys() {
-        use crate::fields::psbt_in_sort_key;
 
         let mut psbt = Creator::new()
             .explicit_sort_keys()
@@ -945,7 +942,6 @@ mod tests {
 
     #[test]
     fn new_modifiable_accepts_output_with_unique_id() {
-        use crate::fields::psbt_out_unique_id;
 
         let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
 
@@ -999,7 +995,6 @@ mod tests {
 
     #[test]
     fn output_count_is_correct_after_adding_outputs() {
-        use crate::fields::psbt_out_unique_id;
 
         let c = Creator::new().constructor();
         let mut o1 = psbt_v2::v2::Output::new(bitcoin::TxOut {
@@ -1062,7 +1057,6 @@ mod tests {
 
     #[test]
     fn modifiable_output_adds_to_set() {
-        use crate::fields::psbt_out_unique_id;
 
         let c = Creator::new().constructor();
         let mut output = psbt_v2::v2::Output::new(bitcoin::TxOut {
@@ -1096,7 +1090,6 @@ mod tests {
 
     #[test]
     fn outputs_only_output_adds_to_set() {
-        use crate::fields::psbt_out_unique_id;
 
         let c = Creator::new().constructor().no_more_inputs();
         let mut output = psbt_v2::v2::Output::new(bitcoin::TxOut {
@@ -1128,7 +1121,6 @@ mod tests {
 
     #[test]
     fn try_sort_inputs_only() {
-        use crate::fields::psbt_in_sort_key;
 
         let mut psbt = Creator::new()
             .explicit_sort_keys()
@@ -1261,7 +1253,6 @@ mod tests {
 
     #[test]
     fn any_try_join_modifiable_with_outputs_only_raises_to_outputs_only() {
-        use crate::fields::psbt_out_unique_id;
         let a = AnyConstructor::Modifiable(Creator::new().constructor());
         let mut out = psbt_v2::v2::Output::new(bitcoin::TxOut {
             value: bitcoin::Amount::from_sat(1000),
@@ -1295,7 +1286,6 @@ mod tests {
         // set (empty) matches a's, but inputs differ. Since inputs are
         // *modifiable* in InputsOnly, the join merges them fine.
         // Test the *outputs* locked mismatch: both InputsOnly, but different output sets.
-        use crate::fields::psbt_out_unique_id;
 
         let mut out_a = psbt_v2::v2::Output::new(bitcoin::TxOut {
             value: bitcoin::Amount::from_sat(1000),
@@ -1328,7 +1318,6 @@ mod tests {
 
     #[test]
     fn try_sort_outputs_only() {
-        use crate::fields::{psbt_out_sort_key, psbt_out_unique_id};
 
         let mut psbt = Creator::new()
             .explicit_sort_keys()
@@ -1438,7 +1427,6 @@ mod tests {
 
     #[test]
     fn try_join_outputs_only_different_output_sets_rejected() {
-        use crate::fields::psbt_out_unique_id;
 
         // Constructor<OutputsOnlyModifiable>: inputs are locked.
         // Both have no inputs (identical empty sets) → inputs OK.
