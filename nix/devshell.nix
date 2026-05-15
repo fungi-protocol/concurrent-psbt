@@ -12,6 +12,7 @@
         craneLib.devShell {
           packages = with pkgs; [
             config.treefmt.build.wrapper
+            rust-analyzer
           ];
         };
     in
