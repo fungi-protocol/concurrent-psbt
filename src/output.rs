@@ -166,49 +166,47 @@ pub struct ResultOutputSet(HashMap<Vec<u8>, ResultOutput>);
 
 impl Join for ResultOutputSet {
     fn join(self, other: Self) -> Self {
-        let mut map = self.0.join(other.0);
-
-        // FIXME this should be an additional method, validate_output_invariants()
-        // Enforce the sort-key uniqueness invariant: if two outputs in the
-        // merged set share the same explicit sort key, mark each of their
-        // sort key fields as Err(Conflict(vec![sort_key])). A single-element
-        // Conflict signals an invariant violation rather than a disagreement on
-        // values for the same field.
-        //
-        // this should also be implemented for Psbt conversion, so
-        // InvariantViolation could return a duplicate output ID error
-        // indicating the indices for Psbt structs, but will never need to check
-        // this invariant once it's a ResultUnorderedPsbt or its corresponding
-        // input/output sets, as it's inherent in join and that makes .input()
-        // and .output() idempotent.
-        //
-        // the assert method should return a Result<Self,
-        // InvariantViolation(Self)>, where InvariantViolation contains the
-        // unary conflict markers but also gives
-
-        // Enforce sort-key uniqueness invariant (same logic as ResultInputSet).
-        let sort_key = crate::fields::psbt_out_sort_key();
-        let mut seen: std::collections::HashMap<Vec<u8>, usize> = std::collections::HashMap::new();
-        for result_output in map.values() {
-            if let Some(Ok(k)) = result_output.proprietaries.get(&sort_key) {
-                *seen.entry(k.clone()).or_insert(0) += 1;
-            }
-        }
-        for result_output in map.values_mut() {
-            if let Some(entry) = result_output.proprietaries.get_mut(&sort_key) {
-                if let Ok(k) = entry {
-                    if seen.get(k).copied().unwrap_or(0) > 1 {
-                        let dup = k.clone();
-                        *entry = Err(crate::lattice::partial::Conflict(vec![dup]));
-                    }
-                }
-            }
-        }
-        ResultOutputSet(map)
+        self.formal_join(other).enforce_output_invariants()
     }
 }
 
 impl ResultOutputSet {
+    fn formal_join(self, other: Self) -> Self {
+        ResultOutputSet(self.0.join(other.0))
+    }
+
+    fn enforce_output_invariants(mut self) -> Self {
+        _ = self.validate_output_sort_keys();
+        self
+    }
+
+    /// Enforce invariants by marking violations as `Conflict(vec![v])`
+    /// (single-element) in the relevant fields.
+    ///
+    /// Enforces: sort-key uniqueness — no two outputs may share
+    /// the same explicit sort key.
+    fn validate_output_sort_keys(&mut self) -> Result<(), ()> {
+        let mut seen: std::collections::HashMap<Vec<u8>, usize> = std::collections::HashMap::new();
+        for result_output in self.0.values() {
+            if let Some(Ok(k)) = result_output.sort_key() {
+                *seen.entry(k.clone()).or_insert(0) += 1;
+            }
+        }
+
+        let mut ret = Ok(()); // TODO Conflict and absorb?
+
+        for result_output in self.0.values_mut() {
+            if let Some(Ok(k)) = result_output.sort_key() {
+                if seen.get(k).copied().unwrap_or(0) > 1 {
+                    result_output.mark_sort_key_violation();
+                    ret = Err(());
+                }
+            }
+        }
+
+        ret
+    }
+
     /// Number of distinct outputs (by unique ID) in the joined set.
     pub fn len(&self) -> usize {
         self.0.len()
@@ -292,6 +290,25 @@ impl Join for ResultOutput {
 }
 
 impl ResultOutput {
+    /// Return the `JoinResult` for the sort key proprietary field, if present.
+    pub fn sort_key(&self) -> Option<&crate::lattice::partial::JoinResult<Vec<u8>>> {
+        self.proprietaries.get(&crate::fields::psbt_out_sort_key())
+    }
+
+    /// Mark the sort key as an invariant violation (`Conflict(vec![v])`).
+    pub fn mark_sort_key_violation(&mut self) {
+        use crate::lattice::partial::Conflict;
+        let sort_key = crate::fields::psbt_out_sort_key();
+        if let Some(entry) = self.proprietaries.get_mut(&sort_key) {
+            if matches!(entry, Ok(_)) {
+                let v = std::mem::replace(entry, Err(Conflict(vec![])));
+                if let Ok(k) = v {
+                    *entry = Err(Conflict(vec![k]));
+                }
+            }
+        }
+    }
+
     pub fn try_unwrap(self) -> Result<Output, ResultOutput> {
         if !self.is_ok() {
             return Err(self);

@@ -16,14 +16,17 @@ mod collections;
 
 mod values;
 
+// TODO this pub stuff needs to be done deliberately, or its pubness should be cfg(feature = _internal)
 pub mod fields;
 
+// TODO move the following modules under a `psbt` module
 mod global;
 mod input;
 mod output;
 mod psbt_ext;
 mod tx;
 
+// TODO this pub stuff needs to be done deliberately
 pub mod sort;
 pub use sort::Sorter;
 pub mod creator;
