@@ -339,7 +339,6 @@ impl Constructor<OutputsOnlyModifiable> {
 pub struct Creator(UnorderedPsbt);
 
 impl Creator {
-    // FIXME allow specifying deterministic as Some(bool)
     pub fn new() -> Self {
         let psbt = Bip370Creator::new()
             .inputs_modifiable()
@@ -354,6 +353,20 @@ impl Creator {
             .insert(psbt_global_tx_unordered(), vec![UNORDERED_VALUE]);
 
         Creator(unordered)
+    }
+
+    /// Set `PSBT_GLOBAL_SORT_DETERMINISTIC`.
+    ///
+    /// - `None`        — leave the field unset (default)
+    /// - `Some(false)` — `0x00`: explicit sort keys required
+    /// - `Some(true)`  — `0x01`: sort keys derived deterministically from seed
+    pub fn sort_deterministic(mut self, value: Option<bool>) -> Self {
+        let key = psbt_global_sort_deterministic();
+        match value {
+            None => { self.0.global.proprietaries.remove(&key); }
+            Some(v) => { self.0.global.proprietaries.insert(key, vec![v as u8]); }
+        }
+        self
     }
 
     /// Consume the creator and return the `UnorderedPsbt`.
@@ -380,6 +393,33 @@ impl Default for Creator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn creator_sort_deterministic_none_does_not_set_field() {
+        use crate::fields::psbt_global_sort_deterministic;
+        let psbt = Creator::new().sort_deterministic(None).into_unordered_psbt();
+        assert!(!psbt.global.proprietaries.contains_key(&psbt_global_sort_deterministic()));
+    }
+
+    #[test]
+    fn creator_sort_deterministic_false_sets_field_to_0x00() {
+        use crate::fields::psbt_global_sort_deterministic;
+        let psbt = Creator::new().sort_deterministic(Some(false)).into_unordered_psbt();
+        assert_eq!(
+            psbt.global.proprietaries.get(&psbt_global_sort_deterministic()),
+            Some(&vec![0x00]),
+        );
+    }
+
+    #[test]
+    fn creator_sort_deterministic_true_sets_field_to_0x01() {
+        use crate::fields::psbt_global_sort_deterministic;
+        let psbt = Creator::new().sort_deterministic(Some(true)).into_unordered_psbt();
+        assert_eq!(
+            psbt.global.proprietaries.get(&psbt_global_sort_deterministic()),
+            Some(&vec![0x01]),
+        );
+    }
 
     #[test]
     fn creator_produces_valid_constructor() {
