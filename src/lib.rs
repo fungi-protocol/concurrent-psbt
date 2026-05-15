@@ -5,10 +5,7 @@
 //   - decide where result lives
 // - ergonomics:
 //   - pub and re-exports
-//   - IntoJoin (uses .into_ok()) for PartialJoin?
 //   - operator overloading?
-//   - is transpose the right interface?
-//   - some method of extracting just the conflict errors? requires Box<dyn Error>
 
 mod lattice;
 
@@ -16,17 +13,20 @@ mod collections;
 
 mod values;
 
-// TODO this pub stuff needs to be done deliberately, or its pubness should be cfg(feature = _internal)
+// FIXME this pub stuff needs to be done deliberately, or its pubness should be
+// cfg(feature = _internal). fields are an implementation detail
 pub mod fields;
 
-// TODO move the following modules under a `psbt` module
+// FIXME move the following modules under a `psbt` module
 mod global;
 mod input;
 mod output;
 mod psbt_ext;
 mod tx;
 
-// TODO this pub stuff needs to be done deliberately
+// FIXME this pub stuff needs to be done deliberately. there should be a single
+// `mod reexports` that does pub use of these, and then the top level can pub use
+// `use reexports::*` to do all the re-exporting.
 pub mod sort;
 pub use sort::Sorter;
 pub mod creator;
