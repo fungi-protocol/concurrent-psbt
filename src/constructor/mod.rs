@@ -199,11 +199,10 @@ impl<S: SortMode> Constructor<InputsOnlyModifiable, S> {
         Ok(Constructor(unordered, PhantomData))
     }
 
-    /// Lock inputs: both sides now locked, return the `UnorderedPsbt`.
-    /// FIXME return Sorter<S>
-    pub fn no_more_inputs(mut self) -> UnorderedPsbt {
+    /// Lock inputs: both sides now locked. Returns a [`Sorter<S>`] ready to sort.
+    pub fn no_more_inputs(mut self) -> crate::sort::Sorter<S> {
         self.0.global.clear_inputs_modifiable();
-        self.0
+        crate::sort::Sorter::new_unchecked(self.0)
     }
 }
 
@@ -235,11 +234,10 @@ impl<S: SortMode> Constructor<OutputsOnlyModifiable, S> {
         Ok(Constructor(unordered, PhantomData))
     }
 
-    /// Lock outputs: both sides now locked, return the `UnorderedPsbt`.
-    /// FIXME return Sorter<S>
-    pub fn no_more_outputs(mut self) -> UnorderedPsbt {
+    /// Lock outputs: both sides now locked. Returns a [`Sorter<S>`] ready to sort.
+    pub fn no_more_outputs(mut self) -> crate::sort::Sorter<S> {
         self.0.global.clear_outputs_modifiable();
-        self.0
+        crate::sort::Sorter::new_unchecked(self.0)
     }
 }
 
@@ -279,6 +277,7 @@ where
     S: SortMode,
     crate::sort::Sorter<S>: crate::sort::TrySortable,
 {
+    // FIXME into_sorter().try_into_sorted_psbt() ? simpler to return the Psbt instead of the BIP 370 constructor
     pub fn try_sort(self) -> Result<Bip370Constructor<M>, SortingError> {
         let psbt = self.into_sorter().try_sort_psbt()?;
         Ok(M::new_from_psbt(psbt))
@@ -291,6 +290,7 @@ where
     S: SortMode,
     crate::sort::Sorter<S>: crate::sort::Sortable,
 {
+    // FIXME into_sorter().sort_psbt())? simpler to return the Psbt instead of the BIP 370 constructor
     pub fn sort(self) -> Bip370Constructor<M> {
         M::new_from_psbt(self.into_sorter().sort_psbt())
     }
@@ -367,7 +367,7 @@ mod tests {
     fn no_more_inputs_then_no_more_outputs() {
         let c = Creator::new().constructor();
         let c = c.no_more_inputs(); // Modifiable → OutputsOnlyModifiable
-        let unordered = c.no_more_outputs(); // OutputsOnlyModifiable → UnorderedPsbt
+        let unordered = c.no_more_outputs().into_psbt(); // OutputsOnlyModifiable → Sorter<S> → UnorderedPsbt
         assert!(!unordered.global.is_inputs_modifiable());
         assert!(!unordered.global.is_outputs_modifiable());
     }
@@ -376,7 +376,7 @@ mod tests {
     fn no_more_outputs_then_no_more_inputs() {
         let c = Creator::new().constructor();
         let c = c.no_more_outputs(); // Modifiable → InputsOnlyModifiable
-        let unordered = c.no_more_inputs(); // InputsOnlyModifiable → UnorderedPsbt
+        let unordered = c.no_more_inputs().into_psbt(); // InputsOnlyModifiable → Sorter<S> → UnorderedPsbt
         assert!(!unordered.global.is_inputs_modifiable());
         assert!(!unordered.global.is_outputs_modifiable());
     }
@@ -531,7 +531,7 @@ mod tests {
     #[test]
     fn inputs_only_new_rejects_locked_inputs() {
         let c = Creator::new().constructor();
-        let unordered = c.no_more_inputs().no_more_outputs();
+        let unordered = c.no_more_inputs().no_more_outputs().into_psbt();
         assert_eq!(
             Constructor::<InputsOnlyModifiable, Relaxed<Unseeded>>::new(unordered.to_psbt()),
             Err(Error::InputsNotModifiable)
@@ -541,7 +541,7 @@ mod tests {
     #[test]
     fn outputs_only_new_rejects_locked_outputs() {
         let c = Creator::new().constructor();
-        let unordered = c.no_more_outputs().no_more_inputs();
+        let unordered = c.no_more_outputs().no_more_inputs().into_psbt();
         assert_eq!(
             Constructor::<OutputsOnlyModifiable, Relaxed<Unseeded>>::new(unordered.to_psbt()),
             Err(Error::OutputsNotModifiable)
@@ -654,8 +654,8 @@ mod tests {
         let c = Creator::new().constructor().no_more_outputs();
         let input = psbt_v2::v2::Input::new(&bitcoin::OutPoint::null());
         let c = c.input(input).unwrap();
-        let psbt = c.no_more_inputs();
-        assert_eq!(psbt.inputs.len(), 1);
+        let sorter = c.no_more_inputs();
+        assert_eq!(sorter.into_psbt().inputs.len(), 1);
     }
 
     #[test]
@@ -667,8 +667,8 @@ mod tests {
         });
         output.set_unique_id(vec![0xBB; 16]);
         let c = c.output(output).unwrap();
-        let psbt = c.no_more_outputs();
-        assert_eq!(psbt.outputs.len(), 1);
+        let sorter = c.no_more_outputs();
+        assert_eq!(sorter.into_psbt().outputs.len(), 1);
     }
 
     #[test]
@@ -987,5 +987,48 @@ mod tests {
         // and the sort is deterministic per seed.
         assert_eq!(order_a, make_ordered(b"seed-aaaa-16byte".to_vec()));
         assert_eq!(order_b, make_ordered(b"seed-bbbb-16byte".to_vec()));
+    }
+
+    // -- no_more_inputs/no_more_outputs → Sorter<S> -------------------------
+
+    #[test]
+    fn no_more_inputs_returns_sorter() {
+        // InputsOnlyModifiable::no_more_inputs → Sorter<S>
+        let c = Creator::new().constructor().no_more_outputs();
+        let input = psbt_v2::v2::Input::new(&bitcoin::OutPoint::null());
+        let c = c.input(input).unwrap();
+        let sorter = c.no_more_inputs();
+        // Sorter should hold the PSBT with both flags cleared
+        let unordered = sorter.into_psbt();
+        assert!(!unordered.global.is_inputs_modifiable());
+        assert!(!unordered.global.is_outputs_modifiable());
+    }
+
+    #[test]
+    fn no_more_outputs_returns_sorter() {
+        // OutputsOnlyModifiable::no_more_outputs → Sorter<S>
+        let c = Creator::new().constructor().no_more_inputs();
+        let mut output = psbt_v2::v2::Output::new(bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(1000),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        });
+        output.set_unique_id(vec![0x01; 16]);
+        let c = c.output(output).unwrap();
+        let sorter = c.no_more_outputs();
+        let unordered = sorter.into_psbt();
+        assert!(!unordered.global.is_inputs_modifiable());
+        assert!(!unordered.global.is_outputs_modifiable());
+    }
+
+    #[test]
+    fn sorter_into_shuffled_psbt() {
+        let c = Creator::new().constructor().no_more_outputs();
+        let sorter = c.no_more_inputs();
+        let psbt = sorter.into_shuffled_psbt();
+        // UNORDERED flag preserved (not stripped by shuffled conversion)
+        assert!(psbt
+            .global
+            .proprietaries
+            .contains_key(&crate::fields::psbt_global_tx_unordered()));
     }
 }

@@ -118,7 +118,29 @@ impl<S: SortMode> Sorter<S> {
         self.0
     }
 
-    // FIXME add into_shuffled_psbt(self) -> Psbt, returns psbt without sorting
+    /// Consume the sorter and return the PSBT in arbitrary (hash-map) order,
+    /// without stripping the `PSBT_GLOBAL_TX_UNORDERED` flag.
+    ///
+    /// Use this when you want the PSBT fields accessible but don't need a
+    /// canonical ordering. For a properly sorted result use `try_sort()` /
+    /// `sort()`.
+    pub fn into_shuffled_psbt(self) -> psbt_v2::v2::Psbt {
+        self.0.to_shuffled_psbt()
+    }
+}
 
-    // FIXME add try_into_sorted_psbt(self) -> Result<Psbt, UnsortedPsbt>
+
+impl<S> Sorter<S>
+where
+    S: SortMode,
+    Sorter<S>: super::traits::Sortable,
+{
+    /// Sort infallibly and return the sorted [`psbt_v2::v2::Psbt`].
+    ///
+    /// Only available when the sort mode can always produce a sorted result
+    /// (i.e. [`super::traits::CanSortInfallibly`] modes).
+    pub fn try_into_sorted_psbt(self) -> psbt_v2::v2::Psbt {
+        use super::traits::Sortable as _;
+        self.sort_psbt()
+    }
 }

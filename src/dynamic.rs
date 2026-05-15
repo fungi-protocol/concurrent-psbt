@@ -227,7 +227,23 @@ impl Constructor {
         Ok(StaticConstructor::new_unchecked(self.psbt))
     }
 
-    // FIXME add try_into_sorter for when it's not modifiable
+    /// Convert into a [`crate::sort::Sorter<S>`] when modifiability is
+    /// [`AnyModifiability::NotModifiable`].
+    ///
+    /// Returns `Err(self)` if the constructor is still modifiable (use
+    /// [`StaticConstructor::into_sorter`] after downcasting via
+    /// [`Self::try_into_constructor`] instead).
+    ///
+    /// The sort mode `S` must match [`Self::sort_mode`]; this is not validated
+    /// — use [`Self::sort_mode`] to inspect before calling.
+    pub fn try_into_sorter<S: crate::sort::SortMode>(
+        self,
+    ) -> Result<crate::sort::Sorter<S>, Self> {
+        if self.modifiable != AnyModifiability::NotModifiable {
+            return Err(self);
+        }
+        Ok(crate::sort::Sorter::new_unchecked(self.psbt))
+    }
 
     /// Merge two `dynamic::Constructor`s, raising both to the modifiability-lattice join.
     ///
@@ -514,5 +530,31 @@ mod tests {
         let ordered = c.try_sort().unwrap().psbt().unwrap();
         assert_eq!(ordered.outputs.len(), 1);
         assert_eq!(ordered.outputs[0].amount, bitcoin::Amount::from_sat(1000));
+    }
+
+    #[test]
+    fn try_into_sorter_succeeds_when_not_modifiable() {
+        let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
+        psbt.global.clear_inputs_modifiable();
+        psbt.global.clear_outputs_modifiable();
+        let c = DynConstructor::from_psbt(psbt).unwrap();
+        assert_eq!(c.modifiable, AnyModifiability::NotModifiable);
+        let sorter = c
+            .try_into_sorter::<crate::sort::Relaxed<crate::sort::Unseeded>>()
+            .unwrap();
+        // Both flags cleared in the recovered PSBT
+        let unordered = sorter.into_psbt();
+        assert!(!unordered.global.is_inputs_modifiable());
+        assert!(!unordered.global.is_outputs_modifiable());
+    }
+
+    #[test]
+    fn try_into_sorter_fails_when_still_modifiable() {
+        let psbt = Creator::new().into_unordered_psbt().to_psbt();
+        let c = DynConstructor::from_psbt(psbt).unwrap();
+        assert_eq!(c.modifiable, AnyModifiability::Modifiable);
+        let result =
+            c.try_into_sorter::<crate::sort::Relaxed<crate::sort::Unseeded>>();
+        assert!(result.is_err());
     }
 }
