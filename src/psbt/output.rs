@@ -18,6 +18,10 @@ impl OutputSet {
         self.0.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn contains_unique_id(&self, id: &[u8]) -> bool {
         self.0.contains_key(id)
     }
@@ -210,6 +214,10 @@ impl ResultOutputSet {
     /// Number of distinct outputs (by unique ID) in the joined set.
     pub fn len(&self) -> usize {
         self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     pub fn try_unwrap(self) -> Result<OutputSet, Self> {

@@ -50,6 +50,10 @@ impl InputSet {
         self.0.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn insert(&mut self, input: Input) {
         self.0.insert(input.out_point(), input);
     }
@@ -103,6 +107,10 @@ impl ResultInputSet {
     /// Number of distinct inputs (by outpoint) in the joined set.
     pub fn len(&self) -> usize {
         self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     pub fn try_unwrap(self) -> Result<InputSet, Self> {
