@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)] // Large Err variants are intentional in this crate
+
 mod lattice;
 
 mod collections;
