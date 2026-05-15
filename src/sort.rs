@@ -129,30 +129,111 @@ impl CanSortInfallibly for Relaxed<Seeded> {}
 use crate::tx::UnorderedPsbt;
 use psbt_v2::v2::Psbt;
 
+/// Error returned when a [`Sorter`] is constructed from a [`UnorderedPsbt`]
+/// whose flags do not match the requested sort mode.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SorterError {
+    /// `PSBT_GLOBAL_SORT_DETERMINISTIC` is absent but `ExplicitSortKeys` or
+    /// `Deterministic` mode was requested, or it is present but `Relaxed` was
+    /// requested.
+    #[error("PSBT_GLOBAL_SORT_DETERMINISTIC flag does not match the requested sort mode")]
+    SortModeMismatch,
+    /// A seed is required for this sort mode but `PSBT_GLOBAL_SORT_SEED` is absent.
+    #[error("PSBT_GLOBAL_SORT_SEED is required for this sort mode but is not set")]
+    MissingSeed,
+}
+
 /// Owns an [`UnorderedPsbt`] and sorts it according to sort mode `S`.
 ///
 /// Obtain a `Sorter` from a [`crate::constructor::Constructor`] via
 /// [`crate::constructor::Constructor::into_sorter`], or directly from an
-/// [`UnorderedPsbt`] using [`Sorter::new`].
+/// [`UnorderedPsbt`] using the checked `new` on each mode-specific impl.
 ///
 /// Call [`Sorter::try_sort`] for a fallible sort (returns `Err` only if
 /// explicit keys are missing or duplicated). On [`CanSortInfallibly`] modes
 /// [`Sorter::sort`] is also available.
 pub struct Sorter<S: SortMode>(UnorderedPsbt, core::marker::PhantomData<S>);
 
+impl<S: SortMode> core::fmt::Debug for Sorter<S> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_tuple("Sorter").field(&self.0).finish()
+    }
+}
+
+impl<S: SortMode> PartialEq for Sorter<S> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<S: SortMode> Eq for Sorter<S> {}
+
 impl<S: SortMode> Sorter<S> {
-    // FIXME this allows unchecked construction fo a sorter regardless of its
-    // flags. a checked constructor for each variant should be used, and
-    // Constructor which has already checked these could use an unchecked
-    // variant with the same definition as this:
-    /// Wrap an [`UnorderedPsbt`] into a sorter with sort mode `S`.
-    pub fn new(psbt: UnorderedPsbt) -> Self {
+    /// Wrap an [`UnorderedPsbt`] without checking its flags.
+    ///
+    /// Only use this when the PSBT's flags have already been validated (e.g.
+    /// from [`crate::constructor::Constructor::into_sorter`]).
+    pub(crate) fn new_unchecked(psbt: UnorderedPsbt) -> Self {
         Sorter(psbt, core::marker::PhantomData)
     }
 
     /// Consume the sorter and return the inner [`UnorderedPsbt`].
     pub fn into_psbt(self) -> UnorderedPsbt {
         self.0
+    }
+}
+
+impl Sorter<ExplicitSortKeys> {
+    /// Construct from a [`UnorderedPsbt`], validating that
+    /// `PSBT_GLOBAL_SORT_DETERMINISTIC` is `0x00`.
+    pub fn new(psbt: UnorderedPsbt) -> Result<Self, SorterError> {
+        use crate::fields::GlobalFieldsExt as _;
+        if !psbt.global.is_sort_explicit() {
+            return Err(SorterError::SortModeMismatch);
+        }
+        Ok(Self::new_unchecked(psbt))
+    }
+}
+
+impl Sorter<Deterministic<Seeded>> {
+    /// Construct from a [`UnorderedPsbt`], validating that
+    /// `PSBT_GLOBAL_SORT_DETERMINISTIC` is `0x01` and a seed is present.
+    pub fn new(psbt: UnorderedPsbt) -> Result<Self, SorterError> {
+        use crate::fields::GlobalFieldsExt as _;
+        if !psbt.global.is_sort_deterministic() {
+            return Err(SorterError::SortModeMismatch);
+        }
+        if psbt.global.sort_seed().is_none() {
+            return Err(SorterError::MissingSeed);
+        }
+        Ok(Self::new_unchecked(psbt))
+    }
+}
+
+impl Sorter<Relaxed<Seeded>> {
+    /// Construct from a [`UnorderedPsbt`], validating that
+    /// `PSBT_GLOBAL_SORT_DETERMINISTIC` is absent and a seed is present.
+    pub fn new(psbt: UnorderedPsbt) -> Result<Self, SorterError> {
+        use crate::fields::GlobalFieldsExt as _;
+        if !psbt.global.sort_deterministic_absent() {
+            return Err(SorterError::SortModeMismatch);
+        }
+        if psbt.global.sort_seed().is_none() {
+            return Err(SorterError::MissingSeed);
+        }
+        Ok(Self::new_unchecked(psbt))
+    }
+}
+
+impl Sorter<Relaxed<Unseeded>> {
+    /// Construct from a [`UnorderedPsbt`], validating that
+    /// `PSBT_GLOBAL_SORT_DETERMINISTIC` is absent and no seed is set.
+    pub fn new(psbt: UnorderedPsbt) -> Result<Self, SorterError> {
+        use crate::fields::GlobalFieldsExt as _;
+        if !psbt.global.sort_deterministic_absent() {
+            return Err(SorterError::SortModeMismatch);
+        }
+        Ok(Self::new_unchecked(psbt))
     }
 }
 
@@ -223,6 +304,7 @@ pub(crate) fn sort_by_extracted_key<T>(
 
 // -- Internal sort helpers ---------------------------------------------------
 
+// FIXME this function is not misuse resistant, it should be folded into Sorter<ExplicitSortKeys> since that's the only place it's well defined
 fn sort_explicit(psbt: UnorderedPsbt) -> Result<Psbt, crate::constructor::SortingError> {
     use crate::fields::GlobalFieldsExt as _;
     use crate::input::InputExt as _;
@@ -239,6 +321,7 @@ fn sort_explicit(psbt: UnorderedPsbt) -> Result<Psbt, crate::constructor::Sortin
     })
 }
 
+// FIXME this function is not misuse resistant, it should be folded into Sorter<Deterministic<Seeded>> since that's the only place it's well defined
 fn sort_deterministic(psbt: UnorderedPsbt) -> Psbt {
     use crate::fields::GlobalFieldsExt as _;
     use crate::input::InputExt as _;
@@ -294,9 +377,7 @@ fn sort_relaxed_seeded(psbt: UnorderedPsbt) -> Psbt {
 mod tests {
     use super::*;
     use crate::constructor::Creator;
-    use crate::fields::GlobalFieldsExt as _;
     use crate::input::InputExt as _;
-    use crate::output::OutputExt as _;
 
     fn assert_sort_mode<S: SortMode>() {}
     fn assert_infallible<S: CanSortInfallibly>() {}
@@ -317,6 +398,60 @@ mod tests {
         assert_infallible::<Relaxed<Seeded>>();
     }
 
+    // -- Sorter::new checked constructor tests --------------------------------
+
+    #[test]
+    fn sorter_explicit_new_rejects_wrong_flag() {
+        // Relaxed PSBT → ExplicitSortKeys sorter should fail
+        let u = Creator::new().into_unordered_psbt();
+        assert_eq!(
+            Sorter::<ExplicitSortKeys>::new(u),
+            Err(SorterError::SortModeMismatch)
+        );
+    }
+
+    #[test]
+    fn sorter_explicit_new_accepts_correct_flag() {
+        let u = Creator::new().explicit_sort_keys().into_unordered_psbt();
+        assert!(Sorter::<ExplicitSortKeys>::new(u).is_ok());
+    }
+
+    #[test]
+    fn sorter_deterministic_seeded_new_rejects_missing_seed() {
+        let u = Creator::new().deterministic_sorting().into_unordered_psbt();
+        assert_eq!(
+            Sorter::<Deterministic<Seeded>>::new(u),
+            Err(SorterError::MissingSeed)
+        );
+    }
+
+    #[test]
+    fn sorter_deterministic_seeded_new_accepts_seed() {
+        let u = Creator::new()
+            .deterministic_sorting()
+            .set_seed(b"seed-16-bytes!!!".to_vec())
+            .into_unordered_psbt();
+        assert!(Sorter::<Deterministic<Seeded>>::new(u).is_ok());
+    }
+
+    #[test]
+    fn sorter_relaxed_seeded_new_rejects_wrong_flag() {
+        // ExplicitSortKeys PSBT → Relaxed<Seeded> sorter should fail
+        let u = Creator::new().explicit_sort_keys().into_unordered_psbt();
+        assert_eq!(
+            Sorter::<Relaxed<Seeded>>::new(u),
+            Err(SorterError::SortModeMismatch)
+        );
+    }
+
+    #[test]
+    fn sorter_relaxed_seeded_new_accepts_seed() {
+        let u = Creator::new()
+            .set_seed(b"seed-16-bytes!!!".to_vec())
+            .into_unordered_psbt();
+        assert!(Sorter::<Relaxed<Seeded>>::new(u).is_ok());
+    }
+
     #[test]
     fn sorter_explicit_standalone() {
         // Use Sorter<ExplicitSortKeys> directly from an UnorderedPsbt, without Constructor.
@@ -334,7 +469,7 @@ mod tests {
         unordered.global.input_count = 2;
         unordered.inputs = [input_b, input_a].into_iter().collect();
 
-        let sorter = Sorter::<ExplicitSortKeys>::new(unordered);
+        let sorter = Sorter::<ExplicitSortKeys>::new(unordered).unwrap();
         let psbt = sorter.sort();
 
         assert_eq!(psbt.inputs[0].spent_output_index, 1); // op_b (key 0x01)
@@ -363,7 +498,7 @@ mod tests {
         .into_iter()
         .collect();
 
-        let sorter = Sorter::<Deterministic<Seeded>>::new(unordered);
+        let sorter = Sorter::<Deterministic<Seeded>>::new(unordered).unwrap();
         let psbt = sorter.sort();
         assert_eq!(psbt.inputs.len(), 2);
         // Verify determinism: same seed → same order.
@@ -378,7 +513,9 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let psbt2 = Sorter::<Deterministic<Seeded>>::new(unordered2).sort();
+        let psbt2 = Sorter::<Deterministic<Seeded>>::new(unordered2)
+            .unwrap()
+            .sort();
         assert_eq!(
             psbt.inputs
                 .iter()

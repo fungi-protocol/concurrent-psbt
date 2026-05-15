@@ -7,7 +7,6 @@ use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, 
 use crate::sort::{Deterministic, ExplicitSortKeys, Relaxed, Seeded, SortMode, Unseeded};
 
 use crate::fields::{GlobalFieldsExt as _, GlobalModifiableExt as _};
-use crate::input::InputExt as _;
 use crate::output::OutputExt as _;
 use crate::tx::UnorderedPsbt;
 
@@ -75,7 +74,7 @@ pub enum SortingError {
 /// Extract sort keys from items via `take_key`, sort by key, return items in order.
 ///
 /// Fails if any key is missing or if two items share the same sort key.
-use crate::sort::sort_by_extracted_key;
+
 
 // -- Validation --------------------------------------------------------------
 
@@ -155,7 +154,7 @@ impl<M: Mod, S: SortMode> Constructor<M, S> {
     /// Allows sorting independently of the modifiability typestate.
     pub fn into_sorter(self) -> crate::sort::Sorter<S> {
         // FIXME new_unchecked, which should only be pub(crate)
-        crate::sort::Sorter::new(self.0)
+        crate::sort::Sorter::new_unchecked(self.0)
     }
 }
 
@@ -647,6 +646,7 @@ impl_sort!(OutputsOnlyModifiable, Relaxed<Seeded>);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::InputExt as _;
 
     #[test]
     fn creator_default_does_not_set_sort_deterministic_field() {
