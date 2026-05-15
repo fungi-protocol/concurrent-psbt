@@ -26,13 +26,12 @@ impl UnorderedPsbt {
         let psbt = psbt_v2::v2::Creator::new()
             .inputs_modifiable()
             .outputs_modifiable()
-            .psbt();
-        // FIXME first add the input, *then* convert to unordered
+            .constructor_modifiable()
+            .input(input)
+            .psbt()
+            .expect("fresh PSBT has no locktime conflict");
         let mut u = Self::unchecked_from_psbt(psbt);
         u.global.set_tx_unordered();
-        u.global.input_count = 1;
-        u.global.output_count = 0;
-        u.inputs = [input].into_iter().collect();
         u
     }
 
@@ -41,13 +40,12 @@ impl UnorderedPsbt {
         let psbt = psbt_v2::v2::Creator::new()
             .inputs_modifiable()
             .outputs_modifiable()
-            .psbt();
-        // FIXME first add the output, *then* convert to unordered
+            .constructor_modifiable()
+            .output(output)
+            .psbt()
+            .expect("fresh PSBT has no locktime conflict");
         let mut u = Self::unchecked_from_psbt(psbt);
         u.global.set_tx_unordered();
-        u.global.input_count = 0;
-        u.global.output_count = 1;
-        u.outputs = [output].into_iter().collect();
         u
     }
 

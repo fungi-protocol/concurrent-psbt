@@ -13,6 +13,7 @@ where
         for (k, v) in other {
             // TODO is it possible to use .entry() methods to replace the result
             // without unsafe/replace_with crate?
+            // is it sufficient to just impl JoinMut for V: JoinMut
             let lub = match self.remove(&k) {
                 Some(prev) => prev.join(v),
                 None => v,

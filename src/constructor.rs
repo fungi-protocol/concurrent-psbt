@@ -1,7 +1,6 @@
 use core::marker::PhantomData;
 
 use psbt_v2::v2::Constructor as Bip370Constructor;
-use psbt_v2::v2::Creator as Bip370Creator;
 use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Psbt};
 
 use crate::sort::{Deterministic, ExplicitSortKeys, Relaxed, Seeded, SortMode, Unseeded};
@@ -152,7 +151,6 @@ impl<M: Mod, S: SortMode> Constructor<M, S> {
     ///
     /// Allows sorting independently of the modifiability typestate.
     pub fn into_sorter(self) -> crate::sort::Sorter<S> {
-        // FIXME new_unchecked, which should only be pub(crate)
         crate::sort::Sorter::new_unchecked(self.0)
     }
 }
@@ -325,6 +323,7 @@ pub enum IntoConstructorError {
     SortModeMismatch,
 }
 
+// FIXME move to its own module. ::dynamic::Constructor where ::constructor is static
 /// An unordered Constructor whose modifiability and sort-mode typestates are
 /// determined at runtime from the PSBT flags.
 ///
@@ -529,113 +528,18 @@ impl SortModeMarker for Deterministic<Seeded> {
     const ANY_SORT_MODE: AnySortMode = AnySortMode::DeterministicSeeded;
 }
 
-// FIXME move Creator to a separate mod
-// -- Creator -----------------------------------------------------------------
+// -- Creator / CreatorWith ---------------------------------------------------
+// Defined in src/creator.rs; re-exported here for a flat public API.
 
-/// Creator for unordered PSBTs.
-///
-/// Sets the `PSBT_GLOBAL_TX_UNORDERED` proprietary field and both modifiable
-/// flags. By default produces a [`Constructor`] with sort mode
-/// [`Relaxed<Unseeded>`]. Call [`Creator::explicit_sort_keys`] or
-/// [`Creator::deterministic_sorting`] to select a different sort mode.
-pub struct Creator(UnorderedPsbt);
-
-impl Creator {
-    pub fn new() -> Self {
-        let psbt = Bip370Creator::new()
-            .inputs_modifiable()
-            .outputs_modifiable()
-            .psbt();
-
-        let mut unordered = UnorderedPsbt::unchecked_from_psbt(psbt);
-
-        unordered.global.set_tx_unordered();
-
-        Creator(unordered)
-    }
-
-    /// Set sort mode to explicit sort keys (`PSBT_GLOBAL_SORT_DETERMINISTIC = 0x00`).
-    ///
-    /// All inputs and outputs must have explicit sort keys before `finalize_order` is called.
-    /// Mutually exclusive with [`Creator::deterministic_sorting`].
-    pub fn explicit_sort_keys(mut self) -> CreatorWith<ExplicitSortKeys> {
-        self.0.global.set_sort_explicit();
-        CreatorWith(self.0, PhantomData)
-    }
-
-    /// Set sort mode to deterministic sorting (`PSBT_GLOBAL_SORT_DETERMINISTIC = 0x01`).
-    ///
-    /// Sort keys are derived from a seed; explicit per-input/output keys are not permitted.
-    /// Mutually exclusive with [`Creator::explicit_sort_keys`].
-    pub fn deterministic_sorting(mut self) -> CreatorWith<Deterministic<Unseeded>> {
-        self.0.global.set_sort_deterministic();
-        CreatorWith(self.0, PhantomData)
-    }
-
-    /// Provide a sort seed without changing the deterministic mode, staying in [`Relaxed<Seeded>`].
-    ///
-    /// This is the `Relaxed` analogue of [`CreatorWith::set_deterministic_sort_seed`].
-    pub fn set_deterministic_sort_seed(mut self, seed: Vec<u8>) -> CreatorWith<Relaxed<Seeded>> {
-        self.0.global.set_sort_seed(seed);
-        CreatorWith(self.0, PhantomData)
-    }
-
-    /// Consume the creator and return the `UnorderedPsbt`.
-    pub fn into_unordered_psbt(self) -> UnorderedPsbt {
-        self.0
-    }
-
-    /// Consume the creator and return a fully-modifiable Constructor with [`Relaxed<Unseeded>`] sort mode.
-    pub fn constructor(self) -> Constructor<Modifiable, Relaxed<Unseeded>> {
-        Constructor::<Modifiable, Relaxed<Unseeded>>::new(self.0.to_psbt())
-            .expect("Creator always produces a valid unordered PSBT")
-    }
-}
-
-impl Default for Creator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// A [`Creator`] with a specific sort mode already chosen.
-pub struct CreatorWith<S: SortMode>(UnorderedPsbt, PhantomData<S>);
-
-impl<S: SortMode> CreatorWith<S> {
-    /// Consume and return the `UnorderedPsbt`.
-    pub fn into_unordered_psbt(self) -> UnorderedPsbt {
-        self.0
-    }
-
-    /// Consume and return a fully-modifiable Constructor with sort mode `S`.
-    pub fn constructor(self) -> Constructor<Modifiable, S> {
-        Constructor::<Modifiable, S>::new(self.0.to_psbt())
-            .expect("CreatorWith always produces a valid unordered PSBT")
-    }
-}
-
-impl CreatorWith<Deterministic<Unseeded>> {
-    /// Provide the sort seed, transitioning to [`Deterministic<Seeded>`].
-    pub fn set_deterministic_sort_seed(
-        mut self,
-        seed: Vec<u8>,
-    ) -> CreatorWith<Deterministic<Seeded>> {
-        self.0.global.set_sort_seed(seed);
-        CreatorWith(self.0, PhantomData)
-    }
-}
-
-impl CreatorWith<Relaxed<Unseeded>> {
-    /// Provide the sort seed, transitioning to [`Relaxed<Seeded>`].
-    pub fn set_deterministic_sort_seed(mut self, seed: Vec<u8>) -> CreatorWith<Relaxed<Seeded>> {
-        self.0.global.set_sort_seed(seed);
-        CreatorWith(self.0, PhantomData)
-    }
-}
+pub use crate::creator::{Creator, CreatorWith};
 
 // -- try_sort / sort on Constructor -----------------------------------------
 //
 // Each delegates to Sorter<S>, which owns the sort logic.
+
+// FIXME can these be implemented via generics instead of a macro? the
+// infallible sort can be used to define try_sort via trait bound,
+// .into_sorter() should carry over the sorting ability as a static type
 
 macro_rules! impl_try_sort {
     ($m:ty, $s:ty) => {
@@ -681,7 +585,9 @@ impl_sort!(OutputsOnlyModifiable, Relaxed<Seeded>);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fields::GlobalModifiableExt as _;
     use crate::input::InputExt as _;
+    use psbt_v2::v2::Creator as Bip370Creator;
 
     #[test]
     fn creator_default_does_not_set_sort_deterministic_field() {
@@ -1477,7 +1383,7 @@ mod tests {
 
         let psbt = Creator::new()
             .deterministic_sorting()
-            .set_deterministic_sort_seed(seed.clone())
+            .set_seed(seed.clone())
             .constructor()
             .input(psbt_v2::v2::Input::new(&op_b)) // add in reverse
             .unwrap()
@@ -1498,7 +1404,7 @@ mod tests {
         op_b2.vout = 1;
         let psbt2 = Creator::new()
             .deterministic_sorting()
-            .set_deterministic_sort_seed(seed.clone())
+            .set_seed(seed.clone())
             .constructor()
             .input(psbt_v2::v2::Input::new(&op_a2))
             .unwrap()
@@ -1534,7 +1440,7 @@ mod tests {
         input_b.set_sort_key(vec![0x00]);
 
         let psbt = Creator::new()
-            .set_deterministic_sort_seed(seed.clone()) // Relaxed<Seeded> via Creator::set_deterministic_sort_seed
+            .set_seed(seed.clone()) // Relaxed<Seeded> via Creator::set_seed
             .constructor()
             .input(input_b)
             .unwrap()
@@ -1561,7 +1467,7 @@ mod tests {
         let make_ordered = |seed: Vec<u8>| {
             let psbt = Creator::new()
                 .deterministic_sorting()
-                .set_deterministic_sort_seed(seed)
+                .set_seed(seed)
                 .constructor()
                 .input(psbt_v2::v2::Input::new(&op_a))
                 .unwrap()

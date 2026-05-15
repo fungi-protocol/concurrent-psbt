@@ -1,6 +1,7 @@
 use crate::lattice::join::Join;
 use crate::lattice::partial::{Absorb, JoinResult, PartialJoin};
 
+// FIXME redo as JoinMut for blanket JoinMut collection impls
 impl<V> Join for JoinResult<V>
 where
     V: PartialJoin,
@@ -13,11 +14,6 @@ where
             (Ok(a), Err(b)) => Err(b.absorb(a)),
         }
     }
-
-    // // FIXME clone needed for this, replace_with can do unsafely
-    // fn join_mut(&mut self, other: Self) {
-    //     std::mem::replace(self, self.join(other));
-    // }
 }
 
 #[test]
