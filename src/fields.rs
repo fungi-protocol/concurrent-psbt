@@ -82,6 +82,85 @@ pub fn psbt_out_sort_key() -> ProprietaryKey {
     prop(SUBTYPE_OUTPUT, b"PSBT_OUT_SORT_KEY")
 }
 
+// -- Global field accessors --------------------------------------------------
+
+/// Extension trait for reading and writing custom proprietary global fields.
+pub(crate) trait GlobalFieldsExt {
+    /// Returns `true` if `PSBT_GLOBAL_TX_UNORDERED` is set to [`UNORDERED_VALUE`].
+    fn is_tx_unordered(&self) -> bool;
+    /// Sets `PSBT_GLOBAL_TX_UNORDERED` to [`UNORDERED_VALUE`].
+    fn set_tx_unordered(&mut self);
+    /// Removes `PSBT_GLOBAL_TX_UNORDERED`.
+    fn clear_tx_unordered(&mut self);
+
+    /// Returns `true` if `PSBT_GLOBAL_SORT_DETERMINISTIC` is absent (Relaxed mode).
+    fn sort_deterministic_absent(&self) -> bool;
+    /// Returns `true` if `PSBT_GLOBAL_SORT_DETERMINISTIC` is `0x00` (ExplicitSortKeys).
+    fn is_sort_explicit(&self) -> bool;
+    /// Returns `true` if `PSBT_GLOBAL_SORT_DETERMINISTIC` is `0x01` (Deterministic).
+    fn is_sort_deterministic(&self) -> bool;
+    /// Sets `PSBT_GLOBAL_SORT_DETERMINISTIC` to `0x00` (ExplicitSortKeys).
+    fn set_sort_explicit(&mut self);
+    /// Sets `PSBT_GLOBAL_SORT_DETERMINISTIC` to `0x01` (Deterministic).
+    fn set_sort_deterministic(&mut self);
+
+    /// Returns the sort seed if set.
+    fn sort_seed(&self) -> Option<&Vec<u8>>;
+    /// Sets the sort seed.
+    fn set_sort_seed(&mut self, seed: Vec<u8>);
+}
+
+impl GlobalFieldsExt for Global {
+    fn is_tx_unordered(&self) -> bool {
+        self.proprietaries
+            .get(&psbt_global_tx_unordered())
+            .is_some_and(|v| v.as_slice() == [UNORDERED_VALUE])
+    }
+
+    fn set_tx_unordered(&mut self) {
+        self.proprietaries
+            .insert(psbt_global_tx_unordered(), vec![UNORDERED_VALUE]);
+    }
+
+    fn clear_tx_unordered(&mut self) {
+        self.proprietaries.remove(&psbt_global_tx_unordered());
+    }
+
+    fn sort_deterministic_absent(&self) -> bool {
+        !self.proprietaries.contains_key(&psbt_global_sort_deterministic())
+    }
+
+    fn is_sort_explicit(&self) -> bool {
+        self.proprietaries
+            .get(&psbt_global_sort_deterministic())
+            .is_some_and(|v| v.as_slice() == [0x00])
+    }
+
+    fn is_sort_deterministic(&self) -> bool {
+        self.proprietaries
+            .get(&psbt_global_sort_deterministic())
+            .is_some_and(|v| v.as_slice() == [0x01])
+    }
+
+    fn set_sort_explicit(&mut self) {
+        self.proprietaries
+            .insert(psbt_global_sort_deterministic(), vec![0x00]);
+    }
+
+    fn set_sort_deterministic(&mut self) {
+        self.proprietaries
+            .insert(psbt_global_sort_deterministic(), vec![0x01]);
+    }
+
+    fn sort_seed(&self) -> Option<&Vec<u8>> {
+        self.proprietaries.get(&psbt_global_sort_seed())
+    }
+
+    fn set_sort_seed(&mut self, seed: Vec<u8>) {
+        self.proprietaries.insert(psbt_global_sort_seed(), seed);
+    }
+}
+
 // -- Modifiable flag helpers -------------------------------------------------
 // The upstream methods are pub(crate), so we manipulate the bits directly.
 

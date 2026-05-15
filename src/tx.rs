@@ -5,6 +5,7 @@ use psbt_v2::v2::{Input, Output};
 use crate::global::Global;
 use crate::global::GlobalExt;
 use crate::global::ResultGlobal;
+use crate::fields::GlobalFieldsExt as _;
 use crate::input::{InputSet, ResultInputSet};
 use crate::lattice::join::Join;
 use crate::output::{OutputSet, ResultOutputSet};
@@ -27,9 +28,7 @@ impl UnorderedPsbt {
             .outputs_modifiable()
             .psbt();
         let mut u = Self::unchecked_from_psbt(psbt);
-        u.global
-            .proprietaries
-            .insert(crate::fields::psbt_global_tx_unordered(), vec![crate::fields::UNORDERED_VALUE]);
+        u.global.set_tx_unordered();
         u.global.input_count = 1;
         u.global.output_count = 0;
         u.inputs = [input].into_iter().collect();
@@ -43,9 +42,7 @@ impl UnorderedPsbt {
             .outputs_modifiable()
             .psbt();
         let mut u = Self::unchecked_from_psbt(psbt);
-        u.global
-            .proprietaries
-            .insert(crate::fields::psbt_global_tx_unordered(), vec![crate::fields::UNORDERED_VALUE]);
+        u.global.set_tx_unordered();
         u.global.input_count = 0;
         u.global.output_count = 1;
         u.outputs = [output].into_iter().collect();
@@ -95,10 +92,7 @@ impl UnorderedPsbt {
     }
 
     pub fn is_unordered(&self) -> bool {
-        self.global
-            .proprietaries
-            .get(&crate::fields::psbt_global_tx_unordered())
-            .is_some_and(|v| v.as_slice() == [crate::fields::UNORDERED_VALUE])
+        self.global.is_tx_unordered()
     }
 }
 

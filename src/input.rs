@@ -93,6 +93,7 @@ pub(crate) trait InputExt {
     // Input::out_point() exists but is private so we reimeplement it here
     fn out_point(&self) -> OutPoint;
     fn sort_key(&self) -> Option<&Vec<u8>>;
+    fn set_sort_key(&mut self, key: Vec<u8>);
     fn take_sort_key(&mut self) -> Option<Vec<u8>>;
 
     fn wrap(self) -> ResultInput;
@@ -108,6 +109,11 @@ impl InputExt for Input {
 
     fn sort_key(&self) -> Option<&Vec<u8>> {
         self.proprietaries.get(&crate::fields::psbt_in_sort_key())
+    }
+
+    fn set_sort_key(&mut self, key: Vec<u8>) {
+        self.proprietaries
+            .insert(crate::fields::psbt_in_sort_key(), key);
     }
 
     fn take_sort_key(&mut self) -> Option<Vec<u8>> {
@@ -525,9 +531,7 @@ fn test_input_sort_key() {
     let mut input = Input::new(&OutPoint::null());
     assert!(input.sort_key().is_none());
 
-    input
-        .proprietaries
-        .insert(crate::fields::psbt_in_sort_key(), vec![0x42]);
+    input.set_sort_key(vec![0x42]);
     assert_eq!(input.sort_key(), Some(&vec![0x42]));
 
     let taken = input.take_sort_key();

@@ -6,10 +6,7 @@ use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, 
 
 use crate::sort::{Deterministic, ExplicitSortKeys, Relaxed, SortMode, Unseeded};
 
-use crate::fields::{
-    psbt_global_sort_deterministic, psbt_global_tx_unordered, psbt_out_unique_id,
-    GlobalModifiableExt as _, UNORDERED_VALUE,
-};
+use crate::fields::{GlobalFieldsExt as _, GlobalModifiableExt as _};
 use crate::input::InputExt as _;
 use crate::output::OutputExt as _;
 use crate::tx::UnorderedPsbt;
@@ -97,9 +94,8 @@ fn sort_by_extracted_key<T>(
 
 /// Check that every output in a raw `Psbt` carries `PSBT_OUT_UNIQUE_ID`.
 fn validate_output_unique_ids(psbt: &Psbt) -> Result<(), Error> {
-    let key = psbt_out_unique_id();
     for output in &psbt.outputs {
-        if !output.proprietaries.contains_key(&key) {
+        if !output.has_unique_id() {
             return Err(Error::MissingOutputUniqueId);
         }
     }
@@ -108,7 +104,7 @@ fn validate_output_unique_ids(psbt: &Psbt) -> Result<(), Error> {
 
 /// Check that a single output carries `PSBT_OUT_UNIQUE_ID`.
 fn validate_output_unique_id(output: &Output) -> Result<(), Error> {
-    if output.proprietaries.contains_key(&psbt_out_unique_id()) {
+    if output.has_unique_id() {
         Ok(())
     } else {
         Err(Error::MissingOutputUniqueId)
@@ -173,7 +169,7 @@ impl<M: Mod> Constructor<M, ExplicitSortKeys> {
         let outputs = sort_by_extracted_key(self.0.outputs, |o| o.take_sort_key())?;
 
         let mut global = self.0.global;
-        global.proprietaries.remove(&psbt_global_tx_unordered());
+        global.clear_tx_unordered();
 
         Ok(Psbt {
             global,
@@ -550,10 +546,7 @@ impl Creator {
 
         let mut unordered = UnorderedPsbt::unchecked_from_psbt(psbt);
 
-        unordered
-            .global
-            .proprietaries
-            .insert(psbt_global_tx_unordered(), vec![UNORDERED_VALUE]);
+        unordered.global.set_tx_unordered();
 
         Creator(unordered)
     }
@@ -563,10 +556,7 @@ impl Creator {
     /// All inputs and outputs must have explicit sort keys before `finalize_order` is called.
     /// Mutually exclusive with [`Creator::deterministic_sorting`].
     pub fn explicit_sort_keys(mut self) -> CreatorWith<ExplicitSortKeys> {
-        self.0
-            .global
-            .proprietaries
-            .insert(psbt_global_sort_deterministic(), vec![0x00]); // FIXME method on .global to set this
+        self.0.global.set_sort_explicit();
         CreatorWith(self.0, PhantomData)
     }
 
@@ -575,10 +565,7 @@ impl Creator {
     /// Sort keys are derived from a seed; explicit per-input/output keys are not permitted.
     /// Mutually exclusive with [`Creator::explicit_sort_keys`].
     pub fn deterministic_sorting(mut self) -> CreatorWith<Deterministic<Unseeded>> {
-        self.0
-            .global
-            .proprietaries
-            .insert(psbt_global_sort_deterministic(), vec![0x01]);
+        self.0.global.set_sort_deterministic();
         CreatorWith(self.0, PhantomData)
     }
 
@@ -626,34 +613,19 @@ mod tests {
     fn creator_default_does_not_set_sort_deterministic_field() {
         use crate::fields::psbt_global_sort_deterministic;
         let psbt = Creator::new().into_unordered_psbt();
-        assert!(!psbt
-            .global
-            .proprietaries
-            .contains_key(&psbt_global_sort_deterministic()));
+        assert!(psbt.global.sort_deterministic_absent());
     }
 
     #[test]
     fn creator_explicit_sort_keys_sets_field_to_0x00() {
-        use crate::fields::psbt_global_sort_deterministic;
         let psbt = Creator::new().explicit_sort_keys().into_unordered_psbt();
-        assert_eq!(
-            psbt.global
-                .proprietaries
-                .get(&psbt_global_sort_deterministic()),
-            Some(&vec![0x00]),
-        );
+        assert!(psbt.global.is_sort_explicit());
     }
 
     #[test]
     fn creator_deterministic_sorting_sets_field_to_0x01() {
-        use crate::fields::psbt_global_sort_deterministic;
         let psbt = Creator::new().deterministic_sorting().into_unordered_psbt();
-        assert_eq!(
-            psbt.global
-                .proprietaries
-                .get(&psbt_global_sort_deterministic()),
-            Some(&vec![0x01]),
-        );
+        assert!(psbt.global.is_sort_deterministic());
     }
 
     #[test]
@@ -729,10 +701,10 @@ mod tests {
         ob.vout = 1;
 
         let mut input_b = psbt_v2::v2::Input::new(&ob);
-        input_b.proprietaries.insert(psbt_in_sort_key(), vec![0x02]);
+        input_b.set_sort_key(vec![0x02]);
 
         let mut input_a = psbt_v2::v2::Input::new(&oa);
-        input_a.proprietaries.insert(psbt_in_sort_key(), vec![0x01]);
+        input_a.set_sort_key(vec![0x01]);
 
         psbt.inputs = vec![input_b, input_a];
         psbt.global.input_count = 2;
@@ -742,23 +714,15 @@ mod tests {
             value: bitcoin::Amount::from_sat(2000),
             script_pubkey: bitcoin::ScriptBuf::from_bytes(vec![0xBB]),
         });
-        output_y
-            .proprietaries
-            .insert(psbt_out_sort_key(), vec![0x02]);
-        output_y
-            .proprietaries
-            .insert(psbt_out_unique_id(), vec![0x02; 16]);
+        output_y.set_sort_key(vec![0x02]);
+        output_y.set_unique_id(vec![0x02; 16]);
 
         let mut output_x = psbt_v2::v2::Output::new(bitcoin::TxOut {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::from_bytes(vec![0xAA]),
         });
-        output_x
-            .proprietaries
-            .insert(psbt_out_sort_key(), vec![0x01]);
-        output_x
-            .proprietaries
-            .insert(psbt_out_unique_id(), vec![0x01; 16]);
+        output_x.set_sort_key(vec![0x01]);
+        output_x.set_unique_id(vec![0x01; 16]);
 
         psbt.outputs = vec![output_y, output_x];
         psbt.global.output_count = 2;
@@ -822,12 +786,12 @@ mod tests {
             .to_psbt();
 
         let mut input_a = psbt_v2::v2::Input::new(&bitcoin::OutPoint::null());
-        input_a.proprietaries.insert(psbt_in_sort_key(), vec![0x01]);
+        input_a.set_sort_key(vec![0x01]);
 
         let mut ob = bitcoin::OutPoint::null();
         ob.vout = 1;
         let mut input_b = psbt_v2::v2::Input::new(&ob);
-        input_b.proprietaries.insert(psbt_in_sort_key(), vec![0x01]); // same key
+        input_b.set_sort_key(vec![0x01]); // same key
 
         psbt.inputs = vec![input_a, input_b];
         psbt.global.input_count = 2;
@@ -867,9 +831,7 @@ mod tests {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::from_bytes(vec![0xAA]),
         });
-        output
-            .proprietaries
-            .insert(psbt_out_unique_id(), vec![0x01; 16]);
+        output.set_unique_id(vec![0x01; 16]);
         psbt.outputs = vec![output];
         psbt.global.output_count = 1;
 
@@ -922,14 +884,12 @@ mod tests {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
-        o1.proprietaries
-            .insert(psbt_out_unique_id(), vec![0x01; 16]);
+        o1.set_unique_id(vec![0x01; 16]);
         let mut o2 = psbt_v2::v2::Output::new(bitcoin::TxOut {
             value: bitcoin::Amount::from_sat(2000),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
-        o2.proprietaries
-            .insert(psbt_out_unique_id(), vec![0x02; 16]);
+        o2.set_unique_id(vec![0x02; 16]);
         let c = c.output(o1).unwrap().output(o2).unwrap();
         let psbt = c.into_psbt();
         assert_eq!(psbt.global.output_count, 2);
@@ -987,9 +947,7 @@ mod tests {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
-        output
-            .proprietaries
-            .insert(psbt_out_unique_id(), vec![0xAA; 16]);
+        output.set_unique_id(vec![0xAA; 16]);
         let c = c.output(output).unwrap();
         let psbt = c.into_psbt();
         assert_eq!(psbt.outputs.len(), 1);
@@ -1023,9 +981,7 @@ mod tests {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
-        output
-            .proprietaries
-            .insert(psbt_out_unique_id(), vec![0xBB; 16]);
+        output.set_unique_id(vec![0xBB; 16]);
         let c = c.output(output).unwrap();
         let psbt = c.no_more_outputs();
         assert_eq!(psbt.outputs.len(), 1);
@@ -1058,7 +1014,7 @@ mod tests {
             .to_psbt();
 
         let mut input = psbt_v2::v2::Input::new(&bitcoin::OutPoint::null());
-        input.proprietaries.insert(psbt_in_sort_key(), vec![0x01]);
+        input.set_sort_key(vec![0x01]);
         psbt.inputs = vec![input];
         psbt.global.input_count = 1;
         psbt.global.clear_outputs_modifiable();
@@ -1189,8 +1145,7 @@ mod tests {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
-        out.proprietaries
-            .insert(psbt_out_unique_id(), vec![0x01; 16]);
+        out.set_unique_id(vec![0x01; 16]);
         let b = AnyConstructor::OutputsOnly(
             Creator::new()
                 .constructor()
@@ -1224,17 +1179,13 @@ mod tests {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
-        out_a
-            .proprietaries
-            .insert(psbt_out_unique_id(), vec![0x01; 16]);
+        out_a.set_unique_id(vec![0x01; 16]);
 
         let mut out_b = psbt_v2::v2::Output::new(bitcoin::TxOut {
             value: bitcoin::Amount::from_sat(2000),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
-        out_b
-            .proprietaries
-            .insert(psbt_out_unique_id(), vec![0x02; 16]);
+        out_b.set_unique_id(vec![0x02; 16]);
 
         let a = AnyConstructor::InputsOnly(
             Creator::new()
@@ -1266,10 +1217,8 @@ mod tests {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
-        output.proprietaries.insert(psbt_out_sort_key(), vec![0x01]);
-        output
-            .proprietaries
-            .insert(psbt_out_unique_id(), vec![0x01; 16]);
+        output.set_sort_key(vec![0x01]);
+        output.set_unique_id(vec![0x01; 16]);
         psbt.outputs = vec![output];
         psbt.global.output_count = 1;
         psbt.global.clear_inputs_modifiable();
@@ -1382,17 +1331,13 @@ mod tests {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
-        out_a
-            .proprietaries
-            .insert(psbt_out_unique_id(), vec![0x01; 16]);
+        out_a.set_unique_id(vec![0x01; 16]);
 
         let mut out_b = psbt_v2::v2::Output::new(bitcoin::TxOut {
             value: bitcoin::Amount::from_sat(2000),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
-        out_b
-            .proprietaries
-            .insert(psbt_out_unique_id(), vec![0x02; 16]);
+        out_b.set_unique_id(vec![0x02; 16]);
 
         // a has out_a locked (no_more_inputs locks inputs flag, but we want
         // locked outputs). Use no_more_outputs → InputsOnlyModifiable where

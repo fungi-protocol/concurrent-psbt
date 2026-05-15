@@ -57,14 +57,22 @@ impl IntoIterator for OutputSet {
 }
 
 pub(crate) trait OutputExt {
+    fn has_unique_id(&self) -> bool;
     fn unique_id(&self) -> Vec<u8>;
+    fn set_unique_id(&mut self, id: Vec<u8>);
     fn sort_key(&self) -> Option<&Vec<u8>>;
+    fn set_sort_key(&mut self, key: Vec<u8>);
     fn take_sort_key(&mut self) -> Option<Vec<u8>>;
 
     fn wrap(self) -> ResultOutput;
 }
 
 impl OutputExt for Output {
+    fn has_unique_id(&self) -> bool {
+        self.proprietaries
+            .contains_key(&crate::fields::psbt_out_unique_id())
+    }
+
     fn unique_id(&self) -> Vec<u8> {
         self.proprietaries
             .get(&crate::fields::psbt_out_unique_id())
@@ -72,8 +80,18 @@ impl OutputExt for Output {
             .clone()
     }
 
+    fn set_unique_id(&mut self, id: Vec<u8>) {
+        self.proprietaries
+            .insert(crate::fields::psbt_out_unique_id(), id);
+    }
+
     fn sort_key(&self) -> Option<&Vec<u8>> {
         self.proprietaries.get(&crate::fields::psbt_out_sort_key())
+    }
+
+    fn set_sort_key(&mut self, key: Vec<u8>) {
+        self.proprietaries
+            .insert(crate::fields::psbt_out_sort_key(), key);
     }
 
     fn take_sort_key(&mut self) -> Option<Vec<u8>> {
@@ -257,8 +275,7 @@ mod tests {
             value: bitcoin::Amount::from_sat(sats),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
-        out.proprietaries
-            .insert(psbt_out_unique_id(), vec![unique_id; 16]);
+        out.set_unique_id(vec![unique_id; 16]);
         out
     }
 
@@ -310,7 +327,7 @@ mod tests {
         let a = make_output(0x01, 1000);
         let mut b = make_output(0x01, 2000);
         // force same unique_id
-        b.proprietaries.insert(psbt_out_unique_id(), vec![0x01; 16]);
+        b.set_unique_id(vec![0x01; 16]);
 
         let sa = OutputSet::from_iter([a]);
         let sb = OutputSet::from_iter([b]);
@@ -324,9 +341,7 @@ mod tests {
         let mut output = make_output(0x01, 1000);
         assert!(output.sort_key().is_none());
 
-        output
-            .proprietaries
-            .insert(crate::fields::psbt_out_sort_key(), vec![0x42]);
+        output.set_sort_key(vec![0x42]);
         assert_eq!(output.sort_key(), Some(&vec![0x42]));
 
         let taken = output.take_sort_key();
