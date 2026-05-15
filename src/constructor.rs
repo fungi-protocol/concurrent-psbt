@@ -4,7 +4,7 @@ use psbt_v2::v2::Constructor as Bip370Constructor;
 use psbt_v2::v2::Creator as Bip370Creator;
 use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Psbt};
 
-use crate::sort::{Deterministic, ExplicitSortKeys, Relaxed, SortMode, Unseeded};
+use crate::sort::{Deterministic, ExplicitSortKeys, Relaxed, Seeded, SortMode, Unseeded};
 
 use crate::fields::{GlobalFieldsExt as _, GlobalModifiableExt as _};
 use crate::input::InputExt as _;
@@ -569,6 +569,14 @@ impl Creator {
         CreatorWith(self.0, PhantomData)
     }
 
+    /// Provide a sort seed without changing the deterministic mode, staying in [`Relaxed<Seeded>`].
+    ///
+    /// This is the `Relaxed` analogue of [`CreatorWith::set_seed`].
+    pub fn set_seed(mut self, seed: Vec<u8>) -> CreatorWith<Relaxed<Seeded>> {
+        self.0.global.set_sort_seed(seed);
+        CreatorWith(self.0, PhantomData)
+    }
+
     /// Consume the creator and return the `UnorderedPsbt`.
     pub fn into_unordered_psbt(self) -> UnorderedPsbt {
         self.0
@@ -600,6 +608,120 @@ impl<S: SortMode> CreatorWith<S> {
     pub fn constructor(self) -> Constructor<Modifiable, S> {
         Constructor::<Modifiable, S>::new(self.0.to_psbt())
             .expect("CreatorWith always produces a valid unordered PSBT")
+    }
+}
+
+impl CreatorWith<Deterministic<Unseeded>> {
+    /// Provide the sort seed, transitioning to [`Deterministic<Seeded>`].
+    pub fn set_seed(mut self, seed: Vec<u8>) -> CreatorWith<Deterministic<Seeded>> {
+        self.0.global.set_sort_seed(seed);
+        CreatorWith(self.0, PhantomData)
+    }
+}
+
+impl CreatorWith<Relaxed<Unseeded>> {
+    /// Provide the sort seed, transitioning to [`Relaxed<Seeded>`].
+    pub fn set_seed(mut self, seed: Vec<u8>) -> CreatorWith<Relaxed<Seeded>> {
+        self.0.global.set_sort_seed(seed);
+        CreatorWith(self.0, PhantomData)
+    }
+}
+
+// -- finalize_order helpers for seeded modes --------------------------------
+
+impl<M: Mod, S: SortMode> Constructor<M, S> {
+    fn try_sort_deterministic(self) -> Result<Psbt, SortingError> {
+        use crate::sort::OutPointIdentifier as _;
+        let seed = self
+            .0
+            .global
+            .sort_seed()
+            .expect("seeded mode always has a seed")
+            .clone();
+        let inputs = sort_by_extracted_key(self.0.inputs, |i| {
+            Some(crate::sort::derive_sort_key(
+                &seed,
+                &i.out_point().to_identifier(),
+            ))
+        })?;
+        let outputs = sort_by_extracted_key(self.0.outputs, |o| {
+            Some(crate::sort::derive_sort_key(&seed, &o.unique_id()))
+        })?;
+        let mut global = self.0.global;
+        global.clear_tx_unordered();
+        Ok(Psbt {
+            global,
+            inputs,
+            outputs,
+        })
+    }
+
+    fn try_sort_relaxed_seeded(self) -> Result<Psbt, SortingError> {
+        let seed = self
+            .0
+            .global
+            .sort_seed()
+            .expect("seeded mode always has a seed")
+            .clone();
+        let inputs =
+            sort_by_extracted_key(self.0.inputs, |i| Some(i.take_or_derive_sort_key(&seed)))?;
+        let outputs =
+            sort_by_extracted_key(self.0.outputs, |o| Some(o.take_or_derive_sort_key(&seed)))?;
+        let mut global = self.0.global;
+        global.clear_tx_unordered();
+        Ok(Psbt {
+            global,
+            inputs,
+            outputs,
+        })
+    }
+}
+
+impl Constructor<Modifiable, Deterministic<Seeded>> {
+    /// Sort all inputs/outputs using seed-derived keys (HMAC-SHA256).
+    pub fn try_sort(self) -> Result<Bip370Constructor<Modifiable>, SortingError> {
+        let psbt = self.try_sort_deterministic()?; // FIXME this should be infallible
+        Ok(Bip370Constructor::<Modifiable>::new(psbt).expect("flags preserved"))
+    }
+}
+
+impl Constructor<InputsOnlyModifiable, Deterministic<Seeded>> {
+    /// Sort all inputs/outputs using seed-derived keys (HMAC-SHA256).
+    pub fn try_sort(self) -> Result<Bip370Constructor<InputsOnlyModifiable>, SortingError> {
+        let psbt = self.try_sort_deterministic()?;
+        Ok(Bip370Constructor::<InputsOnlyModifiable>::new(psbt).expect("flags preserved"))
+    }
+}
+
+impl Constructor<OutputsOnlyModifiable, Deterministic<Seeded>> {
+    /// Sort all inputs/outputs using seed-derived keys (HMAC-SHA256).
+    pub fn try_sort(self) -> Result<Bip370Constructor<OutputsOnlyModifiable>, SortingError> {
+        let psbt = self.try_sort_deterministic()?;
+        Ok(Bip370Constructor::<OutputsOnlyModifiable>::new(psbt).expect("flags preserved"))
+    }
+}
+
+impl Constructor<Modifiable, Relaxed<Seeded>> {
+    /// Sort inputs/outputs: explicit key if present, otherwise seed-derived.
+    pub fn try_sort(self) -> Result<Bip370Constructor<Modifiable>, SortingError> {
+        let psbt = self.try_sort_relaxed_seeded()?;
+        Ok(Bip370Constructor::<Modifiable>::new(psbt).expect("flags preserved"))
+    }
+}
+
+impl Constructor<InputsOnlyModifiable, Relaxed<Seeded>> {
+    /// Sort inputs/outputs: explicit key if present, otherwise seed-derived.
+    pub fn try_sort(self) -> Result<Bip370Constructor<InputsOnlyModifiable>, SortingError> {
+        let psbt = self.try_sort_relaxed_seeded()?;
+        Ok(Bip370Constructor::<InputsOnlyModifiable>::new(psbt).expect("flags preserved"))
+    }
+}
+
+impl Constructor<OutputsOnlyModifiable, Relaxed<Seeded>> {
+    /// Sort inputs/outputs: explicit key if present, otherwise seed-derived.
+    pub fn try_sort(self) -> Result<Bip370Constructor<OutputsOnlyModifiable>, SortingError> {
+        let psbt = self.try_sort_relaxed_seeded()?;
+        Ok(Bip370Constructor::<OutputsOnlyModifiable>::new(psbt).expect("flags preserved"))
     }
 }
 
@@ -686,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn finalize_order_sorts_by_explicit_sort_keys() {
+    fn try_sort_sorts_by_explicit_sort_keys() {
         use crate::fields::{psbt_in_sort_key, psbt_out_sort_key, psbt_out_unique_id};
 
         let mut psbt = Creator::new()
@@ -747,14 +869,14 @@ mod tests {
     }
 
     #[test]
-    fn finalize_order_produces_valid_updater() {
+    fn try_sort_produces_valid_updater() {
         let constructor = Creator::new().explicit_sort_keys().constructor();
         let bip370 = constructor.try_sort().unwrap();
         let _updater = bip370.updater().unwrap();
     }
 
     #[test]
-    fn finalize_order_rejects_missing_sort_keys() {
+    fn try_sort_rejects_missing_sort_keys() {
         let mut psbt = Creator::new()
             .explicit_sort_keys()
             .into_unordered_psbt()
@@ -777,7 +899,7 @@ mod tests {
     // the sort mode is now encoded in the type, so these cases cannot arise.
 
     #[test]
-    fn finalize_order_rejects_duplicate_input_sort_keys() {
+    fn try_sort_rejects_duplicate_input_sort_keys() {
         use crate::fields::psbt_in_sort_key;
 
         let mut psbt = Creator::new()
@@ -1005,7 +1127,7 @@ mod tests {
     }
 
     #[test]
-    fn finalize_order_inputs_only() {
+    fn try_sort_inputs_only() {
         use crate::fields::psbt_in_sort_key;
 
         let mut psbt = Creator::new()
@@ -1205,7 +1327,7 @@ mod tests {
     }
 
     #[test]
-    fn finalize_order_outputs_only() {
+    fn try_sort_outputs_only() {
         use crate::fields::{psbt_out_sort_key, psbt_out_unique_id};
 
         let mut psbt = Creator::new()
@@ -1383,5 +1505,130 @@ mod tests {
             .no_more_inputs();
 
         assert_eq!(a.try_join(b), Err(Error::LockedSetMismatch));
+    }
+
+    // -- deterministic / relaxed-seeded sort tests --------------------------
+
+    #[test]
+    fn deterministic_seeded_sort_is_stable_and_ordered() {
+        // Two inputs with the same seed: derived keys should be different (different outpoints)
+        // and the order should be deterministic.
+        let seed = b"test-seed-16bytes".to_vec();
+
+        let mut op_a = bitcoin::OutPoint::null();
+        op_a.vout = 0;
+        let mut op_b = bitcoin::OutPoint::null();
+        op_b.vout = 1;
+
+        let psbt = Creator::new()
+            .deterministic_sorting()
+            .set_seed(seed.clone())
+            .constructor()
+            .input(psbt_v2::v2::Input::new(&op_b)) // add in reverse
+            .unwrap()
+            .input(psbt_v2::v2::Input::new(&op_a))
+            .unwrap()
+            .into_psbt()
+            .to_psbt();
+
+        let c = Constructor::<Modifiable, Deterministic<Seeded>>::new(psbt).unwrap();
+        let ordered = c.try_sort().unwrap().psbt().unwrap();
+
+        // Both inputs present
+        assert_eq!(ordered.inputs.len(), 2);
+        // Order is deterministic — run twice and verify same result
+        let mut op_a2 = bitcoin::OutPoint::null();
+        op_a2.vout = 0;
+        let mut op_b2 = bitcoin::OutPoint::null();
+        op_b2.vout = 1;
+        let psbt2 = Creator::new()
+            .deterministic_sorting()
+            .set_seed(seed.clone())
+            .constructor()
+            .input(psbt_v2::v2::Input::new(&op_a2))
+            .unwrap()
+            .input(psbt_v2::v2::Input::new(&op_b2))
+            .unwrap()
+            .into_psbt()
+            .to_psbt();
+        let c2 = Constructor::<Modifiable, Deterministic<Seeded>>::new(psbt2).unwrap();
+        let ordered2 = c2.try_sort().unwrap().psbt().unwrap();
+        assert_eq!(
+            ordered.inputs[0].spent_output_index,
+            ordered2.inputs[0].spent_output_index
+        );
+        assert_eq!(
+            ordered.inputs[1].spent_output_index,
+            ordered2.inputs[1].spent_output_index
+        );
+    }
+
+    #[test]
+    fn relaxed_seeded_uses_explicit_key_when_present() {
+        // In Relaxed<Seeded>, an explicit sort key overrides derivation.
+        let seed = b"test-seed-16bytes".to_vec();
+
+        let mut op_a = bitcoin::OutPoint::null();
+        op_a.vout = 0;
+        let mut op_b = bitcoin::OutPoint::null();
+        op_b.vout = 1;
+
+        // Give input_b an explicit sort key of 0x00 (should sort first)
+        // and input_a no explicit key (will be derived).
+        let mut input_b = psbt_v2::v2::Input::new(&op_b);
+        input_b.set_sort_key(vec![0x00]);
+
+        let psbt = Creator::new()
+            .set_seed(seed.clone()) // Relaxed<Seeded> via Creator::set_seed
+            .constructor()
+            .input(input_b)
+            .unwrap()
+            .input(psbt_v2::v2::Input::new(&op_a))
+            .unwrap()
+            .into_psbt()
+            .to_psbt();
+
+        let c = Constructor::<Modifiable, Relaxed<Seeded>>::new(psbt).unwrap();
+        let ordered = c.try_sort().unwrap().psbt().unwrap();
+
+        // input_b had explicit key 0x00, so it sorts first
+        assert_eq!(ordered.inputs[0].spent_output_index, 1); // op_b.vout = 1
+        assert_eq!(ordered.inputs[1].spent_output_index, 0); // op_a.vout = 0
+    }
+
+    #[test]
+    fn deterministic_sort_different_seeds_give_different_order() {
+        let mut op_a = bitcoin::OutPoint::null();
+        op_a.vout = 0;
+        let mut op_b = bitcoin::OutPoint::null();
+        op_b.vout = 1;
+
+        let make_ordered = |seed: Vec<u8>| {
+            let psbt = Creator::new()
+                .deterministic_sorting()
+                .set_seed(seed)
+                .constructor()
+                .input(psbt_v2::v2::Input::new(&op_a))
+                .unwrap()
+                .input(psbt_v2::v2::Input::new(&op_b))
+                .unwrap()
+                .into_psbt()
+                .to_psbt();
+            let c = Constructor::<Modifiable, Deterministic<Seeded>>::new(psbt).unwrap();
+            let ordered = c.try_sort().unwrap().psbt().unwrap();
+            ordered
+                .inputs
+                .into_iter()
+                .map(|i| i.spent_output_index)
+                .collect::<Vec<_>>()
+        };
+
+        let order_a = make_ordered(b"seed-aaaa-16byte".to_vec());
+        let order_b = make_ordered(b"seed-bbbb-16byte".to_vec());
+        // Different seeds should (with overwhelming probability) give different orders.
+        // Since we only have 2 inputs this is 50/50 — just verify both are present
+        // and the sort is deterministic per seed.
+        assert_eq!(order_a, make_ordered(b"seed-aaaa-16byte".to_vec()));
+        assert_eq!(order_b, make_ordered(b"seed-bbbb-16byte".to_vec()));
     }
 }

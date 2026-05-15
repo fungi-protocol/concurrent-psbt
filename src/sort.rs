@@ -1,3 +1,40 @@
+// -- Deterministic sort key derivation --------------------------------------
+
+/// Derive a sort key from a seed and an item identifier using HMAC-SHA256.
+///
+/// The derived key is the full 32-byte HMAC output, giving a uniform
+/// lexicographic ordering that is deterministic given `seed` and `id`.
+pub(crate) fn derive_sort_key(seed: &[u8], id: &[u8]) -> Vec<u8> {
+    use bitcoin::hashes::{hmac, sha256, Hash, HashEngine};
+    // FIXME use a taproot style hash with two copies of the hash of tag as full 1st block
+    // (so midstate is cacheable) for the type, as a domain separator.
+    // then two copies of the hash of the seed. this midstate is sharable for
+    // all IDs. then just the id. output IDs are constrained to 16 bytes and and
+    // outpoints are 36, both fit in one block and don't allow length extension.
+    let mut engine = hmac::HmacEngine::<sha256::Hash>::new(seed);
+    engine.input(id);
+    hmac::Hmac::<sha256::Hash>::from_engine(engine)
+        .as_byte_array()
+        .to_vec()
+}
+
+/// Serialize an `OutPoint` to bytes for use as an HMAC identifier.
+///
+/// Layout: txid bytes (32) || vout (4, little-endian).
+pub(crate) trait OutPointIdentifier {
+    fn to_identifier(&self) -> Vec<u8>;
+}
+
+impl OutPointIdentifier for bitcoin::OutPoint {
+    fn to_identifier(&self) -> Vec<u8> {
+        use bitcoin::hashes::Hash as _;
+        let mut id = Vec::with_capacity(36);
+        id.extend_from_slice(self.txid.as_byte_array());
+        id.extend_from_slice(&self.vout.to_le_bytes());
+        id
+    }
+}
+
 /// Typestate types for the sort-mode parameter of `Constructor<M, S>`.
 ///
 /// The sort mode encodes which sorting strategy is in use and whether a seed

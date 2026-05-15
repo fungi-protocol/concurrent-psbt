@@ -95,6 +95,9 @@ pub(crate) trait InputExt {
     fn sort_key(&self) -> Option<&Vec<u8>>;
     fn set_sort_key(&mut self, key: Vec<u8>);
     fn take_sort_key(&mut self) -> Option<Vec<u8>>;
+    /// Return the explicit sort key if present, otherwise derive one from
+    /// `seed` using `HMAC-SHA256(seed, outpoint_bytes)`.
+    fn take_or_derive_sort_key(&mut self, seed: &[u8]) -> Vec<u8>;
 
     fn wrap(self) -> ResultInput;
 }
@@ -119,6 +122,14 @@ impl InputExt for Input {
     fn take_sort_key(&mut self) -> Option<Vec<u8>> {
         self.proprietaries
             .remove(&crate::fields::psbt_in_sort_key())
+    }
+
+    fn take_or_derive_sort_key(&mut self, seed: &[u8]) -> Vec<u8> {
+        if let Some(key) = self.take_sort_key() {
+            return key;
+        }
+        use crate::sort::OutPointIdentifier as _;
+        crate::sort::derive_sort_key(seed, &self.out_point().to_identifier())
     }
 
     fn wrap(self) -> ResultInput {
