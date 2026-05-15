@@ -48,8 +48,23 @@ impl InputSet {
 
     /// Returns `true` if any input in the set already has this sort key.
     pub fn has_sort_key(&self, key: &[u8]) -> bool {
-        use crate::input::InputExt as _;
-        self.0.values().any(|i| i.sort_key().map(|k| k.as_slice()) == Some(key))
+        self.0
+            .values()
+            .any(|i| i.sort_key().map(|k| k.as_slice()) == Some(key))
+    }
+
+    /// Return `Err(())` if any two inputs share the same explicit sort key.
+    pub fn check_no_duplicate_sort_keys(&self) -> Result<(), ()> {
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        for input in self.0.values() {
+            if let Some(k) = input.sort_key() {
+                if !seen.insert(k.clone()) {
+                    return Err(());
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn len(&self) -> usize {
@@ -70,6 +85,9 @@ pub struct ResultInputSet(HashMap<OutPoint, ResultInput>);
 
 impl Join for ResultInputSet {
     fn join(self, other: Self) -> Self {
+        // FIXME after constructing check invariants (no duplicate sort keys).
+        // for any conflicting entries, replace them with separate
+        // Conflict(vec![v]) (just one value)
         ResultInputSet(self.0.join(other.0))
     }
 }
@@ -155,10 +173,8 @@ impl InputExt for Input {
         use crate::constructor::Error;
         use crate::sort::{Deterministic, Seeded, Unseeded};
         if self.sort_key().is_some()
-            && (core::any::TypeId::of::<S>()
-                == core::any::TypeId::of::<Deterministic<Unseeded>>()
-                || core::any::TypeId::of::<S>()
-                    == core::any::TypeId::of::<Deterministic<Seeded>>())
+            && (core::any::TypeId::of::<S>() == core::any::TypeId::of::<Deterministic<Unseeded>>()
+                || core::any::TypeId::of::<S>() == core::any::TypeId::of::<Deterministic<Seeded>>())
         {
             return Err(Error::SortKeyForbidden);
         }
@@ -206,10 +222,10 @@ mod result {
     use bitcoin::key::{PublicKey, XOnlyPublicKey};
     use bitcoin::locktime::absolute;
     use bitcoin::taproot::{ControlBlock, LeafVersion, TapLeafHash, TapNodeHash};
-    use bitcoin::{ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness, ecdsa, taproot};
+    use bitcoin::{ecdsa, taproot, ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness};
 
-    use psbt_v2::PsbtSighashType;
     use psbt_v2::raw;
+    use psbt_v2::PsbtSighashType;
 
     use crate::lattice::partial::JoinResult;
 

@@ -2,6 +2,15 @@ pub use psbt_v2::v2::Psbt;
 
 use psbt_v2::v2::{Input, Output};
 
+/// Error returned by [`UnorderedPsbt::try_join`].
+#[derive(Debug)]
+pub enum JoinError {
+    /// A field-level conflict in the joined PSBT.
+    Conflict(ResultUnorderedPsbt),
+    /// Two inputs or outputs share the same explicit sort key after joining.
+    DuplicateSortKey,
+}
+
 use crate::fields::GlobalFieldsExt as _;
 use crate::global::Global;
 use crate::global::GlobalExt;
@@ -86,22 +95,31 @@ impl UnorderedPsbt {
 
     /// Join two `UnorderedPsbt`s.
     ///
-    /// Returns `Ok` when there are no conflicts, `Err` with a
-    /// conflict-annotated result otherwise.
+    /// Returns `Ok` when there are no conflicts.
+    /// Returns `Err(JoinError::Conflict(_))` on field-level conflicts.
+    /// Returns `Err(JoinError::DuplicateSortKey)` when the merged set contains
+    /// two inputs or two outputs with the same explicit sort key.
     ///
-    /// `input_count` and `output_count` are taken from the post-join set
-    /// sizes, so they never cause spurious conflicts.
-    // FIXME for now, just represent a duplicate key as a *single* conflicted
-    // value as there is no way to represent "long range" conflicts
-    //
-    // TODO conceptually this error needs to be enum { ResultUnorderedPsbt | DuplicateSortKey }.
-    // perhaps InputSet or OutputSet should already enforce this invariant. A
-    // Join can be defined by renaming Conflict to an enum Error, containing
-    // Conflict(Vec<V>) as it is currently defined as well as
-    // InvariantViolation(Vec<InvriantError>) where InvariantError is a  error
-    // type for InvariantChecks perhaps?
-    pub fn try_join(self, other: Self) -> Result<Self, ResultUnorderedPsbt> {
-        self.wrap().join(other.wrap()).try_unwrap()
+    /// `input_count` and `output_count` are derived from post-join set sizes.
+    ///
+    /// FIXME: represent duplicate sort keys as a "long-range conflict" in the
+    /// lattice (rather than a separate error variant) as Conflict values with
+    /// len() == 1 instead of the typical len() == 2
+    pub fn try_join(self, other: Self) -> Result<Self, JoinError> {
+        let joined = self
+            .wrap()
+            .join(other.wrap())
+            .try_unwrap()
+            .map_err(JoinError::Conflict)?;
+        joined
+            .inputs
+            .check_no_duplicate_sort_keys()
+            .map_err(|_| JoinError::DuplicateSortKey)?;
+        joined
+            .outputs
+            .check_no_duplicate_sort_keys()
+            .map_err(|_| JoinError::DuplicateSortKey)?;
+        Ok(joined)
     }
 
     pub fn wrap(self) -> ResultUnorderedPsbt {

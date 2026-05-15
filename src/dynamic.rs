@@ -7,8 +7,6 @@ use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, 
 
 use crate::constructor::{Constructor as StaticConstructor, Error};
 use crate::fields::{GlobalFieldsExt as _, GlobalModifiableExt as _};
-use crate::input::InputExt as _;
-use crate::output::OutputExt as _;
 
 use crate::sort::{Deterministic, ExplicitSortKeys, Relaxed, Seeded, SortMode, Unseeded};
 use crate::tx::UnorderedPsbt;
@@ -298,7 +296,10 @@ impl Constructor {
             b.global.clear_outputs_modifiable();
         }
 
-        let joined = a.try_join(b).map_err(Error::JoinConflict)?;
+        let joined = a.try_join(b).map_err(|e| match e {
+                crate::tx::JoinError::Conflict(c) => Error::JoinConflict(c),
+                crate::tx::JoinError::DuplicateSortKey => Error::DuplicateSortKey,
+            })?;
         Ok(Constructor { modifiable: result_modifiable, sort_mode: self.sort_mode, psbt: joined })
     }
 }
@@ -309,6 +310,7 @@ mod tests {
     use super::*;
     use crate::constructor::{Constructor, Error, ExplicitSortKeys, Relaxed, Unseeded};
     use crate::creator::Creator;
+    use crate::output::OutputExt as _;
 
     use psbt_v2::v2::{
         Creator as Bip370Creator, InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable,

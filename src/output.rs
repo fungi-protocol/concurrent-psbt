@@ -28,8 +28,23 @@ impl OutputSet {
 
     /// Returns `true` if any output in the set already has this sort key.
     pub fn has_sort_key(&self, key: &[u8]) -> bool {
-        use crate::output::OutputExt as _;
-        self.0.values().any(|o| o.sort_key().map(|k| k.as_slice()) == Some(key))
+        self.0
+            .values()
+            .any(|o| o.sort_key().map(|k| k.as_slice()) == Some(key))
+    }
+
+    /// Return `Err(())` if any two outputs share the same explicit sort key.
+    pub fn check_no_duplicate_sort_keys(&self) -> Result<(), ()> {
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        for output in self.0.values() {
+            if let Some(k) = output.sort_key() {
+                if !seen.insert(k.clone()) {
+                    return Err(());
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn iter_unique_ids(&self) -> impl Iterator<Item = &Vec<u8>> {
@@ -143,10 +158,8 @@ impl OutputExt for Output {
         use crate::constructor::Error;
         use crate::sort::{Deterministic, Seeded, Unseeded};
         if self.sort_key().is_some()
-            && (core::any::TypeId::of::<S>()
-                == core::any::TypeId::of::<Deterministic<Unseeded>>()
-                || core::any::TypeId::of::<S>()
-                    == core::any::TypeId::of::<Deterministic<Seeded>>())
+            && (core::any::TypeId::of::<S>() == core::any::TypeId::of::<Deterministic<Unseeded>>()
+                || core::any::TypeId::of::<S>() == core::any::TypeId::of::<Deterministic<Seeded>>())
         {
             return Err(Error::SortKeyForbidden);
         }
@@ -174,6 +187,9 @@ pub struct ResultOutputSet(HashMap<Vec<u8>, ResultOutput>);
 
 impl Join for ResultOutputSet {
     fn join(self, other: Self) -> Self {
+        // FIXME after constructing check invariants (no duplicate sort keys).
+        // for any conflicting entries, replace them with separate
+        // Conflict(vec![v]) (just one value)
         ResultOutputSet(self.0.join(other.0))
     }
 }

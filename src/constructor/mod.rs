@@ -72,7 +72,10 @@ impl<M: Mod, S: SortMode + 'static> Constructor<M, S> {
         self.0
             .try_join(other.0)
             .map(|p| Constructor(p, PhantomData))
-            .map_err(Error::JoinConflict)
+            .map_err(|e| match e {
+                crate::tx::JoinError::Conflict(c) => Error::JoinConflict(c),
+                crate::tx::JoinError::DuplicateSortKey => Error::DuplicateSortKey,
+            })
     }
 }
 
@@ -120,17 +123,14 @@ impl<S: SortMode + 'static> Constructor<Modifiable, S> {
     ///   existing input's sort key.
     pub fn input(self, input: Input) -> Result<Self, Error> {
         use crate::input::InputExt as _;
-        // FIXME this validation logic should be done in UnorderedPsbt::try_join, duplicate keys are never OK
         input.validate_sort_key::<S>()?;
-        if let Some(k) = input.sort_key() {
-            if self.0.inputs.has_sort_key(k) {
-                return Err(Error::DuplicateSortKey);
-            }
-        }
         self.0
             .try_join(UnorderedPsbt::from_input(input))
             .map(|p| Constructor(p, PhantomData))
-            .map_err(Error::JoinConflict)
+            .map_err(|e| match e {
+                crate::tx::JoinError::Conflict(c) => Error::JoinConflict(c),
+                crate::tx::JoinError::DuplicateSortKey => Error::DuplicateSortKey,
+            })
     }
 
     /// Add an output. Requires `PSBT_OUT_UNIQUE_ID`.
@@ -143,15 +143,13 @@ impl<S: SortMode + 'static> Constructor<Modifiable, S> {
         use crate::output::OutputExt as _;
         output.validate_has_unique_id()?;
         output.validate_sort_key::<S>()?;
-        if let Some(k) = output.sort_key() {
-            if self.0.outputs.has_sort_key(k) {
-                return Err(Error::DuplicateSortKey);
-            }
-        }
         self.0
             .try_join(UnorderedPsbt::from_output(output))
             .map(|p| Constructor(p, PhantomData))
-            .map_err(Error::JoinConflict)
+            .map_err(|e| match e {
+                crate::tx::JoinError::Conflict(c) => Error::JoinConflict(c),
+                crate::tx::JoinError::DuplicateSortKey => Error::DuplicateSortKey,
+            })
     }
 
     /// Lock inputs: transition to `OutputsOnlyModifiable`.
@@ -180,7 +178,10 @@ impl<S: SortMode + 'static> Constructor<InputsOnlyModifiable, S> {
         self.0
             .try_join(singleton)
             .map(|p| Constructor(p, PhantomData))
-            .map_err(Error::JoinConflict)
+            .map_err(|e| match e {
+                crate::tx::JoinError::Conflict(c) => Error::JoinConflict(c),
+                crate::tx::JoinError::DuplicateSortKey => Error::DuplicateSortKey,
+            })
     }
 
     /// Wrap an existing PSBT, validating it is unordered and inputs-only modifiable.
@@ -215,7 +216,10 @@ impl<S: SortMode + 'static> Constructor<OutputsOnlyModifiable, S> {
         self.0
             .try_join(singleton)
             .map(|p| Constructor(p, PhantomData))
-            .map_err(Error::JoinConflict)
+            .map_err(|e| match e {
+                crate::tx::JoinError::Conflict(c) => Error::JoinConflict(c),
+                crate::tx::JoinError::DuplicateSortKey => Error::DuplicateSortKey,
+            })
     }
 
     /// Wrap an existing PSBT, validating it is unordered and outputs-only modifiable.
@@ -248,7 +252,6 @@ mod tests {
     use crate::creator::Creator;
     use crate::fields::GlobalFieldsExt as _;
     use crate::input::InputExt as _;
-    use crate::output::OutputExt as _;
     use psbt_v2::v2::Creator as Bip370Creator;
 
     #[test]
