@@ -26,6 +26,12 @@ impl OutputSet {
         self.0.values()
     }
 
+    /// Returns `true` if any output in the set already has this sort key.
+    pub fn has_sort_key(&self, key: &[u8]) -> bool {
+        use crate::output::OutputExt as _;
+        self.0.values().any(|o| o.sort_key().map(|k| k.as_slice()) == Some(key))
+    }
+
     pub fn iter_unique_ids(&self) -> impl Iterator<Item = &Vec<u8>> {
         self.0.keys()
     }
@@ -229,7 +235,7 @@ impl ResultOutput {
 
         Ok(Output {
             amount: self.amount.expect("verified all fields are Ok"),
-            script_pubkey: self.script_pubkey.expect("verified all fields are Ok"), // FIXME allow empty to non-empty to behave like Option<ScriptBuf> instead of ScriptBuf under equality
+            script_pubkey: self.script_pubkey.expect("verified all fields are Ok"), // TODO (BIP 375): allow empty→non-empty to behave like Option<ScriptBuf> instead of ScriptBuf under equality
             redeem_script: self
                 .redeem_script
                 .try_unwrap()

@@ -76,7 +76,7 @@ impl Default for Creator {
 /// A [`Creator`] with a specific sort mode already chosen.
 pub struct CreatorWith<S: SortMode>(pub(crate) UnorderedPsbt, pub(crate) PhantomData<S>);
 
-impl<S: SortMode> CreatorWith<S> {
+impl<S: SortMode + 'static> CreatorWith<S> {
     /// Consume and return the `UnorderedPsbt`.
     pub fn into_unordered_psbt(self) -> UnorderedPsbt {
         self.0

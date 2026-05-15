@@ -46,6 +46,12 @@ impl InputSet {
         self.0.values()
     }
 
+    /// Returns `true` if any input in the set already has this sort key.
+    pub fn has_sort_key(&self, key: &[u8]) -> bool {
+        use crate::input::InputExt as _;
+        self.0.values().any(|i| i.sort_key().map(|k| k.as_slice()) == Some(key))
+    }
+
     pub fn len(&self) -> usize {
         self.0.len()
     }

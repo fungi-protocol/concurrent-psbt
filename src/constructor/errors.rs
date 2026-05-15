@@ -27,6 +27,21 @@ pub enum Error {
     /// A locked (non-modifiable) set contained items not present in the other side.
     #[error("a locked set contained items not present in the other constructor")]
     LockedSetMismatch,
+
+    /// Two outputs share the same `PSBT_OUT_UNIQUE_ID`.
+    #[error("two outputs share the same PSBT_OUT_UNIQUE_ID")]
+    DuplicateOutputUniqueId,
+
+    /// An explicit sort key was provided but the sort mode forbids it.
+    ///
+    /// In [`crate::sort::Deterministic`] mode all sort keys are derived from
+    /// the seed; setting an explicit key is invalid.
+    #[error("explicit sort key is not permitted in Deterministic sort mode")]
+    SortKeyForbidden,
+
+    /// Two inputs or two outputs share the same explicit sort key.
+    #[error("duplicate explicit sort key detected")]
+    DuplicateSortKey,
 }
 
 impl PartialEq for Error {
@@ -39,6 +54,9 @@ impl PartialEq for Error {
                 | (Error::MissingOutputUniqueId, Error::MissingOutputUniqueId)
                 | (Error::JoinConflict(_), Error::JoinConflict(_))
                 | (Error::LockedSetMismatch, Error::LockedSetMismatch)
+                | (Error::DuplicateOutputUniqueId, Error::DuplicateOutputUniqueId)
+                | (Error::SortKeyForbidden, Error::SortKeyForbidden)
+                | (Error::DuplicateSortKey, Error::DuplicateSortKey)
         )
     }
 }

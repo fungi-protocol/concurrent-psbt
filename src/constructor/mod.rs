@@ -24,16 +24,55 @@ pub use errors::{Error, SortingError};
 ///
 /// Fails if any key is missing or if two items share the same sort key.
 
-// -- Validation --------------------------------------------------------------
+// -- Sort-mode validation helpers --------------------------------------------
 
-fn validate_output_unique_ids(psbt: &Psbt) -> Result<(), Error> {
-    if psbt.outputs.iter().all(|o| o.has_unique_id()) {
-        Ok(())
-    } else {
-        Err(Error::MissingOutputUniqueId)
+// FIXME move to InputExt and rename to validate_input_sort_key
+/// Validate that an input is consistent with sort mode `S`.
+fn validate_input_sort_mode<S: SortMode + 'static>(input: &Input) -> Result<(), Error> {
+    use crate::input::InputExt as _;
+    use crate::sort::{Deterministic, Seeded, Unseeded};
+    if input.sort_key().is_some()
+        && (core::any::TypeId::of::<S>() == core::any::TypeId::of::<Deterministic<Unseeded>>()
+            || core::any::TypeId::of::<S>() == core::any::TypeId::of::<Deterministic<Seeded>>())
+    {
+        return Err(Error::SortKeyForbidden);
     }
+    Ok(())
 }
 
+// FIXME move to OutputExt and rename to validate_outputput_sort_key
+/// Validate that an output is consistent with sort mode `S`.
+fn validate_output_sort_mode<S: SortMode + 'static>(output: &Output) -> Result<(), Error> {
+    use crate::output::OutputExt as _;
+    use crate::sort::{Deterministic, Seeded, Unseeded};
+    if output.sort_key().is_some()
+        && (core::any::TypeId::of::<S>() == core::any::TypeId::of::<Deterministic<Unseeded>>()
+            || core::any::TypeId::of::<S>() == core::any::TypeId::of::<Deterministic<Seeded>>())
+    {
+        return Err(Error::SortKeyForbidden);
+    }
+    Ok(())
+}
+
+// -- Validation --------------------------------------------------------------
+
+// FIXME extension trait on PSBT, rename to validate_all_outputs_have_unique_ids
+fn validate_output_unique_ids(psbt: &Psbt) -> Result<(), Error> {
+    use crate::output::OutputExt as _;
+    use std::collections::HashSet;
+    let mut seen = HashSet::new();
+    for output in &psbt.outputs {
+        if !output.has_unique_id() {
+            return Err(Error::MissingOutputUniqueId);
+        }
+        if !seen.insert(output.unique_id()) {
+            return Err(Error::DuplicateOutputUniqueId);
+        }
+    }
+    Ok(())
+}
+
+// FIXME move to OutputExt, rename validate_output_has_unique_ids
 fn validate_output_unique_id(output: &Output) -> Result<(), Error> {
     if output.has_unique_id() {
         Ok(())
@@ -51,20 +90,20 @@ fn validate_output_unique_id(output: &Output) -> Result<(), Error> {
 pub struct Constructor<M: Mod, S: SortMode>(UnorderedPsbt, PhantomData<(M, S)>);
 
 // Manual impl: derive would add unnecessary bounds on M and S.
-impl<M: Mod, S: SortMode> core::fmt::Debug for Constructor<M, S> {
+impl<M: Mod, S: SortMode + 'static> core::fmt::Debug for Constructor<M, S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("Constructor").field(&self.0).finish()
     }
 }
 
 // Manual impl: derive would add unnecessary bounds on M and S.
-impl<M: Mod, S: SortMode> PartialEq for Constructor<M, S> {
+impl<M: Mod, S: SortMode + 'static> PartialEq for Constructor<M, S> {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
     }
 }
 
-impl<M: Mod, S: SortMode> Constructor<M, S> {
+impl<M: Mod, S: SortMode + 'static> Constructor<M, S> {
     /// Return the inner `UnorderedPsbt`.
     pub fn into_psbt(self) -> UnorderedPsbt {
         self.0
@@ -93,7 +132,7 @@ impl<M: Mod, S: SortMode> Constructor<M, S> {
     }
 }
 
-impl<M: Mod, S: SortMode> Constructor<M, S> {
+impl<M: Mod, S: SortMode + 'static> Constructor<M, S> {
     /// Convert into a [`Sorter<S>`], consuming the constructor.
     ///
     /// Allows sorting independently of the modifiability typestate.
@@ -108,7 +147,7 @@ impl<M: Mod, S: SortMode> Constructor<M, S> {
     }
 }
 
-impl<S: SortMode> Constructor<Modifiable, S> {
+impl<S: SortMode + 'static> Constructor<Modifiable, S> {
     /// Wrap an existing PSBT, validating it is unordered and fully modifiable.
     ///
     /// The sort mode `S` must match the `PSBT_GLOBAL_SORT_DETERMINISTIC` field
@@ -131,11 +170,18 @@ impl<S: SortMode> Constructor<Modifiable, S> {
 
     /// Add an input.
     ///
-    /// Returns `Err(Error::JoinConflict(_))` if the same outpoint is already
-    /// present with conflicting field values. The payload is the
-    /// conflict-annotated `ResultUnorderedPsbt` with correct counts.
+    /// Enforces sort-mode invariants:
+    /// - In `Deterministic<_>` mode, explicit sort keys are forbidden.
+    /// - If the input has an explicit sort key, it must not duplicate any
+    ///   existing input's sort key.
     pub fn input(self, input: Input) -> Result<Self, Error> {
-        // FIXME enforce that sortmode invariants preserved (no sort keys if deterministic, or all sort keys defined if explicit, no duplicate sort keys ever, no unique output ids duplicated ever)
+        use crate::input::InputExt as _;
+        validate_input_sort_mode::<S>(&input)?;
+        if let Some(k) = input.sort_key() {
+            if self.0.inputs.has_sort_key(k) {
+                return Err(Error::DuplicateSortKey);
+            }
+        }
         self.0
             .try_join(UnorderedPsbt::from_input(input))
             .map(|p| Constructor(p, PhantomData))
@@ -144,12 +190,19 @@ impl<S: SortMode> Constructor<Modifiable, S> {
 
     /// Add an output. Requires `PSBT_OUT_UNIQUE_ID`.
     ///
-    /// Returns `Err(Error::JoinConflict(_))` if the same unique ID is already
-    /// present with conflicting field values. The payload is the
-    /// conflict-annotated `ResultUnorderedPsbt` with correct counts.
+    /// Enforces sort-mode invariants:
+    /// - In `Deterministic<_>` mode, explicit sort keys are forbidden.
+    /// - If the output has an explicit sort key, it must not duplicate any
+    ///   existing output's sort key.
     pub fn output(self, output: Output) -> Result<Self, Error> {
-        // FIXME enforce that sortmode invariants preserved (no sort keys if deterministic, or all sort keys defined if explicit, no duplicate sort keys ever, no unique output ids duplicated ever)
+        use crate::output::OutputExt as _;
         validate_output_unique_id(&output)?;
+        validate_output_sort_mode::<S>(&output)?;
+        if let Some(k) = output.sort_key() {
+            if self.0.outputs.has_sort_key(k) {
+                return Err(Error::DuplicateSortKey);
+            }
+        }
         self.0
             .try_join(UnorderedPsbt::from_output(output))
             .map(|p| Constructor(p, PhantomData))
@@ -169,7 +222,7 @@ impl<S: SortMode> Constructor<Modifiable, S> {
     }
 }
 
-impl<S: SortMode> Constructor<InputsOnlyModifiable, S> {
+impl<S: SortMode + 'static> Constructor<InputsOnlyModifiable, S> {
     /// Add an input.
     ///
     /// Returns `Err(Error::JoinConflict(_))` if the same outpoint is already
@@ -205,7 +258,7 @@ impl<S: SortMode> Constructor<InputsOnlyModifiable, S> {
     }
 }
 
-impl<S: SortMode> Constructor<OutputsOnlyModifiable, S> {
+impl<S: SortMode + 'static> Constructor<OutputsOnlyModifiable, S> {
     /// Add an output. Requires `PSBT_OUT_UNIQUE_ID`.
     ///
     /// Returns `Err(Error::JoinConflict(_))` if the same unique ID is already
@@ -240,12 +293,13 @@ impl<S: SortMode> Constructor<OutputsOnlyModifiable, S> {
     }
 }
 
+// FIXME move to sort.rs submodule in this directory
 // -- try_sort / sort on Constructor -----------------------------------------
 
 impl<M, S> Constructor<M, S>
 where
     M: Mod,
-    S: SortMode,
+    S: SortMode + 'static,
     crate::sort::Sorter<S>: crate::sort::TrySortable,
 {
     /// Sort into a `Psbt`. Returns `Err` only for [`ExplicitSortKeys`] when
@@ -258,7 +312,7 @@ where
 impl<M, S> Constructor<M, S>
 where
     M: Mod,
-    S: SortMode,
+    S: SortMode + 'static,
     crate::sort::Sorter<S>: crate::sort::Sortable,
 {
     /// Sort into a `Psbt` infallibly (only available for
@@ -415,6 +469,7 @@ mod tests {
     fn try_sort_produces_valid_updater() {
         use psbt_v2::v2::Constructor as Bip370Constructor;
         let constructor = Creator::new().explicit_sort_keys().constructor();
+        // FIXME also test with something to sort, and non modifiable variants, all should correspond to BIP370 constructor and not error when converting
         let psbt = constructor.try_sort().unwrap();
         let _updater = Bip370Constructor::<Modifiable>::new(psbt)
             .unwrap()
@@ -440,10 +495,6 @@ mod tests {
             Err(SortingError::MissingSortKey)
         ));
     }
-
-    // Note: finalize_order_rejects_missing_deterministic_field and
-    // finalize_order_rejects_invalid_deterministic_value are no longer needed:
-    // the sort mode is now encoded in the type, so these cases cannot arise.
 
     #[test]
     fn try_sort_rejects_duplicate_input_sort_keys() {
@@ -962,6 +1013,83 @@ mod tests {
         // and the sort is deterministic per seed.
         assert_eq!(order_a, make_ordered(b"seed-aaaa-16byte".to_vec()));
         assert_eq!(order_b, make_ordered(b"seed-bbbb-16byte".to_vec()));
+    }
+
+    // -- sort-mode invariant tests -------------------------------------------
+
+    #[test]
+    fn deterministic_input_rejects_explicit_sort_key() {
+        let mut input = psbt_v2::v2::Input::new(&bitcoin::OutPoint::null());
+        input.set_sort_key(vec![0x01]);
+        let c = Creator::new().deterministic_sorting().constructor();
+        assert_eq!(c.input(input), Err(Error::SortKeyForbidden));
+    }
+
+    #[test]
+    fn deterministic_output_rejects_explicit_sort_key() {
+        let mut out = psbt_v2::v2::Output::new(bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(1000),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        });
+        out.set_unique_id(vec![0x01; 16]);
+        out.set_sort_key(vec![0x01]);
+        let c = Creator::new().deterministic_sorting().constructor();
+        assert_eq!(c.output(out), Err(Error::SortKeyForbidden));
+    }
+
+    #[test]
+    fn duplicate_input_sort_key_rejected_eagerly() {
+        let mut op_a = bitcoin::OutPoint::null();
+        op_a.vout = 0;
+        let mut op_b = bitcoin::OutPoint::null();
+        op_b.vout = 1;
+        let mut input_a = psbt_v2::v2::Input::new(&op_a);
+        input_a.set_sort_key(vec![0x01]);
+        let mut input_b = psbt_v2::v2::Input::new(&op_b);
+        input_b.set_sort_key(vec![0x01]); // same key
+        let c = Creator::new().explicit_sort_keys().constructor();
+        let c = c.input(input_a).unwrap();
+        assert_eq!(c.input(input_b), Err(Error::DuplicateSortKey));
+    }
+
+    #[test]
+    fn duplicate_output_sort_key_rejected_eagerly() {
+        let mut out_a = psbt_v2::v2::Output::new(bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(1000),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        });
+        out_a.set_unique_id(vec![0x01; 16]);
+        out_a.set_sort_key(vec![0x01]);
+        let mut out_b = psbt_v2::v2::Output::new(bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(2000),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        });
+        out_b.set_unique_id(vec![0x02; 16]);
+        out_b.set_sort_key(vec![0x01]); // same key
+        let c = Creator::new().explicit_sort_keys().constructor();
+        let c = c.output(out_a).unwrap();
+        assert_eq!(c.output(out_b), Err(Error::DuplicateSortKey));
+    }
+
+    #[test]
+    fn duplicate_output_unique_id_rejected_by_constructor_new() {
+        let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
+        let mut out_a = psbt_v2::v2::Output::new(bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(1000),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        });
+        out_a.set_unique_id(vec![0x01; 16]);
+        let mut out_b = psbt_v2::v2::Output::new(bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(2000),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        });
+        out_b.set_unique_id(vec![0x01; 16]); // duplicate
+        psbt.outputs = vec![out_a, out_b];
+        psbt.global.output_count = 2;
+        assert_eq!(
+            Constructor::<Modifiable, Relaxed<Unseeded>>::new(psbt),
+            Err(Error::DuplicateOutputUniqueId)
+        );
     }
 
     // -- no_more_inputs/no_more_outputs → Sorter<S> -------------------------

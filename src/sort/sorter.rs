@@ -6,20 +6,42 @@ use super::traits::SortMode;
 
 // -- Key derivation ----------------------------------------------------------
 
-/// Derive a sort key from a seed and an item identifier using HMAC-SHA256.
+/// Domain separator tag for deterministic sort-key derivation.
 ///
-/// The derived key is the full 32-byte HMAC output, giving a uniform
-/// lexicographic ordering that is deterministic given `seed` and `id`.
+/// Per the multiparty-protocol spec: BIP341-style tagged hash with this tag
+/// as the domain separator. The TODO in the spec to pick a real name is noted;
+/// we use the placeholder until the BIP number is assigned.
+const SORT_KEY_TAG: &[u8] = b"BIP ???? deterministic ordering";
+
+/// Derive a sort key from a seed and an item identifier using a BIP341-style
+/// tagged SHA256 hash.
+///
+/// The hash is `SHA256(SHA256(tag) || SHA256(tag) || seed || id)`, giving a
+/// 32-byte output. The tag midstate (`SHA256(tag) || SHA256(tag)`) is computed
+/// once per call; when many keys share the same seed the seed can be hashed
+/// into the midstate separately for efficiency (not done here).
+///
+/// Per spec:
+/// - For inputs: `id = TXID || vout_LE`  (36 bytes, see [`OutPointIdentifier`])
+/// - For outputs: `id = PSBT_OUT_UNIQUE_ID` (16 bytes)
 pub(crate) fn derive_sort_key(seed: &[u8], id: &[u8]) -> Vec<u8> {
-    use bitcoin::hashes::{hmac, sha256, Hash, HashEngine};
-    // FIXME use a taproot style hash with two copies of the hash of tag as full 1st block
-    // (so midstate is cacheable) for the type, as a domain separator.
-    // then two copies of the hash of the seed. this midstate is sharable for
-    // all IDs. then just the id. output IDs are constrained to 16 bytes and
-    // outpoints are 36, both fit in one block and don't allow length extension.
-    let mut engine = hmac::HmacEngine::<sha256::Hash>::new(seed);
+    use bitcoin::hashes::{sha256, sha256t, Hash, HashEngine};
+
+    struct SortKeyTag;
+    impl sha256t::Tag for SortKeyTag {
+        fn engine() -> sha256::HashEngine {
+            let tag_hash = sha256::Hash::hash(SORT_KEY_TAG);
+            let mut engine = sha256::HashEngine::default();
+            engine.input(tag_hash.as_byte_array());
+            engine.input(tag_hash.as_byte_array());
+            engine
+        }
+    }
+
+    let mut engine = <SortKeyTag as sha256t::Tag>::engine();
+    engine.input(seed);
     engine.input(id);
-    hmac::Hmac::<sha256::Hash>::from_engine(engine)
+    sha256t::Hash::<SortKeyTag>::from_engine(engine)
         .as_byte_array()
         .to_vec()
 }

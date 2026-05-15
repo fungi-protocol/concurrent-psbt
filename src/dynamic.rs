@@ -216,7 +216,7 @@ impl Constructor {
         M: Mod,
         S: SortMode,
         M: ModifiabilityMarker,
-        S: SortModeMarker,
+        S: SortModeMarker + 'static,
     {
         if self.modifiable != M::ANY_MODIFIABILITY {
             return Err((IntoConstructorError::ModifiabilityMismatch, self));
@@ -315,7 +315,7 @@ mod tests {
         Creator as Bip370Creator, InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable,
     };
 
-    fn any<M: Mod + ModifiabilityMarker, S: SortMode + SortModeMarker>(
+    fn any<M: Mod + ModifiabilityMarker, S: SortMode + SortModeMarker + 'static>(
         c: Constructor<M, S>,
     ) -> DynConstructor {
         DynConstructor {
