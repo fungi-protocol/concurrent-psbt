@@ -102,6 +102,14 @@
               mkdir -p $out
             '';
 
+        clippy = craneLibNightly.cargoClippy (
+          commonArgs
+          // {
+            inherit cargoArtifacts;
+            cargoClippyExtraArgs = "--all-targets --all-features -- -D warnings";
+          }
+        );
+
         fuzz-afl-verify =
           pkgs.runCommand "fuzz-afl-verify"
             {
