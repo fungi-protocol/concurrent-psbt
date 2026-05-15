@@ -306,7 +306,8 @@ impl Constructor {
 mod tests {
     use super::Constructor as DynConstructor;
     use super::*;
-    use crate::constructor::{Constructor, Error, ExplicitSortKeys, Relaxed, Unseeded};
+    use crate::constructor::{Constructor, Error};
+    use crate::sort::{ExplicitSortKeys, Relaxed, Unseeded};
     use crate::creator::Creator;
     use crate::psbt::output::OutputExt as _;
 
