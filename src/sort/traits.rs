@@ -70,15 +70,6 @@ impl<T: SeedState> SortMode for Relaxed<T> {}
 
 // -- Sort capability traits --------------------------------------------------
 
-/// A sort mode that can always sort without failure.
-///
-/// Implemented by [`ExplicitSortKeys`], [`Deterministic<Seeded>`], and
-/// [`Relaxed<Seeded>`].
-pub trait CanSortInfallibly: SortMode {}
-impl CanSortInfallibly for ExplicitSortKeys {}
-impl CanSortInfallibly for Deterministic<Seeded> {}
-impl CanSortInfallibly for Relaxed<Seeded> {}
-
 /// A [`super::Sorter`] that can produce a sorted [`psbt_v2::v2::Psbt`], or
 /// return a [`crate::constructor::SortingError`].
 pub trait TrySortable: Sized {

@@ -14,12 +14,8 @@ mod deterministic;
 mod relaxed;
 
 // Re-export the public surface flat, mirroring the old sort.rs interface.
-pub use traits::{
-    CanSortInfallibly, Deterministic, ExplicitSortKeys, Relaxed, Seeded, SeedState, SortMode,
-    Sortable, Unseeded,
-    // TrySortable is pub(crate); only needed internally for sorting dispatch.
-    TrySortable,
-};
+pub use traits::{Deterministic, ExplicitSortKeys, Relaxed, Seeded, SeedState, SortMode, Unseeded};
+pub(crate) use traits::{Sortable, TrySortable};
 pub use sorter::{Sorter, SorterError};
 pub(crate) use sorter::{derive_sort_key, OutPointIdentifier};
 
@@ -30,7 +26,6 @@ mod tests {
     use crate::psbt::input::InputExt as _;
 
     fn assert_sort_mode<S: SortMode>() {}
-    fn assert_infallible<S: CanSortInfallibly>() {}
 
     #[test]
     fn sort_modes_implement_trait() {
@@ -39,13 +34,6 @@ mod tests {
         assert_sort_mode::<Deterministic<Seeded>>();
         assert_sort_mode::<Relaxed<Unseeded>>();
         assert_sort_mode::<Relaxed<Seeded>>();
-    }
-
-    #[test]
-    fn infallible_sort_modes() {
-        assert_infallible::<ExplicitSortKeys>();
-        assert_infallible::<Deterministic<Seeded>>();
-        assert_infallible::<Relaxed<Seeded>>();
     }
 
     // -- Sorter::new checked constructor tests --------------------------------

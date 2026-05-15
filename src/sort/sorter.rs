@@ -105,8 +105,8 @@ pub enum SorterError {
 /// - [`crate::constructor::Constructor::into_sorter`] (flags already validated), or
 /// - the checked `Sorter::<S>::new(psbt)` on each mode-specific impl.
 ///
-/// Call `try_sort()` for a fallible sort. On [`super::traits::CanSortInfallibly`]
-/// modes `sort()` is also available.
+/// Call `try_sort()` for a fallible sort. On seeded or explicit-key modes
+/// `sort()` is also available (infallible).
 pub struct Sorter<S: SortMode>(
     pub(super) UnorderedPsbt,
     pub(super) core::marker::PhantomData<S>,
@@ -162,7 +162,7 @@ where
     /// Sort infallibly and return the sorted [`psbt_v2::v2::Psbt`].
     ///
     /// Only available when the sort mode can always produce a sorted result
-    /// (i.e. [`super::traits::CanSortInfallibly`] modes).
+    /// (seeded or explicit-key modes).
     pub fn try_into_sorted_psbt(self) -> psbt_v2::v2::Psbt {
         use super::traits::Sortable as _;
         self.sort_psbt()

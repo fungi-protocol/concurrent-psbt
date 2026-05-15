@@ -109,14 +109,14 @@ pub enum IntoConstructorError {
 // -- ModifiabilityMarker / SortModeMarker ------------------------------------
 
 mod any_marker {
-    pub trait ModifiabilityMarker {
+    pub(crate) trait ModifiabilityMarker {
         const ANY_MODIFIABILITY: super::AnyModifiability;
     }
-    pub trait SortModeMarker {
+    pub(crate) trait SortModeMarker {
         const ANY_SORT_MODE: super::AnySortMode;
     }
 }
-pub use any_marker::{ModifiabilityMarker, SortModeMarker};
+pub(crate) use any_marker::{ModifiabilityMarker, SortModeMarker};
 
 impl ModifiabilityMarker for Modifiable {
     const ANY_MODIFIABILITY: AnyModifiability = AnyModifiability::Modifiable;
@@ -207,6 +207,10 @@ impl Constructor {
     ///
     /// Returns `Err` if the runtime flags don't match `M` or `S`.
     /// The PSBT is returned inside the error so it isn't lost.
+    // ModifiabilityMarker and SortModeMarker are pub(crate) — the bounds are
+    // intentionally not nameable by downstream; they are an impl detail of the
+    // static-dispatch machinery.
+    #[allow(private_bounds)]
     pub fn try_into_constructor<M, S>(
         self,
     ) -> Result<StaticConstructor<M, S>, (IntoConstructorError, Self)>
@@ -306,7 +310,8 @@ impl Constructor {
 mod tests {
     use super::Constructor as DynConstructor;
     use super::*;
-    use crate::constructor::{Constructor, Error, ExplicitSortKeys, Relaxed, Unseeded};
+    use crate::constructor::{Constructor, Error};
+    use crate::sort::{ExplicitSortKeys, Relaxed, Unseeded};
     use crate::creator::Creator;
     use crate::psbt::output::OutputExt as _;
 
