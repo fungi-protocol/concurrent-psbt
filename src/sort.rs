@@ -5,7 +5,7 @@
 /// The derived key is the full 32-byte HMAC output, giving a uniform
 /// lexicographic ordering that is deterministic given `seed` and `id`.
 pub(crate) fn derive_sort_key(seed: &[u8], id: &[u8]) -> Vec<u8> {
-    use bitcoin::hashes::{Hash, HashEngine, hmac, sha256};
+    use bitcoin::hashes::{hmac, sha256, Hash, HashEngine};
     // FIXME use a taproot style hash with two copies of the hash of tag as full 1st block
     // (so midstate is cacheable) for the type, as a domain separator.
     // then two copies of the hash of the seed. this midstate is sharable for
@@ -124,6 +124,17 @@ impl CanSortInfallibly for ExplicitSortKeys {}
 impl CanSortInfallibly for Deterministic<Seeded> {}
 impl CanSortInfallibly for Relaxed<Seeded> {}
 
+/// A [`Sorter`] that can produce a sorted [`psbt_v2::v2::Psbt`] or return a
+/// [`crate::constructor::SortingError`].
+pub trait TrySortable: Sized {
+    fn try_sort_psbt(self) -> Result<psbt_v2::v2::Psbt, crate::constructor::SortingError>;
+}
+
+/// A [`Sorter`] that can produce a sorted [`psbt_v2::v2::Psbt`] infallibly.
+pub trait Sortable: TrySortable {
+    fn sort_psbt(self) -> psbt_v2::v2::Psbt;
+}
+
 // -- Sorter ------------------------------------------------------------------
 
 use crate::tx::UnorderedPsbt;
@@ -237,6 +248,7 @@ impl Sorter<Relaxed<Unseeded>> {
     }
 
     /// Provide the sort seed, transitioning to [`Sorter<Relaxed<Seeded>>`].
+    // FIXME rename set_deterministic_sort_seed
     pub fn set_seed(mut self, seed: Vec<u8>) -> Sorter<Relaxed<Seeded>> {
         use crate::fields::GlobalFieldsExt as _;
         self.0.global.set_sort_seed(seed);
@@ -256,13 +268,29 @@ impl Sorter<ExplicitSortKeys> {
         let outputs = sort_by_extracted_key(self.0.outputs, |o| o.take_sort_key())?;
         let mut global = self.0.global;
         global.clear_tx_unordered();
-        Ok(Psbt { global, inputs, outputs })
+        Ok(Psbt {
+            global,
+            inputs,
+            outputs,
+        })
     }
 
     /// Sort by explicit per-input/output sort keys (infallible variant).
     pub fn sort(self) -> Psbt {
         self.try_sort()
             .expect("ExplicitSortKeys: all sort keys must be present and distinct")
+    }
+}
+
+impl TrySortable for Sorter<ExplicitSortKeys> {
+    fn try_sort_psbt(self) -> Result<Psbt, crate::constructor::SortingError> {
+        self.try_sort()
+    }
+}
+
+impl Sortable for Sorter<ExplicitSortKeys> {
+    fn sort_psbt(self) -> Psbt {
+        self.sort()
     }
 }
 
@@ -273,7 +301,10 @@ impl Sorter<Deterministic<Seeded>> {
         use crate::input::InputExt as _;
         use crate::output::OutputExt as _;
         use crate::sort::OutPointIdentifier as _;
-        let seed = self.0.global.sort_seed()
+        let seed = self
+            .0
+            .global
+            .sort_seed()
             .expect("Deterministic<Seeded> always has a seed")
             .clone();
         let inputs = sort_by_extracted_key(self.0.inputs, |i| {
@@ -286,12 +317,28 @@ impl Sorter<Deterministic<Seeded>> {
         .expect("derived keys are always present and distinct");
         let mut global = self.0.global;
         global.clear_tx_unordered();
-        Psbt { global, inputs, outputs }
+        Psbt {
+            global,
+            inputs,
+            outputs,
+        }
     }
 
     /// `try_sort` delegates to [`sort`] — always succeeds.
     pub fn try_sort(self) -> Result<Psbt, crate::constructor::SortingError> {
         Ok(self.sort())
+    }
+}
+
+impl TrySortable for Sorter<Deterministic<Seeded>> {
+    fn try_sort_psbt(self) -> Result<Psbt, crate::constructor::SortingError> {
+        self.try_sort()
+    }
+}
+
+impl Sortable for Sorter<Deterministic<Seeded>> {
+    fn sort_psbt(self) -> Psbt {
+        self.sort()
     }
 }
 
@@ -301,25 +348,42 @@ impl Sorter<Relaxed<Seeded>> {
         use crate::fields::GlobalFieldsExt as _;
         use crate::input::InputExt as _;
         use crate::output::OutputExt as _;
-        let seed = self.0.global.sort_seed()
+        let seed = self
+            .0
+            .global
+            .sort_seed()
             .expect("Relaxed<Seeded> always has a seed")
             .clone();
-        let inputs = sort_by_extracted_key(self.0.inputs, |i| {
-            Some(i.take_or_derive_sort_key(&seed))
-        })
-        .expect("take_or_derive always returns Some");
-        let outputs = sort_by_extracted_key(self.0.outputs, |o| {
-            Some(o.take_or_derive_sort_key(&seed))
-        })
-        .expect("take_or_derive always returns Some");
+        let inputs =
+            sort_by_extracted_key(self.0.inputs, |i| Some(i.take_or_derive_sort_key(&seed)))
+                .expect("take_or_derive always returns Some");
+        let outputs =
+            sort_by_extracted_key(self.0.outputs, |o| Some(o.take_or_derive_sort_key(&seed)))
+                .expect("take_or_derive always returns Some");
         let mut global = self.0.global;
         global.clear_tx_unordered();
-        Psbt { global, inputs, outputs }
+        Psbt {
+            global,
+            inputs,
+            outputs,
+        }
     }
 
     /// `try_sort` delegates to [`sort`] — always succeeds.
     pub fn try_sort(self) -> Result<Psbt, crate::constructor::SortingError> {
         Ok(self.sort())
+    }
+}
+
+impl TrySortable for Sorter<Relaxed<Seeded>> {
+    fn try_sort_psbt(self) -> Result<Psbt, crate::constructor::SortingError> {
+        self.try_sort()
+    }
+}
+
+impl Sortable for Sorter<Relaxed<Seeded>> {
+    fn sort_psbt(self) -> Psbt {
+        self.sort()
     }
 }
 
@@ -342,8 +406,6 @@ pub(crate) fn sort_by_extracted_key<T>(
     }
     Ok(map.into_values().collect())
 }
-
-
 
 #[cfg(test)]
 mod tests {

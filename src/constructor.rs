@@ -3,9 +3,9 @@ use core::marker::PhantomData;
 use psbt_v2::v2::Constructor as Bip370Constructor;
 use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Psbt};
 
-use crate::sort::{Deterministic, ExplicitSortKeys, Relaxed, Seeded, SortMode, Unseeded};
+use crate::sort::{SortMode, Sortable as _, TrySortable as _};
 
-use crate::fields::{GlobalFieldsExt as _, GlobalModifiableExt as _};
+use crate::fields::GlobalModifiableExt as _;
 use crate::output::OutputExt as _;
 use crate::tx::UnorderedPsbt;
 
@@ -18,21 +18,27 @@ pub enum Error {
     /// The `PSBT_GLOBAL_TX_UNORDERED` field is missing or has a wrong value.
     #[error("PSBT is not marked unordered")]
     NotUnordered,
+
     /// The inputs-modifiable flag is not set.
     #[error("inputs are not modifiable")]
     InputsNotModifiable,
+
     /// The outputs-modifiable flag is not set.
     #[error("outputs are not modifiable")]
     OutputsNotModifiable,
+
     /// An output is missing the `PSBT_OUT_UNIQUE_ID` proprietary field.
     #[error("an output is missing PSBT_OUT_UNIQUE_ID")]
     MissingOutputUniqueId,
+
     /// Joining the new input or output with the existing PSBT produced a conflict.
     #[error("joining the new input or output produced a conflict")]
     JoinConflict(crate::tx::ResultUnorderedPsbt),
+
     /// Neither the inputs-modifiable nor the outputs-modifiable flag is set.
     #[error("neither inputs-modifiable nor outputs-modifiable flag is set")]
     NeitherModifiable,
+
     /// A locked (non-modifiable) set contained items not present in the other side.
     #[error("a locked set contained items not present in the other constructor")]
     LockedSetMismatch,
@@ -152,6 +158,12 @@ impl<M: Mod, S: SortMode> Constructor<M, S> {
     /// Allows sorting independently of the modifiability typestate.
     pub fn into_sorter(self) -> crate::sort::Sorter<S> {
         crate::sort::Sorter::new_unchecked(self.0)
+    }
+
+    /// Wrap an `UnorderedPsbt` without validating flags.
+    /// Only for use by trusted internal code (e.g. `dynamic::AnyConstructor`).
+    pub(crate) fn new_unchecked(psbt: UnorderedPsbt) -> Self {
+        Constructor(psbt, PhantomData)
     }
 }
 
@@ -285,307 +297,79 @@ impl<S: SortMode> Constructor<OutputsOnlyModifiable, S> {
     }
 }
 
-// -- AnyConstructor ----------------------------------------------------------
+// -- AnyConstructor (dynamic) ------------------------------------------------
+// Defined in src/dynamic.rs; re-exported here for a flat public API.
 
-/// Runtime representation of which inputs/outputs are still modifiable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnyModifiability {
-    /// Both inputs and outputs are modifiable.
-    Modifiable,
-    /// Only inputs are modifiable (outputs locked).
-    InputsOnly,
-    /// Only outputs are modifiable (inputs locked).
-    OutputsOnly,
-}
-
-/// Runtime representation of the sort mode encoded in the PSBT.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnySortMode {
-    /// `PSBT_GLOBAL_SORT_DETERMINISTIC` absent, no seed — [`Relaxed<Unseeded>`].
-    RelaxedUnseeded,
-    /// `PSBT_GLOBAL_SORT_DETERMINISTIC` absent, seed present — [`Relaxed<Seeded>`].
-    RelaxedSeeded,
-    /// `PSBT_GLOBAL_SORT_DETERMINISTIC = 0x00` — [`ExplicitSortKeys`].
-    Explicit,
-    /// `PSBT_GLOBAL_SORT_DETERMINISTIC = 0x01`, no seed — [`Deterministic<Unseeded>`].
-    DeterministicUnseeded,
-    /// `PSBT_GLOBAL_SORT_DETERMINISTIC = 0x01`, seed present — [`Deterministic<Seeded>`].
-    DeterministicSeeded,
-}
-
-/// Error produced by [`AnyConstructor::try_into_constructor`] when the PSBT's
-/// runtime flags don't match the requested static typestate.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum IntoConstructorError {
-    #[error("PSBT modifiability flags do not match the requested Constructor<M, _> type")]
-    ModifiabilityMismatch,
-    #[error("PSBT sort mode flags do not match the requested Constructor<_, S> type")]
-    SortModeMismatch,
-}
-
-// FIXME move to its own module. ::dynamic::Constructor where ::constructor is static
-/// An unordered Constructor whose modifiability and sort-mode typestates are
-/// determined at runtime from the PSBT flags.
-///
-/// Use [`AnyConstructor::from_psbt`] when you don't know the typestate a
-/// priori. Inspect [`AnyConstructor::modifiable`] and
-/// [`AnyConstructor::sort_mode`] to decide, then call
-/// [`AnyConstructor::try_into_constructor`] to obtain a static `Constructor<M,S>`.
-#[derive(Debug, PartialEq, Eq)]
-pub struct AnyConstructor {
-    /// Which inputs/outputs are still modifiable.
-    pub modifiable: AnyModifiability,
-    /// The sort mode in effect.
-    pub sort_mode: AnySortMode,
-    /// The underlying unordered PSBT (consistent with the two fields above).
-    pub psbt: UnorderedPsbt,
-}
-
-impl AnyConstructor {
-    /// Construct from a raw `Psbt`, reading all flags at runtime.
-    ///
-    /// Errors:
-    /// - [`Error::NotUnordered`] — `PSBT_GLOBAL_TX_UNORDERED` is absent or wrong.
-    /// - [`Error::MissingOutputUniqueId`] — an output lacks `PSBT_OUT_UNIQUE_ID`.
-    /// - [`Error::NeitherModifiable`] — both modifiable flags are cleared.
-    pub fn from_psbt(psbt: Psbt) -> Result<Self, Error> {
-        validate_output_unique_ids(&psbt)?;
-        let unordered = UnorderedPsbt::unchecked_from_psbt(psbt);
-        if !unordered.is_unordered() {
-            return Err(Error::NotUnordered);
-        }
-        let modifiable = match (
-            unordered.global.is_inputs_modifiable(),
-            unordered.global.is_outputs_modifiable(),
-        ) {
-            (true, true) => AnyModifiability::Modifiable,
-            (true, false) => AnyModifiability::InputsOnly,
-            (false, true) => AnyModifiability::OutputsOnly,
-            (false, false) => return Err(Error::NeitherModifiable),
-        };
-        let has_seed = unordered.global.sort_seed().is_some();
-        let sort_mode = if unordered.global.is_sort_explicit() {
-            AnySortMode::Explicit
-        } else if unordered.global.is_sort_deterministic() {
-            if has_seed {
-                AnySortMode::DeterministicSeeded
-            } else {
-                AnySortMode::DeterministicUnseeded
-            }
-        } else if has_seed {
-            AnySortMode::RelaxedSeeded
-        } else {
-            AnySortMode::RelaxedUnseeded
-        };
-        Ok(AnyConstructor {
-            modifiable,
-            sort_mode,
-            psbt: unordered,
-        })
-    }
-
-    /// Attempt to convert into a static `Constructor<M, S>`.
-    ///
-    /// Returns `Err` if the runtime flags don't match `M` or `S`.
-    /// The PSBT is returned inside the error so it isn't lost.
-    pub fn try_into_constructor<M: Mod, S: SortMode>(
-        self,
-    ) -> Result<Constructor<M, S>, (IntoConstructorError, Self)>
-    where
-        M: ModifiabilityMarker,
-        S: SortModeMarker,
-    {
-        if self.modifiable != M::ANY_MODIFIABILITY {
-            return Err((IntoConstructorError::ModifiabilityMismatch, self));
-        }
-        if self.sort_mode != S::ANY_SORT_MODE {
-            return Err((IntoConstructorError::SortModeMismatch, self));
-        }
-        Ok(Constructor(self.psbt, PhantomData))
-    }
-
-    /// Merge two `AnyConstructor`s, raising both to the modifiability-lattice join.
-    ///
-    /// For each locked side the locked set must be a superset of the other's;
-    /// returns [`Error::LockedSetMismatch`] otherwise.
-    ///
-    /// If the lattice join yields both sides locked, `todo!()` — requires the
-    /// sort/seed path not yet implemented.
-    ///
-    /// Returns [`Error::JoinConflict`] on a field-level conflict.
-    pub fn try_join(self, other: Self) -> Result<Self, Error> {
-        let self_inputs_mod = self.modifiable != AnyModifiability::OutputsOnly;
-        let self_outputs_mod = self.modifiable != AnyModifiability::InputsOnly;
-        let other_inputs_mod = other.modifiable != AnyModifiability::OutputsOnly;
-        let other_outputs_mod = other.modifiable != AnyModifiability::InputsOnly;
-
-        let result_inputs_mod = self_inputs_mod && other_inputs_mod;
-        let result_outputs_mod = self_outputs_mod && other_outputs_mod;
-
-        if !result_inputs_mod && !result_outputs_mod {
-            todo!(
-                "AnyConstructor::try_join: both sides locked; \
-                 the result requires the sort/seed path (not yet implemented)"
-            );
-        }
-
-        // For each locked side: the other's set must be a subset.
-        if !result_inputs_mod {
-            let (locked, candidate) = if !self_inputs_mod {
-                (&self.psbt.inputs, &other.psbt.inputs)
-            } else {
-                (&other.psbt.inputs, &self.psbt.inputs)
-            };
-            if !candidate
-                .iter_outpoints()
-                .all(|op| locked.spends_outpoint(op))
-            {
-                return Err(Error::LockedSetMismatch);
-            }
-        }
-        if !result_outputs_mod {
-            let (locked, candidate) = if !self_outputs_mod {
-                (&self.psbt.outputs, &other.psbt.outputs)
-            } else {
-                (&other.psbt.outputs, &self.psbt.outputs)
-            };
-            if !candidate
-                .iter_unique_ids()
-                .all(|id| locked.contains_unique_id(id))
-            {
-                return Err(Error::LockedSetMismatch);
-            }
-        }
-
-        // Raise both to the result typestate, then join.
-        let mut a = self.psbt;
-        let mut b = other.psbt;
-        if !result_inputs_mod {
-            a.global.clear_inputs_modifiable();
-            b.global.clear_inputs_modifiable();
-        }
-        if !result_outputs_mod {
-            a.global.clear_outputs_modifiable();
-            b.global.clear_outputs_modifiable();
-        }
-
-        let joined = a.try_join(b).map_err(Error::JoinConflict)?;
-
-        let result_modifiable = match (result_inputs_mod, result_outputs_mod) {
-            (true, true) => AnyModifiability::Modifiable,
-            (true, false) => AnyModifiability::InputsOnly,
-            (false, true) => AnyModifiability::OutputsOnly,
-            (false, false) => unreachable!(),
-        };
-        // Sort mode is preserved from self (both sides must have the same mode
-        // for try_join to make sense; the sort mode field is part of the global
-        // and will have been validated by the lattice join above).
-        Ok(AnyConstructor {
-            modifiable: result_modifiable,
-            sort_mode: self.sort_mode,
-            psbt: joined,
-        })
-    }
-}
-
-// -- ModifiabilityMarker / SortModeMarker ------------------------------------
-// These sealed traits let try_into_constructor check at runtime whether M / S
-// match the AnyModifiability / AnySortMode stored in the AnyConstructor.
-
-mod any_marker {
-    pub trait ModifiabilityMarker {
-        const ANY_MODIFIABILITY: super::AnyModifiability;
-    }
-    pub trait SortModeMarker {
-        const ANY_SORT_MODE: super::AnySortMode;
-    }
-}
-pub use any_marker::{ModifiabilityMarker, SortModeMarker};
-
-impl ModifiabilityMarker for Modifiable {
-    const ANY_MODIFIABILITY: AnyModifiability = AnyModifiability::Modifiable;
-}
-impl ModifiabilityMarker for InputsOnlyModifiable {
-    const ANY_MODIFIABILITY: AnyModifiability = AnyModifiability::InputsOnly;
-}
-impl ModifiabilityMarker for OutputsOnlyModifiable {
-    const ANY_MODIFIABILITY: AnyModifiability = AnyModifiability::OutputsOnly;
-}
-
-impl SortModeMarker for Relaxed<Unseeded> {
-    const ANY_SORT_MODE: AnySortMode = AnySortMode::RelaxedUnseeded;
-}
-impl SortModeMarker for Relaxed<Seeded> {
-    const ANY_SORT_MODE: AnySortMode = AnySortMode::RelaxedSeeded;
-}
-impl SortModeMarker for ExplicitSortKeys {
-    const ANY_SORT_MODE: AnySortMode = AnySortMode::Explicit;
-}
-impl SortModeMarker for Deterministic<Unseeded> {
-    const ANY_SORT_MODE: AnySortMode = AnySortMode::DeterministicUnseeded;
-}
-impl SortModeMarker for Deterministic<Seeded> {
-    const ANY_SORT_MODE: AnySortMode = AnySortMode::DeterministicSeeded;
-}
+pub use crate::dynamic::{
+    AnyConstructor, AnyModifiability, AnySortMode, IntoConstructorError, ModifiabilityMarker,
+    SortModeMarker,
+};
 
 // -- Creator / CreatorWith ---------------------------------------------------
 // Defined in src/creator.rs; re-exported here for a flat public API.
 
 pub use crate::creator::{Creator, CreatorWith};
 
+// -- BipConstructorExt -------------------------------------------------------
+// Sealed trait that wraps a sorted `Psbt` into `Bip370Constructor<M>`.
+// Enables blanket generic impls of try_sort / sort on Constructor<M, S>.
+
+mod bip_ctor_sealed {
+    pub trait BipConstructorExt: psbt_v2::v2::Mod {
+        // FIXME rename to unchecked_new()? that's not quite the right idiom since it is checked and may panic
+        fn wrap_psbt(psbt: psbt_v2::v2::Psbt) -> psbt_v2::v2::Constructor<Self>;
+    }
+}
+// FIXME rename, should be Bip370ConstructorExt, there are many BIPs
+pub(crate) use bip_ctor_sealed::BipConstructorExt;
+
+impl BipConstructorExt for Modifiable {
+    fn wrap_psbt(psbt: Psbt) -> Bip370Constructor<Self> {
+        Bip370Constructor::<Modifiable>::new(psbt).expect("flags preserved")
+    }
+}
+impl BipConstructorExt for InputsOnlyModifiable {
+    fn wrap_psbt(psbt: Psbt) -> Bip370Constructor<Self> {
+        Bip370Constructor::<InputsOnlyModifiable>::new(psbt).expect("flags preserved")
+    }
+}
+impl BipConstructorExt for OutputsOnlyModifiable {
+    fn wrap_psbt(psbt: Psbt) -> Bip370Constructor<Self> {
+        Bip370Constructor::<OutputsOnlyModifiable>::new(psbt).expect("flags preserved")
+    }
+}
+
 // -- try_sort / sort on Constructor -----------------------------------------
-//
-// Each delegates to Sorter<S>, which owns the sort logic.
+// Blanket impls via TrySortable / Sortable + BipConstructorExt.
 
-// FIXME can these be implemented via generics instead of a macro? the
-// infallible sort can be used to define try_sort via trait bound,
-// .into_sorter() should carry over the sorting ability as a static type
-
-macro_rules! impl_try_sort {
-    ($m:ty, $s:ty) => {
-        impl Constructor<$m, $s> {
-            pub fn try_sort(self) -> Result<Bip370Constructor<$m>, SortingError> {
-                let psbt = self.into_sorter().try_sort()?;
-                Ok(Bip370Constructor::<$m>::new(psbt).expect("flags preserved"))
-            }
-        }
-    };
+impl<M, S> Constructor<M, S>
+where
+    M: Mod + BipConstructorExt,
+    S: SortMode,
+    crate::sort::Sorter<S>: crate::sort::TrySortable,
+{
+    pub fn try_sort(self) -> Result<Bip370Constructor<M>, SortingError> {
+        let psbt = self.into_sorter().try_sort_psbt()?;
+        Ok(M::wrap_psbt(psbt))
+    }
 }
 
-macro_rules! impl_sort {
-    ($m:ty, $s:ty) => {
-        impl Constructor<$m, $s> {
-            pub fn sort(self) -> Bip370Constructor<$m> {
-                let psbt = self.into_sorter().sort();
-                Bip370Constructor::<$m>::new(psbt).expect("flags preserved")
-            }
-        }
-    };
+impl<M, S> Constructor<M, S>
+where
+    M: Mod + BipConstructorExt,
+    S: SortMode,
+    crate::sort::Sorter<S>: crate::sort::Sortable,
+{
+    pub fn sort(self) -> Bip370Constructor<M> {
+        M::wrap_psbt(self.into_sorter().sort_psbt())
+    }
 }
-
-impl_try_sort!(Modifiable, ExplicitSortKeys);
-impl_try_sort!(InputsOnlyModifiable, ExplicitSortKeys);
-impl_try_sort!(OutputsOnlyModifiable, ExplicitSortKeys);
-impl_try_sort!(Modifiable, Deterministic<Seeded>);
-impl_try_sort!(InputsOnlyModifiable, Deterministic<Seeded>);
-impl_try_sort!(OutputsOnlyModifiable, Deterministic<Seeded>);
-impl_try_sort!(Modifiable, Relaxed<Seeded>);
-impl_try_sort!(InputsOnlyModifiable, Relaxed<Seeded>);
-impl_try_sort!(OutputsOnlyModifiable, Relaxed<Seeded>);
-
-impl_sort!(Modifiable, Deterministic<Seeded>);
-impl_sort!(InputsOnlyModifiable, Deterministic<Seeded>);
-impl_sort!(OutputsOnlyModifiable, Deterministic<Seeded>);
-impl_sort!(Modifiable, Relaxed<Seeded>);
-impl_sort!(InputsOnlyModifiable, Relaxed<Seeded>);
-impl_sort!(OutputsOnlyModifiable, Relaxed<Seeded>);
 
 // -- tests -------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fields::GlobalModifiableExt as _;
     use crate::input::InputExt as _;
     use psbt_v2::v2::Creator as Bip370Creator;
 

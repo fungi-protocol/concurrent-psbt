@@ -61,12 +61,19 @@ impl UnorderedPsbt {
         }
     }
 
+    /// Convert to a `Psbt`.
+    ///
+    /// If `PSBT_GLOBAL_SORT_DETERMINISTIC` is `0x00` and all inputs/outputs
+    /// carry distinct sort keys, they are sorted by key. Otherwise the order
+    /// is arbitrary (use [`Self::to_shuffled_psbt`] to force unordered output).
+    /// Convert to a `Psbt` in arbitrary (hash-map) order, preserving the
+    /// `PSBT_GLOBAL_TX_UNORDERED` flag.
+    ///
+    /// To produce a properly sorted BIP370 `Psbt`, use
+    /// [`crate::constructor::Constructor::try_sort`] or
+    /// [`crate::sort::Sorter`] instead.
     pub fn to_psbt(self) -> Psbt {
-        // TODO
-        // if all sort keys are defined and distinct, sort inputs/outputs by
-        // sort key.
-        self //.try_sort().ok_or_else
-            .to_shuffled_psbt()
+        self.to_shuffled_psbt()
     }
 
     pub fn to_shuffled_psbt(self) -> Psbt {

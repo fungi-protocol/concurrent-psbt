@@ -28,6 +28,7 @@ pub mod sort;
 pub use sort::Sorter;
 pub mod creator;
 pub use creator::{Creator, CreatorWith};
+pub mod dynamic;
 pub mod constructor;
 
 /// Re-exports for fuzzing and internal tooling. Not part of the public API.

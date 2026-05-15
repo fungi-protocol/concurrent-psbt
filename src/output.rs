@@ -22,6 +22,10 @@ impl OutputSet {
         self.0.contains_key(id)
     }
 
+    pub fn iter_all(&self) -> impl Iterator<Item = &Output> {
+        self.0.values()
+    }
+
     pub fn iter_unique_ids(&self) -> impl Iterator<Item = &Vec<u8>> {
         self.0.keys()
     }

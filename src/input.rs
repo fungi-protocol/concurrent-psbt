@@ -42,6 +42,10 @@ impl InputSet {
         self.0.keys()
     }
 
+    pub fn iter_all(&self) -> impl Iterator<Item = &Input> {
+        self.0.values()
+    }
+
     pub fn len(&self) -> usize {
         self.0.len()
     }

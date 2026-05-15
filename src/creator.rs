@@ -6,7 +6,7 @@ use psbt_v2::v2::Creator as Bip370Creator;
 use psbt_v2::v2::Modifiable;
 
 use crate::constructor::Constructor;
-use crate::fields::{GlobalFieldsExt as _, GlobalModifiableExt as _};
+use crate::fields::GlobalFieldsExt as _;
 use crate::sort::{Deterministic, ExplicitSortKeys, Relaxed, Seeded, SortMode, Unseeded};
 use crate::tx::UnorderedPsbt;
 
