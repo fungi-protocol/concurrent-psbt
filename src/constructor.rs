@@ -276,7 +276,7 @@ impl Constructor<Modifiable> {
     /// Wrap an existing PSBT, validating it is unordered and fully modifiable.
     pub fn new(psbt: Psbt) -> Result<Self, Error> {
         validate_output_unique_ids(&psbt)?;
-        let unordered = UnorderedPsbt::from_psbt(psbt);
+        let unordered = UnorderedPsbt::unchecked_from_psbt(psbt);
         if !unordered.is_unordered() {
             return Err(Error::NotUnordered);
         }
@@ -351,7 +351,7 @@ impl Constructor<InputsOnlyModifiable> {
     /// Wrap an existing PSBT, validating it is unordered and inputs-only modifiable.
     pub fn new(psbt: Psbt) -> Result<Self, Error> {
         validate_output_unique_ids(&psbt)?;
-        let unordered = UnorderedPsbt::from_psbt(psbt);
+        let unordered = UnorderedPsbt::unchecked_from_psbt(psbt);
         if !unordered.is_unordered() {
             return Err(Error::NotUnordered);
         }
@@ -392,7 +392,7 @@ impl Constructor<OutputsOnlyModifiable> {
     /// Wrap an existing PSBT, validating it is unordered and outputs-only modifiable.
     pub fn new(psbt: Psbt) -> Result<Self, Error> {
         validate_output_unique_ids(&psbt)?;
-        let unordered = UnorderedPsbt::from_psbt(psbt);
+        let unordered = UnorderedPsbt::unchecked_from_psbt(psbt);
         if !unordered.is_unordered() {
             return Err(Error::NotUnordered);
         }
@@ -444,7 +444,7 @@ impl AnyConstructor {
     /// - [`Error::NeitherModifiable`] — both modifiable flags are cleared.
     pub fn from_psbt(psbt: Psbt) -> Result<Self, Error> {
         validate_output_unique_ids(&psbt)?;
-        let unordered = UnorderedPsbt::from_psbt(psbt);
+        let unordered = UnorderedPsbt::unchecked_from_psbt(psbt);
         if !unordered.is_unordered() {
             return Err(Error::NotUnordered);
         }
@@ -483,7 +483,7 @@ impl Creator {
             .outputs_modifiable()
             .psbt();
 
-        let mut unordered = UnorderedPsbt::from_psbt(psbt);
+        let mut unordered = UnorderedPsbt::unchecked_from_psbt(psbt);
 
         unordered
             .global

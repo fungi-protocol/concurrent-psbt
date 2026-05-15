@@ -24,6 +24,8 @@ impl UnorderedPsbt {
     ///
     /// The global is cloned from `global` with `input_count = 1` and
     /// `output_count = 0`.
+    // FIXME remove global argument, just start at bottom (fully modifiable, unordered), AnyConstructor's try_join will raise as necessary
+    // use BIP 370 Constructor to add the input, set unordered, then convert to UnorderedPsbt
     pub(crate) fn from_input(global: &Global, input: Input) -> Self {
         let mut g = global.clone();
         g.input_count = 1;
@@ -39,6 +41,7 @@ impl UnorderedPsbt {
     ///
     /// The global is cloned from `global` with `input_count = 0` and
     /// `output_count = 1`.
+    // FIXME remove global, just start at bottom (fully modifiable)
     pub(crate) fn from_output(global: &Global, output: Output) -> Self {
         let mut g = global.clone();
         g.input_count = 0;
@@ -54,8 +57,7 @@ impl UnorderedPsbt {
     /// want `crate::Constructor` instead.
     ///
     /// This constructor does not check that the PSBT is marked as unordered.
-    // FIXME rename unchecked_from_psbt
-    pub(crate) fn from_psbt(psbt: Psbt) -> Self {
+    pub(crate) fn unchecked_from_psbt(psbt: Psbt) -> Self {
         Self {
             global: psbt.global,
             inputs: psbt.inputs.into_iter().collect(),
@@ -78,34 +80,8 @@ impl UnorderedPsbt {
     ///
     /// `input_count` and `output_count` are taken from the post-join set
     /// sizes, so they never cause spurious conflicts.
-    // FIXME self.wrap().join(other.wrap()), move the body of this to ResultUnorderedPsbt::join
     pub fn try_join(self, other: Self) -> Result<Self, ResultUnorderedPsbt> {
-        // Join content sets first so we can derive the true cardinalities.
-        let inputs = self.inputs.wrap().join(other.inputs.wrap());
-        let outputs = self.outputs.wrap().join(other.outputs.wrap());
-
-        // True cardinality = number of distinct keys in the joined map,
-        // regardless of whether individual values have conflicts.
-        let input_count = inputs.len();
-        let output_count = outputs.len();
-
-        // Sync both globals to the post-join counts before joining globals,
-        // so differing counts (e.g. 0 vs 1) don't produce a spurious conflict.
-        let mut a_global = self.global;
-        let mut b_global = other.global;
-        a_global.input_count = input_count;
-        b_global.input_count = input_count;
-        a_global.output_count = output_count;
-        b_global.output_count = output_count;
-
-        let global = a_global.wrap().join(b_global.wrap());
-
-        ResultUnorderedPsbt {
-            global,
-            inputs,
-            outputs,
-        }
-        .try_unwrap()
+        self.wrap().join(other.wrap()).try_unwrap()
     }
 
     pub fn wrap(self) -> ResultUnorderedPsbt {
@@ -132,6 +108,26 @@ pub struct ResultUnorderedPsbt {
     pub inputs: ResultInputSet,
     /// The corresponding key-value map for each output in the unsigned transaction.
     pub outputs: ResultOutputSet,
+}
+
+impl Join for ResultUnorderedPsbt {
+    fn join(mut self, mut other: Self) -> Self {
+        let inputs = self.inputs.join(other.inputs);
+        let outputs = self.outputs.join(other.outputs);
+
+        for global in [&mut self.global, &mut other.global] {
+            global.input_count = Ok(inputs.len());
+            global.output_count = Ok(outputs.len());
+        }
+
+        let global = self.global.join(other.global);
+
+        ResultUnorderedPsbt {
+            global,
+            inputs,
+            outputs,
+        }
+    }
 }
 
 impl ResultUnorderedPsbt {
@@ -168,7 +164,7 @@ mod tests {
 
     fn make_unordered() -> UnorderedPsbt {
         let psbt = Bip370Creator::new().psbt();
-        UnorderedPsbt::from_psbt(psbt)
+        UnorderedPsbt::unchecked_from_psbt(psbt)
     }
 
     #[test]
