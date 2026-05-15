@@ -6,7 +6,7 @@ use super::sorter::{sort_by_extracted_key, Sorter, SorterError};
 use super::traits::{ExplicitSortKeys, Sortable, TrySortable};
 
 impl Sorter<ExplicitSortKeys> {
-    /// Construct from a [`crate::psbt::tx::UnorderedPsbt`], validating that
+    /// Construct from an unordered PSBT, validating that
     /// `PSBT_GLOBAL_SORT_DETERMINISTIC` is `0x00`.
     pub fn new(psbt: crate::psbt::tx::UnorderedPsbt) -> Result<Self, SorterError> {
         use crate::fields::GlobalFieldsExt as _;

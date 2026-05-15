@@ -85,7 +85,7 @@ pub(crate) fn sort_by_extracted_key<T>(
 
 // -- SorterError -------------------------------------------------------------
 
-/// Error returned when a [`Sorter`] is constructed from a [`UnorderedPsbt`]
+/// Error returned when a [`Sorter`] is constructed from an unordered PSBT
 /// whose flags do not match the requested sort mode.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SorterError {
@@ -99,7 +99,7 @@ pub enum SorterError {
 
 // -- Sorter ------------------------------------------------------------------
 
-/// Owns an [`UnorderedPsbt`] and sorts it according to sort mode `S`.
+/// Owns an unordered PSBT and sorts it according to sort mode `S`.
 ///
 /// Obtain a `Sorter` via:
 /// - [`crate::constructor::Constructor::into_sorter`] (flags already validated), or
@@ -127,7 +127,7 @@ impl<S: SortMode> PartialEq for Sorter<S> {
 impl<S: SortMode> Eq for Sorter<S> {}
 
 impl<S: SortMode> Sorter<S> {
-    /// Wrap an [`UnorderedPsbt`] without checking its flags.
+    /// Wrap an unordered PSBT without checking its flags.
     ///
     /// Only use this when the flags have already been validated (e.g. from
     /// [`crate::constructor::Constructor::into_sorter`]).
@@ -135,7 +135,7 @@ impl<S: SortMode> Sorter<S> {
         Sorter(psbt, core::marker::PhantomData)
     }
 
-    /// Consume the sorter and return the inner [`UnorderedPsbt`].
+    /// Consume the sorter and return the inner unordered PSBT.
     pub fn into_psbt(self) -> UnorderedPsbt {
         self.0
     }

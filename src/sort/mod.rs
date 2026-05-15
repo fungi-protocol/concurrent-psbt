@@ -16,7 +16,9 @@ mod relaxed;
 // Re-export the public surface flat, mirroring the old sort.rs interface.
 pub use traits::{
     CanSortInfallibly, Deterministic, ExplicitSortKeys, Relaxed, Seeded, SeedState, SortMode,
-    Sortable, TrySortable, Unseeded,
+    Sortable, Unseeded,
+    // TrySortable is pub(crate); only needed internally for sorting dispatch.
+    TrySortable,
 };
 pub use sorter::{Sorter, SorterError};
 pub(crate) use sorter::{derive_sort_key, OutPointIdentifier};

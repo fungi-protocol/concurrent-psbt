@@ -6,7 +6,7 @@ use super::sorter::{derive_sort_key, sort_by_extracted_key, Sorter, SorterError}
 use super::traits::{Deterministic, Seeded, Sortable, TrySortable, Unseeded};
 
 impl Sorter<Deterministic<Seeded>> {
-    /// Construct from a [`crate::psbt::tx::UnorderedPsbt`], validating that
+    /// Construct from an unordered PSBT, validating that
     /// `PSBT_GLOBAL_SORT_DETERMINISTIC` is `0x01` and a seed is present.
     pub fn new(psbt: crate::psbt::tx::UnorderedPsbt) -> Result<Self, SorterError> {
         use crate::fields::GlobalFieldsExt as _;
@@ -41,7 +41,7 @@ impl Sorter<Deterministic<Seeded>> {
         Psbt { global, inputs, outputs }
     }
 
-    /// `try_sort` delegates to [`sort`] — always succeeds.
+    /// `try_sort` delegates to `sort` — always succeeds.
     pub fn try_sort(self) -> Result<Psbt, crate::constructor::SortingError> {
         Ok(self.sort())
     }
@@ -60,7 +60,7 @@ impl Sortable for Sorter<Deterministic<Seeded>> {
 }
 
 impl Sorter<Deterministic<Unseeded>> {
-    /// Construct from a [`crate::psbt::tx::UnorderedPsbt`], validating that
+    /// Construct from an unordered PSBT, validating that
     /// `PSBT_GLOBAL_SORT_DETERMINISTIC` is `0x01` (no seed required).
     pub fn new(psbt: crate::psbt::tx::UnorderedPsbt) -> Result<Self, SorterError> {
         use crate::fields::GlobalFieldsExt as _;

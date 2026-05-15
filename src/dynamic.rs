@@ -1,4 +1,4 @@
-//! Runtime-typed Constructor: [`dynamic::Constructor`].
+//! Runtime-typed Constructor: `dynamic::Constructor`.
 //!
 //! `crate::constructor` provides static typestates; this module provides the
 //! dynamic counterpart used when the PSBT's flags are not known a priori.
@@ -96,7 +96,7 @@ pub enum AnySortMode {
 
 // -- IntoConstructorError ----------------------------------------------------
 
-/// Error produced by [`dynamic::Constructor::try_into_constructor`] when the PSBT's
+/// Error produced by [`Constructor::try_into_constructor`] when the PSBT's
 /// runtime flags don't match the requested static typestate.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum IntoConstructorError {
@@ -150,9 +150,9 @@ impl SortModeMarker for Deterministic<Seeded> {
 /// determined at runtime from the PSBT flags.
 ///
 /// Use [`Constructor::from_psbt`] when you don't know the typestate a
-/// priori. Inspect [`dynamic::Constructor::modifiable`] and
-/// [`dynamic::Constructor::sort_mode`] to decide, then call
-/// [`dynamic::Constructor::try_into_constructor`] to obtain a static
+/// priori. Inspect [`Constructor::modifiable`] and
+/// [`Constructor::sort_mode`] to decide, then call
+/// [`Constructor::try_into_constructor`] to obtain a static
 /// `crate::constructor::Constructor<M, S>`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Constructor {
@@ -224,7 +224,7 @@ impl Constructor {
         Ok(StaticConstructor::new_unchecked(self.psbt))
     }
 
-    /// Convert into a [`crate::sort::Sorter<S>`] when modifiability is
+    /// Convert into a `Sorter<S>` when modifiability is
     /// [`AnyModifiability::NotModifiable`].
     ///
     /// Returns `Err(self)` if the constructor is still modifiable (use

@@ -1,19 +1,10 @@
-// TODO
-// - tech debt
-//   - remove commented out stuff
-//   - reorganize in logical order
-//   - decide where result lives
-// - ergonomics:
-//   - pub and re-exports
-//   - operator overloading?
-
 mod lattice;
 
 mod collections;
 
 mod values;
 
-// Implementation detail. Public only for fuzzing/internal tooling via `_internal` feature.
+/// Implementation detail. Public only for fuzzing/internal tooling via `_internal` feature.
 #[cfg(not(feature = "_internal"))]
 mod fields;
 #[cfg(feature = "_internal")]
@@ -21,15 +12,36 @@ pub mod fields;
 
 mod psbt;
 
-// FIXME this pub stuff needs to be done deliberately. there should be a single
-// `mod reexports` that does pub use of these, and then the top level can pub use
-// `use reexports::*` to do all the re-exporting.
-pub mod sort;
-pub use sort::Sorter;
-pub mod creator;
-pub use creator::{Creator, CreatorWith};
+// TODO: decide modifiability of these modules as the API matures.
+// `sort` and `creator` are `pub(crate)` — their public types are re-exported
+// flat below. `constructor` and `dynamic` remain `pub` because they define
+// named sub-namespaces users may want to import from directly.
+pub(crate) mod sort;
+pub(crate) mod creator;
 pub mod constructor;
 pub mod dynamic;
+
+// -- Public API surface -------------------------------------------------------
+//
+// Only the types listed here are part of the stable public API.
+// Extend deliberately; prefer adding a TODO comment over an immediate `pub use`.
+
+// Creator entry-points
+pub use creator::{Creator, CreatorWith};
+
+// Sort-mode typestates needed to parameterise Creator/Constructor/Sorter
+pub use sort::{
+    CanSortInfallibly, Deterministic, ExplicitSortKeys, Relaxed, Seeded, SeedState, SortMode,
+    Sorter, SorterError, Unseeded,
+};
+
+// Constructor errors
+pub use constructor::errors::{Error as ConstructorError, SortingError};
+
+// TODO: decide whether Constructor<M,S> itself should be re-exported here, or
+//       whether users are expected to name it via `constructor::Constructor`.
+
+// TODO: decide whether dynamic::Constructor and its error types belong here.
 
 /// Re-exports for fuzzing and internal tooling. Not part of the public API.
 #[cfg(feature = "_internal")]

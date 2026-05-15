@@ -30,7 +30,7 @@ use crate::psbt::psbt_ext::PsbtExt as _;
 /// Unordered Constructor, mirrors the BIP 370 Constructor but for unordered PSBTs.
 ///
 /// `M` encodes which inputs/outputs are still modifiable (see [`psbt_v2::v2::Mod`]).
-/// `S` encodes the sort strategy (see [`crate::sort`]).
+/// `S` encodes the sort strategy (see `crate::sort`).
 pub struct Constructor<M: Mod, S: SortMode>(UnorderedPsbt, PhantomData<(M, S)>);
 
 // Manual impl: derive would add unnecessary bounds on M and S.
@@ -95,7 +95,7 @@ impl<S: SortMode + 'static> Constructor<Modifiable, S> {
     /// Wrap an existing PSBT, validating it is unordered and fully modifiable.
     ///
     /// The sort mode `S` must match the `PSBT_GLOBAL_SORT_DETERMINISTIC` field
-    /// in the PSBT; this is not validated here — callers should use [`Creator`]
+    /// in the PSBT; this is not validated here — callers should use `Creator`
     /// to produce correctly-typed constructors.
     pub fn new(psbt: Psbt) -> Result<Self, Error> {
         psbt.validate_all_outputs_have_unique_ids()?;
