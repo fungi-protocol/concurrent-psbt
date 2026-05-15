@@ -207,6 +207,10 @@ impl Constructor {
     ///
     /// Returns `Err` if the runtime flags don't match `M` or `S`.
     /// The PSBT is returned inside the error so it isn't lost.
+    // ModifiabilityMarker and SortModeMarker are pub(crate) — the bounds are
+    // intentionally not nameable by downstream; they are an impl detail of the
+    // static-dispatch machinery.
+    #[allow(private_bounds)]
     pub fn try_into_constructor<M, S>(
         self,
     ) -> Result<StaticConstructor<M, S>, (IntoConstructorError, Self)>

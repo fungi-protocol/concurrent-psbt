@@ -33,8 +33,8 @@ pub use creator::{Creator, CreatorWith};
 
 // Sort-mode typestates needed to parameterise Creator/Constructor/Sorter
 pub use sort::{
-    CanSortInfallibly, Deterministic, ExplicitSortKeys, Relaxed, Seeded, SeedState, SortMode,
-    Sorter, SorterError, Unseeded,
+    Deterministic, ExplicitSortKeys, Relaxed, Seeded, SeedState, SortMode, Sorter, SorterError,
+    Unseeded,
 };
 
 // Constructor errors

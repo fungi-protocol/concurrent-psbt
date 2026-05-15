@@ -31,7 +31,7 @@ where
 {
     /// Sort into a [`Psbt`] infallibly.
     ///
-    /// Only available for [`crate::sort::CanSortInfallibly`] modes.
+    /// Only available for seeded or explicit-key sort modes (infallible).
     pub fn sort(self) -> Psbt {
         self.into_sorter().sort_psbt()
     }
