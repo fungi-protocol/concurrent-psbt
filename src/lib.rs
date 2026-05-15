@@ -18,7 +18,7 @@ mod values;
 
 pub mod fields;
 
-// TODO move to psbt mod
+// FIXME move to psbt mod
 mod global;
 mod input;
 mod output;
@@ -28,8 +28,8 @@ pub mod sort;
 pub use sort::Sorter;
 pub mod creator;
 pub use creator::{Creator, CreatorWith};
-pub mod dynamic;
 pub mod constructor;
+pub mod dynamic; // FIXME rename to constructor::dynamic, pub module
 
 /// Re-exports for fuzzing and internal tooling. Not part of the public API.
 #[cfg(feature = "_internal")]

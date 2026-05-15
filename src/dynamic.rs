@@ -8,9 +8,7 @@ use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, 
 use crate::constructor::{Constructor, Error};
 use crate::fields::{GlobalFieldsExt as _, GlobalModifiableExt as _};
 use crate::output::OutputExt as _;
-use crate::sort::{
-    Deterministic, ExplicitSortKeys, Relaxed, Seeded, SortMode, Unseeded,
-};
+use crate::sort::{Deterministic, ExplicitSortKeys, Relaxed, Seeded, SortMode, Unseeded};
 use crate::tx::UnorderedPsbt;
 
 // Silence unused-import warnings for sort-mode types used only as type params.
@@ -97,6 +95,7 @@ impl SortModeMarker for Deterministic<Seeded> {
     const ANY_SORT_MODE: AnySortMode = AnySortMode::DeterministicSeeded;
 }
 
+// FIXME rename to Constructor, it's distinct from the top level Constructor sinc it's dynamic::Constructor
 // -- AnyConstructor ----------------------------------------------------------
 
 /// An unordered Constructor whose modifiability and sort-mode typestates are
@@ -147,13 +146,21 @@ impl AnyConstructor {
         let sort_mode = if unordered.global.is_sort_explicit() {
             AnySortMode::Explicit
         } else if unordered.global.is_sort_deterministic() {
-            if has_seed { AnySortMode::DeterministicSeeded } else { AnySortMode::DeterministicUnseeded }
+            if has_seed {
+                AnySortMode::DeterministicSeeded
+            } else {
+                AnySortMode::DeterministicUnseeded
+            }
         } else if has_seed {
             AnySortMode::RelaxedSeeded
         } else {
             AnySortMode::RelaxedUnseeded
         };
-        Ok(AnyConstructor { modifiable, sort_mode, psbt: unordered })
+        Ok(AnyConstructor {
+            modifiable,
+            sort_mode,
+            psbt: unordered,
+        })
     }
 
     /// Attempt to convert into a static `Constructor<M, S>`.
@@ -201,7 +208,10 @@ impl AnyConstructor {
             } else {
                 (&other.psbt.inputs, &self.psbt.inputs)
             };
-            if !candidate.iter_outpoints().all(|op| locked.spends_outpoint(op)) {
+            if !candidate
+                .iter_outpoints()
+                .all(|op| locked.spends_outpoint(op))
+            {
                 return Err(Error::LockedSetMismatch);
             }
         }
@@ -211,7 +221,10 @@ impl AnyConstructor {
             } else {
                 (&other.psbt.outputs, &self.psbt.outputs)
             };
-            if !candidate.iter_unique_ids().all(|id| locked.contains_unique_id(id)) {
+            if !candidate
+                .iter_unique_ids()
+                .all(|id| locked.contains_unique_id(id))
+            {
                 return Err(Error::LockedSetMismatch);
             }
         }
@@ -235,6 +248,12 @@ impl AnyConstructor {
             (false, true) => AnyModifiability::OutputsOnly,
             (false, false) => unreachable!(),
         };
-        Ok(AnyConstructor { modifiable: result_modifiable, sort_mode: self.sort_mode, psbt: joined })
+        Ok(AnyConstructor {
+            modifiable: result_modifiable,
+            sort_mode: self.sort_mode,
+            psbt: joined,
+        })
     }
 }
+
+// FIXME move the tests related to this here

@@ -1,4 +1,4 @@
-// TODO move to top level?
+// fixme move to lattice/partial.rs, since this is only defined for JoinResult not for general results
 pub mod result;
 
 // all collections are join

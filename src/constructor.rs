@@ -4,6 +4,11 @@ use psbt_v2::v2::Constructor as Bip370Constructor;
 use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Psbt};
 
 use crate::sort::{SortMode, Sortable as _, TrySortable as _};
+// Re-export sort-mode types so constructor users (and tests) don't need to
+// separately import crate::sort.
+pub use crate::sort::{
+    Deterministic, ExplicitSortKeys, Relaxed, Seeded, Sorter, SorterError, Unseeded,
+};
 
 use crate::fields::GlobalModifiableExt as _;
 use crate::output::OutputExt as _;
@@ -297,6 +302,7 @@ impl<S: SortMode> Constructor<OutputsOnlyModifiable, S> {
     }
 }
 
+// FIXME remove this reexport
 // -- AnyConstructor (dynamic) ------------------------------------------------
 // Defined in src/dynamic.rs; re-exported here for a flat public API.
 
@@ -370,6 +376,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fields::GlobalFieldsExt as _;
     use crate::input::InputExt as _;
     use psbt_v2::v2::Creator as Bip370Creator;
 
