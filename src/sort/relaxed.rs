@@ -13,7 +13,7 @@ impl Sorter<Relaxed<Seeded>> {
         if !psbt.global.sort_deterministic_absent() {
             return Err(SorterError::SortModeMismatch);
         }
-        if psbt.global.sort_seed().is_none() {
+        if psbt.global.deterministic_sort_seed().is_none() {
             return Err(SorterError::MissingSeed);
         }
         Ok(Self::new_unchecked(psbt))
@@ -24,7 +24,7 @@ impl Sorter<Relaxed<Seeded>> {
         use crate::fields::GlobalFieldsExt as _;
         use crate::input::InputExt as _;
         use crate::output::OutputExt as _;
-        let seed = self.0.global.sort_seed()
+        let seed = self.0.global.deterministic_sort_seed()
             .expect("Relaxed<Seeded> always has a seed")
             .clone();
         let inputs =
@@ -70,7 +70,7 @@ impl Sorter<Relaxed<Unseeded>> {
     /// Provide the sort seed, transitioning to [`Sorter<Relaxed<Seeded>>`].
     pub fn set_seed(mut self, seed: Vec<u8>) -> Sorter<Relaxed<Seeded>> {
         use crate::fields::GlobalFieldsExt as _;
-        self.0.global.set_sort_seed(seed);
+        self.0.global.set_deterministic_sort_seed(seed);
         Sorter::new_unchecked(self.0)
     }
 }

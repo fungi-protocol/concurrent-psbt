@@ -85,7 +85,10 @@ pub enum SorterError {
 ///
 /// Call `try_sort()` for a fallible sort. On [`super::traits::CanSortInfallibly`]
 /// modes `sort()` is also available.
-pub struct Sorter<S: SortMode>(pub(super) UnorderedPsbt, pub(super) core::marker::PhantomData<S>);
+pub struct Sorter<S: SortMode>(
+    pub(super) UnorderedPsbt,
+    pub(super) core::marker::PhantomData<S>,
+);
 
 impl<S: SortMode> core::fmt::Debug for Sorter<S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

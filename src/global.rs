@@ -8,6 +8,7 @@ use crate::collections::btreemap::ResultContainer;
 use crate::collections::option::OptionExt;
 use crate::collections::option::ResultOptionExt;
 
+// FIXME unify with GlobalFieldsExt, define here, impl in fields.rs?
 pub trait GlobalExt {
     fn wrap(self) -> ResultGlobal;
 
@@ -49,8 +50,8 @@ mod result {
     use bitcoin::locktime::absolute;
     use bitcoin::transaction;
 
-    use psbt_v2::Version;
     use psbt_v2::raw;
+    use psbt_v2::Version;
 
     use crate::lattice::partial::JoinResult;
 

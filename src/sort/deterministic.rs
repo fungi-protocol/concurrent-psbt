@@ -13,7 +13,7 @@ impl Sorter<Deterministic<Seeded>> {
         if !psbt.global.is_sort_deterministic() {
             return Err(SorterError::SortModeMismatch);
         }
-        if psbt.global.sort_seed().is_none() {
+        if psbt.global.deterministic_sort_seed().is_none() {
             return Err(SorterError::MissingSeed);
         }
         Ok(Self::new_unchecked(psbt))
@@ -25,7 +25,7 @@ impl Sorter<Deterministic<Seeded>> {
         use crate::input::InputExt as _;
         use crate::output::OutputExt as _;
         use super::sorter::OutPointIdentifier as _;
-        let seed = self.0.global.sort_seed()
+        let seed = self.0.global.deterministic_sort_seed()
             .expect("Deterministic<Seeded> always has a seed")
             .clone();
         let inputs = sort_by_extracted_key(self.0.inputs, |i| {

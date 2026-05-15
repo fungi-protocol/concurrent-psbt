@@ -109,7 +109,7 @@ impl<M: Mod, S: SortMode> Constructor<M, S> {
     }
 
     /// Wrap an `UnorderedPsbt` without validating flags.
-    /// Only for use by trusted internal code (e.g. `dynamic::AnyConstructor`).
+    /// Only for use by trusted internal code (e.g. `dynamic::Constructor`).
     pub(crate) fn new_unchecked(psbt: UnorderedPsbt) -> Self {
         Constructor(psbt, PhantomData)
     }
@@ -142,6 +142,7 @@ impl<S: SortMode> Constructor<Modifiable, S> {
     /// present with conflicting field values. The payload is the
     /// conflict-annotated `ResultUnorderedPsbt` with correct counts.
     pub fn input(self, input: Input) -> Result<Self, Error> {
+        // FIXME enforce that sortmode invariants preserved (no sort keys if deterministic, or all sort keys defined if explicit, no duplicate sort keys ever, no unique output ids duplicated ever)
         self.0
             .try_join(UnorderedPsbt::from_input(input))
             .map(|p| Constructor(p, PhantomData))
@@ -154,6 +155,7 @@ impl<S: SortMode> Constructor<Modifiable, S> {
     /// present with conflicting field values. The payload is the
     /// conflict-annotated `ResultUnorderedPsbt` with correct counts.
     pub fn output(self, output: Output) -> Result<Self, Error> {
+        // FIXME enforce that sortmode invariants preserved (no sort keys if deterministic, or all sort keys defined if explicit, no duplicate sort keys ever, no unique output ids duplicated ever)
         validate_output_unique_id(&output)?;
         self.0
             .try_join(UnorderedPsbt::from_output(output))
@@ -246,71 +248,62 @@ impl<S: SortMode> Constructor<OutputsOnlyModifiable, S> {
 }
 
 // FIXME remove this reexport
-// -- AnyConstructor (dynamic) ------------------------------------------------
-// Defined in src/dynamic.rs; re-exported here for a flat public API.
-
-pub use crate::dynamic::{
-    AnyConstructor, AnyModifiability, AnySortMode, IntoConstructorError, ModifiabilityMarker,
-    SortModeMarker,
-};
-
 // -- Creator / CreatorWith ---------------------------------------------------
 // Defined in src/creator.rs; re-exported here for a flat public API.
 
 pub use crate::creator::{Creator, CreatorWith};
 
-// -- BipConstructorExt -------------------------------------------------------
+// -- Bip370ConstructorExt -------------------------------------------------------
 // Sealed trait that wraps a sorted `Psbt` into `Bip370Constructor<M>`.
 // Enables blanket generic impls of try_sort / sort on Constructor<M, S>.
 
 mod bip_ctor_sealed {
-    pub trait BipConstructorExt: psbt_v2::v2::Mod {
-        // FIXME rename to unchecked_new()? that's not quite the right idiom since it is checked and may panic
-        fn wrap_psbt(psbt: psbt_v2::v2::Psbt) -> psbt_v2::v2::Constructor<Self>;
+    pub trait Bip370ConstructorExt: psbt_v2::v2::Mod {
+        fn new_from_psbt(psbt: psbt_v2::v2::Psbt) -> psbt_v2::v2::Constructor<Self>;
     }
 }
-// FIXME rename, should be Bip370ConstructorExt, there are many BIPs
-pub(crate) use bip_ctor_sealed::BipConstructorExt;
+pub(crate) use bip_ctor_sealed::Bip370ConstructorExt;
 
-impl BipConstructorExt for Modifiable {
-    fn wrap_psbt(psbt: Psbt) -> Bip370Constructor<Self> {
+impl Bip370ConstructorExt for Modifiable {
+    fn new_from_psbt(psbt: Psbt) -> Bip370Constructor<Self> {
         Bip370Constructor::<Modifiable>::new(psbt).expect("flags preserved")
     }
 }
-impl BipConstructorExt for InputsOnlyModifiable {
-    fn wrap_psbt(psbt: Psbt) -> Bip370Constructor<Self> {
+impl Bip370ConstructorExt for InputsOnlyModifiable {
+    fn new_from_psbt(psbt: Psbt) -> Bip370Constructor<Self> {
         Bip370Constructor::<InputsOnlyModifiable>::new(psbt).expect("flags preserved")
     }
 }
-impl BipConstructorExt for OutputsOnlyModifiable {
-    fn wrap_psbt(psbt: Psbt) -> Bip370Constructor<Self> {
+impl Bip370ConstructorExt for OutputsOnlyModifiable {
+    fn new_from_psbt(psbt: Psbt) -> Bip370Constructor<Self> {
         Bip370Constructor::<OutputsOnlyModifiable>::new(psbt).expect("flags preserved")
     }
 }
 
+// FIXME move to sort.rrs
 // -- try_sort / sort on Constructor -----------------------------------------
-// Blanket impls via TrySortable / Sortable + BipConstructorExt.
+// Blanket impls via TrySortable / Sortable + Bip370ConstructorExt.
 
 impl<M, S> Constructor<M, S>
 where
-    M: Mod + BipConstructorExt,
+    M: Mod + Bip370ConstructorExt,
     S: SortMode,
     crate::sort::Sorter<S>: crate::sort::TrySortable,
 {
     pub fn try_sort(self) -> Result<Bip370Constructor<M>, SortingError> {
         let psbt = self.into_sorter().try_sort_psbt()?;
-        Ok(M::wrap_psbt(psbt))
+        Ok(M::new_from_psbt(psbt))
     }
 }
 
 impl<M, S> Constructor<M, S>
 where
-    M: Mod + BipConstructorExt,
+    M: Mod + Bip370ConstructorExt,
     S: SortMode,
     crate::sort::Sorter<S>: crate::sort::Sortable,
 {
     pub fn sort(self) -> Bip370Constructor<M> {
-        M::wrap_psbt(self.into_sorter().sort_psbt())
+        M::new_from_psbt(self.into_sorter().sort_psbt())
     }
 }
 
@@ -725,227 +718,6 @@ mod tests {
             ordered.inputs[0].previous_txid,
             bitcoin::OutPoint::null().txid
         );
-    }
-
-    // -- AnyConstructor tests ------------------------------------------------
-
-    // Helper: wrap a Constructor<M,S> into AnyConstructor
-    fn any<M: Mod + ModifiabilityMarker, S: SortMode + SortModeMarker>(
-        c: Constructor<M, S>,
-    ) -> AnyConstructor {
-        AnyConstructor {
-            modifiable: M::ANY_MODIFIABILITY,
-            sort_mode: S::ANY_SORT_MODE,
-            psbt: c.0,
-        }
-    }
-
-    #[test]
-    fn any_constructor_from_psbt_fully_modifiable() {
-        let psbt = Creator::new().into_unordered_psbt().to_psbt();
-        let a = AnyConstructor::from_psbt(psbt).unwrap();
-        assert_eq!(a.modifiable, AnyModifiability::Modifiable);
-        assert_eq!(a.sort_mode, AnySortMode::RelaxedUnseeded);
-    }
-
-    #[test]
-    fn any_constructor_from_psbt_inputs_only() {
-        let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
-        psbt.global.clear_outputs_modifiable();
-        let a = AnyConstructor::from_psbt(psbt).unwrap();
-        assert_eq!(a.modifiable, AnyModifiability::InputsOnly);
-    }
-
-    #[test]
-    fn any_constructor_from_psbt_outputs_only() {
-        let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
-        psbt.global.clear_inputs_modifiable();
-        let a = AnyConstructor::from_psbt(psbt).unwrap();
-        assert_eq!(a.modifiable, AnyModifiability::OutputsOnly);
-    }
-
-    #[test]
-    fn any_constructor_from_psbt_explicit_sort_mode() {
-        let psbt = Creator::new()
-            .explicit_sort_keys()
-            .into_unordered_psbt()
-            .to_psbt();
-        let a = AnyConstructor::from_psbt(psbt).unwrap();
-        assert_eq!(a.sort_mode, AnySortMode::Explicit);
-    }
-
-    #[test]
-    fn any_constructor_from_psbt_not_unordered() {
-        let psbt = Bip370Creator::new()
-            .inputs_modifiable()
-            .outputs_modifiable()
-            .psbt();
-        assert!(matches!(
-            AnyConstructor::from_psbt(psbt),
-            Err(Error::NotUnordered)
-        ));
-    }
-
-    #[test]
-    fn any_constructor_from_psbt_neither_modifiable() {
-        let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
-        psbt.global.clear_inputs_modifiable();
-        psbt.global.clear_outputs_modifiable();
-        assert!(matches!(
-            AnyConstructor::from_psbt(psbt),
-            Err(Error::NeitherModifiable)
-        ));
-    }
-
-    #[test]
-    fn any_constructor_from_psbt_rejects_missing_output_unique_id() {
-        let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
-        psbt.outputs = vec![psbt_v2::v2::Output::new(bitcoin::TxOut {
-            value: bitcoin::Amount::from_sat(1000),
-            script_pubkey: bitcoin::ScriptBuf::new(),
-        })];
-        psbt.global.output_count = 1;
-        assert!(matches!(
-            AnyConstructor::from_psbt(psbt),
-            Err(Error::MissingOutputUniqueId)
-        ));
-    }
-
-    #[test]
-    fn any_constructor_try_into_constructor_succeeds() {
-        let psbt = Creator::new().into_unordered_psbt().to_psbt();
-        let a = AnyConstructor::from_psbt(psbt).unwrap();
-        let c: Constructor<Modifiable, Relaxed<Unseeded>> = a.try_into_constructor().unwrap();
-        assert!(c.into_psbt().is_unordered());
-    }
-
-    #[test]
-    fn any_constructor_try_into_constructor_wrong_modifiability() {
-        let psbt = Creator::new().into_unordered_psbt().to_psbt();
-        let a = AnyConstructor::from_psbt(psbt).unwrap();
-        let result = a.try_into_constructor::<InputsOnlyModifiable, Relaxed<Unseeded>>();
-        assert!(matches!(
-            result,
-            Err((IntoConstructorError::ModifiabilityMismatch, _))
-        ));
-    }
-
-    #[test]
-    fn any_constructor_try_into_constructor_wrong_sort_mode() {
-        let psbt = Creator::new().into_unordered_psbt().to_psbt();
-        let a = AnyConstructor::from_psbt(psbt).unwrap();
-        let result = a.try_into_constructor::<Modifiable, ExplicitSortKeys>();
-        assert!(matches!(
-            result,
-            Err((IntoConstructorError::SortModeMismatch, _))
-        ));
-    }
-
-    // -- AnyConstructor::try_join tests -------------------------------------
-
-    #[test]
-    fn any_try_join_modifiable_with_modifiable_merges_inputs() {
-        let mut op_a = bitcoin::OutPoint::null();
-        op_a.vout = 0;
-        let mut op_b = bitcoin::OutPoint::null();
-        op_b.vout = 1;
-        let a = any(Creator::new()
-            .constructor()
-            .input(psbt_v2::v2::Input::new(&op_a))
-            .unwrap());
-        let b = any(Creator::new()
-            .constructor()
-            .input(psbt_v2::v2::Input::new(&op_b))
-            .unwrap());
-        let joined = a.try_join(b).unwrap();
-        assert_eq!(joined.modifiable, AnyModifiability::Modifiable);
-        assert_eq!(joined.psbt.inputs.len(), 2);
-    }
-
-    #[test]
-    fn any_try_join_modifiable_with_inputs_only_raises_to_inputs_only() {
-        let op = bitcoin::OutPoint::null();
-        let a = any(Creator::new().constructor());
-        let b = any(Creator::new()
-            .constructor()
-            .input(psbt_v2::v2::Input::new(&op))
-            .unwrap()
-            .no_more_outputs());
-        let joined = a.try_join(b).unwrap();
-        assert_eq!(joined.modifiable, AnyModifiability::InputsOnly);
-    }
-
-    #[test]
-    fn any_try_join_modifiable_with_outputs_only_raises_to_outputs_only() {
-        let mut out = psbt_v2::v2::Output::new(bitcoin::TxOut {
-            value: bitcoin::Amount::from_sat(1000),
-            script_pubkey: bitcoin::ScriptBuf::new(),
-        });
-        out.set_unique_id(vec![0x01; 16]);
-        let a = any(Creator::new().constructor());
-        let b = any(Creator::new()
-            .constructor()
-            .output(out)
-            .unwrap()
-            .no_more_inputs());
-        let joined = a.try_join(b).unwrap();
-        assert_eq!(joined.modifiable, AnyModifiability::OutputsOnly);
-    }
-
-    #[test]
-    #[should_panic(expected = "both sides locked")]
-    fn any_try_join_inputs_only_with_outputs_only_panics_todo() {
-        let a = any(Creator::new().constructor().no_more_outputs());
-        let b = any(Creator::new().constructor().no_more_inputs());
-        let _ = a.try_join(b);
-    }
-
-    #[test]
-    fn any_try_join_locked_set_mismatch_returns_error() {
-        let mut out_a = psbt_v2::v2::Output::new(bitcoin::TxOut {
-            value: bitcoin::Amount::from_sat(1000),
-            script_pubkey: bitcoin::ScriptBuf::new(),
-        });
-        out_a.set_unique_id(vec![0x01; 16]);
-        let mut out_b = psbt_v2::v2::Output::new(bitcoin::TxOut {
-            value: bitcoin::Amount::from_sat(2000),
-            script_pubkey: bitcoin::ScriptBuf::new(),
-        });
-        out_b.set_unique_id(vec![0x02; 16]);
-        let a = any(Creator::new()
-            .constructor()
-            .output(out_a)
-            .unwrap()
-            .no_more_outputs());
-        let b = any(Creator::new()
-            .constructor()
-            .output(out_b)
-            .unwrap()
-            .no_more_outputs());
-        assert_eq!(a.try_join(b), Err(Error::LockedSetMismatch));
-    }
-
-    #[test]
-    fn try_sort_outputs_only() {
-        let mut psbt = Creator::new()
-            .explicit_sort_keys()
-            .into_unordered_psbt()
-            .to_psbt();
-
-        let mut output = psbt_v2::v2::Output::new(bitcoin::TxOut {
-            value: bitcoin::Amount::from_sat(1000),
-            script_pubkey: bitcoin::ScriptBuf::new(),
-        });
-        output.set_sort_key(vec![0x01]);
-        output.set_unique_id(vec![0x01; 16]);
-        psbt.outputs = vec![output];
-        psbt.global.output_count = 1;
-        psbt.global.clear_inputs_modifiable();
-
-        let c = Constructor::<OutputsOnlyModifiable, ExplicitSortKeys>::new(psbt).unwrap();
-        let ordered = c.try_sort().unwrap().psbt().unwrap();
-        assert_eq!(ordered.outputs.len(), 1);
-        assert_eq!(ordered.outputs[0].amount, bitcoin::Amount::from_sat(1000));
     }
 
     // -- Constructor::try_join tests -----------------------------------------

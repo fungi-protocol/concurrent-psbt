@@ -29,7 +29,7 @@ pub use sort::Sorter;
 pub mod creator;
 pub use creator::{Creator, CreatorWith};
 pub mod constructor;
-pub mod dynamic; // FIXME rename to constructor::dynamic, pub module
+pub mod dynamic;
 
 /// Re-exports for fuzzing and internal tooling. Not part of the public API.
 #[cfg(feature = "_internal")]

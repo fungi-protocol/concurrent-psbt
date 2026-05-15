@@ -105,9 +105,9 @@ pub(crate) trait GlobalFieldsExt {
     fn set_sort_deterministic(&mut self);
 
     /// Returns the sort seed if set.
-    fn sort_seed(&self) -> Option<&Vec<u8>>;
+    fn deterministic_sort_seed(&self) -> Option<&Vec<u8>>;
     /// Sets the sort seed.
-    fn set_sort_seed(&mut self, seed: Vec<u8>);
+    fn set_deterministic_sort_seed(&mut self, seed: Vec<u8>);
 }
 
 impl GlobalFieldsExt for Global {
@@ -154,13 +154,11 @@ impl GlobalFieldsExt for Global {
             .insert(psbt_global_sort_deterministic(), vec![0x01]);
     }
 
-    // FIXME deterministic_sort_seed
-    fn sort_seed(&self) -> Option<&Vec<u8>> {
+    fn deterministic_sort_seed(&self) -> Option<&Vec<u8>> {
         self.proprietaries.get(&psbt_global_sort_seed())
     }
 
-    // FIXME rename set_deterministic_sort_seed
-    fn set_sort_seed(&mut self, seed: Vec<u8>) {
+    fn set_deterministic_sort_seed(&mut self, seed: Vec<u8>) {
         self.proprietaries.insert(psbt_global_sort_seed(), seed);
     }
 }

@@ -51,7 +51,7 @@ impl Creator {
 
     /// Provide a sort seed, staying in [`Relaxed`] mode → [`Relaxed<Seeded>`].
     pub fn set_seed(mut self, seed: Vec<u8>) -> CreatorWith<Relaxed<Seeded>> {
-        self.0.global.set_sort_seed(seed);
+        self.0.global.set_deterministic_sort_seed(seed);
         CreatorWith(self.0, PhantomData)
     }
 
@@ -92,7 +92,7 @@ impl<S: SortMode> CreatorWith<S> {
 impl CreatorWith<Deterministic<Unseeded>> {
     /// Provide the sort seed, transitioning to [`Deterministic<Seeded>`].
     pub fn set_seed(mut self, seed: Vec<u8>) -> CreatorWith<Deterministic<Seeded>> {
-        self.0.global.set_sort_seed(seed);
+        self.0.global.set_deterministic_sort_seed(seed);
         CreatorWith(self.0, PhantomData)
     }
 }
@@ -100,7 +100,7 @@ impl CreatorWith<Deterministic<Unseeded>> {
 impl CreatorWith<Relaxed<Unseeded>> {
     /// Provide the sort seed, transitioning to [`Relaxed<Seeded>`].
     pub fn set_seed(mut self, seed: Vec<u8>) -> CreatorWith<Relaxed<Seeded>> {
-        self.0.global.set_sort_seed(seed);
+        self.0.global.set_deterministic_sort_seed(seed);
         CreatorWith(self.0, PhantomData)
     }
 }
