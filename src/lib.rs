@@ -19,12 +19,7 @@ mod fields;
 #[cfg(feature = "_internal")]
 pub mod fields;
 
-// FIXME move the following modules under a `psbt` module
-mod global;
-mod input;
-mod output;
-mod psbt_ext;
-mod tx;
+mod psbt;
 
 // FIXME this pub stuff needs to be done deliberately. there should be a single
 // `mod reexports` that does pub use of these, and then the top level can pub use
@@ -39,12 +34,12 @@ pub mod dynamic;
 /// Re-exports for fuzzing and internal tooling. Not part of the public API.
 #[cfg(feature = "_internal")]
 pub mod _internal {
-    pub use crate::global::{Global, GlobalExt, ResultGlobal};
-    pub use crate::input::{Input, InputSet, ResultInput, ResultInputSet};
+    pub use crate::psbt::global::{Global, GlobalExt, ResultGlobal};
+    pub use crate::psbt::input::{Input, InputSet, ResultInput, ResultInputSet};
     pub use crate::lattice::join::Join;
     pub use crate::lattice::partial::PartialJoin;
-    pub use crate::output::{Output, OutputSet, ResultOutput, ResultOutputSet};
-    pub use crate::tx::UnorderedPsbt;
+    pub use crate::psbt::output::{Output, OutputSet, ResultOutput, ResultOutputSet};
+    pub use crate::psbt::tx::UnorderedPsbt;
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ use crate::constructor::{Constructor as StaticConstructor, Error};
 use crate::fields::{GlobalFieldsExt as _, GlobalModifiableExt as _};
 
 use crate::sort::{Deterministic, ExplicitSortKeys, Relaxed, Seeded, SortMode, Unseeded};
-use crate::tx::UnorderedPsbt;
+use crate::psbt::tx::UnorderedPsbt;
 
 // Silence unused-import warnings for sort-mode types used only as type params.
 #[allow(unused_imports)]
@@ -36,7 +36,7 @@ pub enum AnyModifiability {
 }
 
 impl AnyModifiability {
-    /// Read from the tx-modifiable flags on a [`crate::global::Global`].
+    /// Read from the tx-modifiable flags on a [`crate::psbt::global::Global`].
     pub fn from_global(global: &psbt_v2::v2::Global) -> Self {
         use crate::fields::GlobalModifiableExt as _;
         match (global.is_inputs_modifiable(), global.is_outputs_modifiable()) {
@@ -174,7 +174,7 @@ impl Constructor {
     /// When both modifiable flags are cleared, `modifiable` is set to
     /// [`AnyModifiability::NotModifiable`] and `Ok` is still returned.
     pub fn from_psbt(psbt: Psbt) -> Result<Self, Error> {
-        use crate::psbt_ext::PsbtExt as _;
+        use crate::psbt::psbt_ext::PsbtExt as _;
         psbt.validate_all_outputs_have_unique_ids()?;
         let unordered = UnorderedPsbt::unchecked_from_psbt(psbt);
         if !unordered.is_unordered() {
@@ -296,7 +296,7 @@ impl Constructor {
             b.global.clear_outputs_modifiable();
         }
 
-        let joined = a.try_join(b).map_err(|crate::tx::JoinError(c)| Error::JoinConflict(c))?;
+        let joined = a.try_join(b).map_err(|crate::psbt::tx::JoinError(c)| Error::JoinConflict(c))?;
         Ok(Constructor { modifiable: result_modifiable, sort_mode: self.sort_mode, psbt: joined })
     }
 }
@@ -307,7 +307,7 @@ mod tests {
     use super::*;
     use crate::constructor::{Constructor, Error, ExplicitSortKeys, Relaxed, Unseeded};
     use crate::creator::Creator;
-    use crate::output::OutputExt as _;
+    use crate::psbt::output::OutputExt as _;
 
     use psbt_v2::v2::{
         Creator as Bip370Creator, InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable,

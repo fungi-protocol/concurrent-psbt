@@ -6,9 +6,9 @@ use super::sorter::{sort_by_extracted_key, Sorter, SorterError};
 use super::traits::{ExplicitSortKeys, Sortable, TrySortable};
 
 impl Sorter<ExplicitSortKeys> {
-    /// Construct from a [`crate::tx::UnorderedPsbt`], validating that
+    /// Construct from a [`crate::psbt::tx::UnorderedPsbt`], validating that
     /// `PSBT_GLOBAL_SORT_DETERMINISTIC` is `0x00`.
-    pub fn new(psbt: crate::tx::UnorderedPsbt) -> Result<Self, SorterError> {
+    pub fn new(psbt: crate::psbt::tx::UnorderedPsbt) -> Result<Self, SorterError> {
         use crate::fields::GlobalFieldsExt as _;
         if !psbt.global.is_sort_explicit() {
             return Err(SorterError::SortModeMismatch);
@@ -21,8 +21,8 @@ impl Sorter<ExplicitSortKeys> {
     /// Returns `Err` if any key is missing or two items share the same key.
     pub fn try_sort(self) -> Result<Psbt, crate::constructor::SortingError> {
         use crate::fields::GlobalFieldsExt as _;
-        use crate::input::InputExt as _;
-        use crate::output::OutputExt as _;
+        use crate::psbt::input::InputExt as _;
+        use crate::psbt::output::OutputExt as _;
         let inputs = sort_by_extracted_key(self.0.inputs, |i| i.take_sort_key())?;
         let outputs = sort_by_extracted_key(self.0.outputs, |o| o.take_sort_key())?;
         let mut global = self.0.global;

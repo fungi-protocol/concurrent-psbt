@@ -1,6 +1,6 @@
 //! [`Sorter<S>`] struct, sort-key derivation helpers, and `sort_by_extracted_key`.
 
-use crate::tx::UnorderedPsbt;
+use crate::psbt::tx::UnorderedPsbt;
 
 use super::traits::SortMode;
 

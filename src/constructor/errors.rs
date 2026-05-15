@@ -22,7 +22,7 @@ pub enum Error {
 
     /// Joining the new input or output with the existing PSBT produced a conflict.
     #[error("joining the new input or output produced a conflict")]
-    JoinConflict(crate::tx::ResultUnorderedPsbt),
+    JoinConflict(crate::psbt::tx::ResultUnorderedPsbt),
 
     /// A locked (non-modifiable) set contained items not present in the other side.
     #[error("a locked set contained items not present in the other constructor")]

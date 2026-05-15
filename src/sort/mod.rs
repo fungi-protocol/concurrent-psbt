@@ -25,7 +25,7 @@ pub(crate) use sorter::{derive_sort_key, OutPointIdentifier};
 mod tests {
     use super::*;
     use crate::creator::Creator;
-    use crate::input::InputExt as _;
+    use crate::psbt::input::InputExt as _;
 
     fn assert_sort_mode<S: SortMode>() {}
     fn assert_infallible<S: CanSortInfallibly>() {}

@@ -12,12 +12,12 @@ use psbt_v2::v2::{Input, Output};
 pub struct JoinError(pub ResultUnorderedPsbt);
 
 use crate::fields::GlobalFieldsExt as _;
-use crate::global::Global;
-use crate::global::GlobalExt;
-use crate::global::ResultGlobal;
-use crate::input::{InputSet, ResultInputSet};
+use super::global::Global;
+use super::global::GlobalExt;
+use super::global::ResultGlobal;
+use super::input::{InputSet, ResultInputSet};
 use crate::lattice::join::Join;
-use crate::output::{OutputSet, ResultOutputSet};
+use super::output::{OutputSet, ResultOutputSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnorderedPsbt {

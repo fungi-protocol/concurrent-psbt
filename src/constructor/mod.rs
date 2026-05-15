@@ -10,7 +10,7 @@ pub use crate::sort::{
 };
 
 use crate::fields::GlobalModifiableExt as _;
-use crate::tx::UnorderedPsbt;
+use crate::psbt::tx::UnorderedPsbt;
 
 use psbt_v2::v2::{Input, Output};
 
@@ -22,8 +22,8 @@ pub use errors::{Error, SortingError};
 /// Extract sort keys from items via `take_key`, sort by key, return items in order.
 ///
 /// Fails if any key is missing or if two items share the same sort key.
-use crate::output::OutputExt as _;
-use crate::psbt_ext::PsbtExt as _;
+use crate::psbt::output::OutputExt as _;
+use crate::psbt::psbt_ext::PsbtExt as _;
 
 // -- Constructor -------------------------------------------------------------
 
@@ -72,7 +72,7 @@ impl<M: Mod, S: SortMode + 'static> Constructor<M, S> {
         self.0
             .try_join(other.0)
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|crate::tx::JoinError(c)| Error::JoinConflict(c))
+            .map_err(|crate::psbt::tx::JoinError(c)| Error::JoinConflict(c))
     }
 }
 
@@ -119,12 +119,12 @@ impl<S: SortMode + 'static> Constructor<Modifiable, S> {
     /// - If the input has an explicit sort key, it must not duplicate any
     ///   existing input's sort key.
     pub fn input(self, input: Input) -> Result<Self, Error> {
-        use crate::input::InputExt as _;
+        use crate::psbt::input::InputExt as _;
         input.validate_sort_key::<S>()?;
         self.0
             .try_join(UnorderedPsbt::from_input(input))
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|crate::tx::JoinError(c)| Error::JoinConflict(c))
+            .map_err(|crate::psbt::tx::JoinError(c)| Error::JoinConflict(c))
     }
 
     /// Add an output. Requires `PSBT_OUT_UNIQUE_ID`.
@@ -134,13 +134,13 @@ impl<S: SortMode + 'static> Constructor<Modifiable, S> {
     /// - If the output has an explicit sort key, it must not duplicate any
     ///   existing output's sort key.
     pub fn output(self, output: Output) -> Result<Self, Error> {
-        use crate::output::OutputExt as _;
+        use crate::psbt::output::OutputExt as _;
         output.validate_has_unique_id()?;
         output.validate_sort_key::<S>()?;
         self.0
             .try_join(UnorderedPsbt::from_output(output))
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|crate::tx::JoinError(c)| Error::JoinConflict(c))
+            .map_err(|crate::psbt::tx::JoinError(c)| Error::JoinConflict(c))
     }
 
     /// Lock inputs: transition to `OutputsOnlyModifiable`.
@@ -169,7 +169,7 @@ impl<S: SortMode + 'static> Constructor<InputsOnlyModifiable, S> {
         self.0
             .try_join(singleton)
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|crate::tx::JoinError(c)| Error::JoinConflict(c))
+            .map_err(|crate::psbt::tx::JoinError(c)| Error::JoinConflict(c))
     }
 
     /// Wrap an existing PSBT, validating it is unordered and inputs-only modifiable.
@@ -204,7 +204,7 @@ impl<S: SortMode + 'static> Constructor<OutputsOnlyModifiable, S> {
         self.0
             .try_join(singleton)
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|crate::tx::JoinError(c)| Error::JoinConflict(c))
+            .map_err(|crate::psbt::tx::JoinError(c)| Error::JoinConflict(c))
     }
 
     /// Wrap an existing PSBT, validating it is unordered and outputs-only modifiable.
@@ -236,7 +236,7 @@ mod tests {
     use super::*;
     use crate::creator::Creator;
     use crate::fields::GlobalFieldsExt as _;
-    use crate::input::InputExt as _;
+    use crate::psbt::input::InputExt as _;
     use psbt_v2::v2::Creator as Bip370Creator;
 
     #[test]
@@ -366,8 +366,8 @@ mod tests {
         assert_eq!(ordered.outputs[1].amount, bitcoin::Amount::from_sat(2000));
 
         // Sort keys are scrubbed from the ordered PSBT.
-        use crate::input::InputExt as _;
-        use crate::output::OutputExt as _;
+        use crate::psbt::input::InputExt as _;
+        use crate::psbt::output::OutputExt as _;
         assert!(ordered.inputs.iter().all(|i| i.sort_key().is_none()));
         assert!(ordered.outputs.iter().all(|o| o.sort_key().is_none()));
     }

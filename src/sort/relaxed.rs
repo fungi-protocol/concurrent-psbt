@@ -6,9 +6,9 @@ use super::sorter::{sort_by_extracted_key, Sorter, SorterError};
 use super::traits::{Relaxed, Seeded, Sortable, TrySortable, Unseeded};
 
 impl Sorter<Relaxed<Seeded>> {
-    /// Construct from a [`crate::tx::UnorderedPsbt`], validating that
+    /// Construct from a [`crate::psbt::tx::UnorderedPsbt`], validating that
     /// `PSBT_GLOBAL_SORT_DETERMINISTIC` is absent and a seed is present.
-    pub fn new(psbt: crate::tx::UnorderedPsbt) -> Result<Self, SorterError> {
+    pub fn new(psbt: crate::psbt::tx::UnorderedPsbt) -> Result<Self, SorterError> {
         use crate::fields::GlobalFieldsExt as _;
         if !psbt.global.sort_deterministic_absent() {
             return Err(SorterError::SortModeMismatch);
@@ -22,8 +22,8 @@ impl Sorter<Relaxed<Seeded>> {
     /// Sort using explicit keys where present, otherwise seed-derived (infallible).
     pub fn sort(self) -> Psbt {
         use crate::fields::GlobalFieldsExt as _;
-        use crate::input::InputExt as _;
-        use crate::output::OutputExt as _;
+        use crate::psbt::input::InputExt as _;
+        use crate::psbt::output::OutputExt as _;
         let seed = self.0.global.deterministic_sort_seed()
             .expect("Relaxed<Seeded> always has a seed")
             .clone();
@@ -57,9 +57,9 @@ impl Sortable for Sorter<Relaxed<Seeded>> {
 }
 
 impl Sorter<Relaxed<Unseeded>> {
-    /// Construct from a [`crate::tx::UnorderedPsbt`], validating that
+    /// Construct from a [`crate::psbt::tx::UnorderedPsbt`], validating that
     /// `PSBT_GLOBAL_SORT_DETERMINISTIC` is absent (seed not required).
-    pub fn new(psbt: crate::tx::UnorderedPsbt) -> Result<Self, SorterError> {
+    pub fn new(psbt: crate::psbt::tx::UnorderedPsbt) -> Result<Self, SorterError> {
         use crate::fields::GlobalFieldsExt as _;
         if !psbt.global.sort_deterministic_absent() {
             return Err(SorterError::SortModeMismatch);

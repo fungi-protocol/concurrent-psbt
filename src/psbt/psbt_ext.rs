@@ -1,7 +1,7 @@
 //! Extension trait for [`psbt_v2::v2::Psbt`] adding output validation.
 
 use crate::constructor::Error;
-use crate::output::OutputExt as _;
+use super::output::OutputExt as _;
 use psbt_v2::v2::Psbt;
 use std::collections::HashSet;
 

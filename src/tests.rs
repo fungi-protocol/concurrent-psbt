@@ -1,8 +1,8 @@
 use crate::{
-    global::{Global, GlobalExt as _},
-    input::{Input, InputExt as _, InputSet},
+    psbt::global::{Global, GlobalExt as _},
+    psbt::input::{Input, InputExt as _, InputSet},
     lattice::join::Join,
-    output::{Output, OutputExt as _, OutputSet},
+    psbt::output::{Output, OutputExt as _, OutputSet},
 };
 use bitcoin::{
     Amount, OutPoint, PublicKey, ScriptBuf, Sequence, TapNodeHash, TxOut, Txid, Witness, absolute,
@@ -62,64 +62,64 @@ macro_rules! impl_wrap_join {
     };
 }
 
-fn wrap_global(g: Global) -> crate::global::ResultGlobal {
+fn wrap_global(g: Global) -> crate::psbt::global::ResultGlobal {
     g.wrap()
 }
 fn join_global(
-    a: crate::global::ResultGlobal,
-    b: crate::global::ResultGlobal,
-) -> crate::global::ResultGlobal {
+    a: crate::psbt::global::ResultGlobal,
+    b: crate::psbt::global::ResultGlobal,
+) -> crate::psbt::global::ResultGlobal {
     Join::join(a, b)
 }
 fn try_unwrap_global(
-    r: crate::global::ResultGlobal,
-) -> Result<Global, crate::global::ResultGlobal> {
+    r: crate::psbt::global::ResultGlobal,
+) -> Result<Global, crate::psbt::global::ResultGlobal> {
     r.try_unwrap()
 }
 impl_wrap_join!(Global, wrap_global, join_global, try_unwrap_global);
 
-fn wrap_input(i: Input) -> crate::input::ResultInput {
+fn wrap_input(i: Input) -> crate::psbt::input::ResultInput {
     i.wrap()
 }
 fn join_input(
-    a: crate::input::ResultInput,
-    b: crate::input::ResultInput,
-) -> crate::input::ResultInput {
+    a: crate::psbt::input::ResultInput,
+    b: crate::psbt::input::ResultInput,
+) -> crate::psbt::input::ResultInput {
     Join::join(a, b)
 }
-fn try_unwrap_input(r: crate::input::ResultInput) -> Result<Input, crate::input::ResultInput> {
+fn try_unwrap_input(r: crate::psbt::input::ResultInput) -> Result<Input, crate::psbt::input::ResultInput> {
     r.try_unwrap()
 }
 impl_wrap_join!(Input, wrap_input, join_input, try_unwrap_input);
 
-fn wrap_output(o: Output) -> crate::output::ResultOutput {
+fn wrap_output(o: Output) -> crate::psbt::output::ResultOutput {
     o.wrap()
 }
 fn join_output(
-    a: crate::output::ResultOutput,
-    b: crate::output::ResultOutput,
-) -> crate::output::ResultOutput {
+    a: crate::psbt::output::ResultOutput,
+    b: crate::psbt::output::ResultOutput,
+) -> crate::psbt::output::ResultOutput {
     Join::join(a, b)
 }
 fn try_unwrap_output(
-    r: crate::output::ResultOutput,
-) -> Result<Output, crate::output::ResultOutput> {
+    r: crate::psbt::output::ResultOutput,
+) -> Result<Output, crate::psbt::output::ResultOutput> {
     r.try_unwrap()
 }
 impl_wrap_join!(Output, wrap_output, join_output, try_unwrap_output);
 
-fn wrap_input_set(s: InputSet) -> crate::input::ResultInputSet {
+fn wrap_input_set(s: InputSet) -> crate::psbt::input::ResultInputSet {
     s.wrap()
 }
 fn join_input_set(
-    a: crate::input::ResultInputSet,
-    b: crate::input::ResultInputSet,
-) -> crate::input::ResultInputSet {
+    a: crate::psbt::input::ResultInputSet,
+    b: crate::psbt::input::ResultInputSet,
+) -> crate::psbt::input::ResultInputSet {
     Join::join(a, b)
 }
 fn try_unwrap_input_set(
-    r: crate::input::ResultInputSet,
-) -> Result<InputSet, crate::input::ResultInputSet> {
+    r: crate::psbt::input::ResultInputSet,
+) -> Result<InputSet, crate::psbt::input::ResultInputSet> {
     r.try_unwrap()
 }
 impl_wrap_join!(
@@ -129,18 +129,18 @@ impl_wrap_join!(
     try_unwrap_input_set
 );
 
-fn wrap_output_set(s: OutputSet) -> crate::output::ResultOutputSet {
+fn wrap_output_set(s: OutputSet) -> crate::psbt::output::ResultOutputSet {
     s.wrap()
 }
 fn join_output_set(
-    a: crate::output::ResultOutputSet,
-    b: crate::output::ResultOutputSet,
-) -> crate::output::ResultOutputSet {
+    a: crate::psbt::output::ResultOutputSet,
+    b: crate::psbt::output::ResultOutputSet,
+) -> crate::psbt::output::ResultOutputSet {
     Join::join(a, b)
 }
 fn try_unwrap_output_set(
-    r: crate::output::ResultOutputSet,
-) -> Result<OutputSet, crate::output::ResultOutputSet> {
+    r: crate::psbt::output::ResultOutputSet,
+) -> Result<OutputSet, crate::psbt::output::ResultOutputSet> {
     r.try_unwrap()
 }
 impl_wrap_join!(
