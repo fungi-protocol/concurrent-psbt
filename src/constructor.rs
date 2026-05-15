@@ -16,7 +16,7 @@ use psbt_v2::v2::{Input, Output};
 
 // FIXME use thiserror instead of implementing manually
 /// Error returned when a PSBT is not suitable for an unordered Constructor.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Error {
     /// The `PSBT_GLOBAL_TX_UNORDERED` field is missing or has a wrong value.
     NotUnordered,
@@ -27,7 +27,7 @@ pub enum Error {
     /// An output is missing the `PSBT_OUT_UNIQUE_ID` proprietary field.
     MissingOutputUniqueId,
     /// Joining the new input or output with the existing PSBT produced a conflict.
-    JoinConflict,
+    JoinConflict(crate::tx::ResultUnorderedPsbt),
 }
 
 impl core::fmt::Display for Error {
@@ -37,12 +37,27 @@ impl core::fmt::Display for Error {
             Error::InputsNotModifiable => f.write_str("inputs are not modifiable"),
             Error::OutputsNotModifiable => f.write_str("outputs are not modifiable"),
             Error::MissingOutputUniqueId => f.write_str("an output is missing PSBT_OUT_UNIQUE_ID"),
-            Error::JoinConflict => {
+            Error::JoinConflict(_) => {
                 f.write_str("joining the new input or output produced a conflict")
             }
         }
     }
 }
+
+impl PartialEq for Error {
+    fn eq(&self, other: &Self) -> bool {
+        matches!(
+            (self, other),
+            (Error::NotUnordered, Error::NotUnordered)
+                | (Error::InputsNotModifiable, Error::InputsNotModifiable)
+                | (Error::OutputsNotModifiable, Error::OutputsNotModifiable)
+                | (Error::MissingOutputUniqueId, Error::MissingOutputUniqueId)
+                | (Error::JoinConflict(_), Error::JoinConflict(_))
+        )
+    }
+}
+
+impl Eq for Error {}
 
 // FIXME use thiserror instead of implementing manually
 /// Error returned when sorting an unordered Constructor into a fixed order.
@@ -176,7 +191,7 @@ impl<M: Mod> Constructor<M> {
             .global
             .proprietaries
             .get(&det_key)
-            .ok_or(SortingError::MissingSortDeterministic)?;
+            .ok_or(SortingError::MissingSortDeterministic)?; // FIXME this should not be an error. 0x00 = deterministic sort keys forbidden. 0x01 = required. unset = missing sort keys will be derived but some can be explicit
 
         match det_value.as_slice() {
             [0x00] => {}
@@ -184,7 +199,8 @@ impl<M: Mod> Constructor<M> {
             _ => return Err(SortingError::InvalidSortDeterministic),
         }
 
-        // TODO when DETERMINISTIC=0x01, derive missing keys from seed instead of failing.
+        // TODO when DETERMINISTIC=0x01 or is not set, derive missing keys from
+        // seed instead of failing.
         let inputs = sort_by_extracted_key(self.0.inputs, |i| i.take_sort_key())?;
         let outputs = sort_by_extracted_key(self.0.outputs, |o| o.take_sort_key())?;
 
@@ -197,9 +213,41 @@ impl<M: Mod> Constructor<M> {
             outputs,
         })
     }
-}
 
-// TODO enum of Constructor<Modifiable> etc constructible from a Psbt
+    // FIXME
+    // - provide an enum wrapping Constructors with different modifiability. add
+    //   a constructor from Psbt for these, which allows matching to get the
+    //   right typestate, instead of knowing the right type a priori and using
+    //   its associated new()
+    // - fn try_join() (but not impl PartialJoin due to trait coherence) to merge two Constructors
+    //   - for the generic typestate Constructors:
+    //     - if either inputs or outputs are unmodifiable statically, they will
+    //       be for both. assert that the sets are identical.
+    //     - the input and output count JoinResult<usize> is set to Ok(join(a_set, b_set).len()).
+    //     - after resetting input/output count, which may be a conflict or may
+    //       just be incorrect, return try_unwrap() to attempt to lower down to
+    //       Ok() subspace of the Result lattice if no conflicts exist
+    //   - for the enum of all types, which allows merging constructors with different modifiability:
+    //     - unmodifiablility is a lattice, the bottom is both modifiable, top
+    //       is both unmodifiable.
+    //       this implies the creator should always set both to modifiable
+    //     - for the unmodifiable side(s), assert that its {in,out}put set is
+    //       equal to the join of it and the other side. the other side may be a
+    //       subset or or empty.
+    //     - first raise both a and b to the join of the modifiability lattice,
+    //       with the idempotent join of the corresponding sets substituted.
+    //       given two constructors of the same typestate, they can now be
+    //       joined with the same type definition
+    // - Constructor::from_{in,out}put(...) constructors
+    //   - make singleton UnorderedPsbt
+    //   - input()/output() methods should make such constructors of single
+    //     element PSBTs, and call try_join on self. the internals of this can
+    //     be implemented once in this impl block. input() and output() on the
+    //     various typestates can wrap self and the new singleton (fully
+    //     modifiable) in their corresponding enum variants and try to join
+    //     those. the singleton will be raised to the typestate of self, so the
+    //     return value can be expect()ed to match self's concrete type
+}
 
 impl Constructor<Modifiable> {
     /// Wrap an existing PSBT, validating it is unordered and fully modifiable.
@@ -220,33 +268,29 @@ impl Constructor<Modifiable> {
 
     /// Add an input.
     ///
-    /// Returns `Err(Error::JoinConflict)` if the same outpoint is already
-    /// present with conflicting field values.
+    /// Returns `Err(Error::JoinConflict(_))` if the same outpoint is already
+    /// present with conflicting field values. The payload is the
+    /// conflict-annotated `ResultUnorderedPsbt` with correct counts.
     pub fn input(self, input: Input) -> Result<Self, Error> {
-        // FIXME this should not clone self.0 but start with a new unordered
-        // PSBT. UnorderedPsbt::from_output
-        let mut singleton = self.0.clone();
-        singleton.inputs = [input].into_iter().collect();
-        singleton.outputs = Default::default();
+        let singleton = UnorderedPsbt::from_input(&self.0.global, input);
         self.0
-            .join(singleton) // FIXME define try_join, there is no join for UnorderedPsbt
+            .try_join(singleton)
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|_| Error::JoinConflict) // FIXME replace the inputs_count with a recalculated value, then try_unwrap()
+            .map_err(Error::JoinConflict)
     }
 
     /// Add an output. Requires `PSBT_OUT_UNIQUE_ID`.
     ///
-    /// Returns `Err(Error::JoinConflict)` if the same unique ID is already
-    /// present with conflicting field values.
+    /// Returns `Err(Error::JoinConflict(_))` if the same unique ID is already
+    /// present with conflicting field values. The payload is the
+    /// conflict-annotated `ResultUnorderedPsbt` with correct counts.
     pub fn output(self, output: Output) -> Result<Self, Error> {
         validate_output_unique_id(&output)?;
-        let mut singleton = self.0.clone();
-        singleton.inputs = Default::default();
-        singleton.outputs = [output].into_iter().collect();
+        let singleton = UnorderedPsbt::from_output(&self.0.global, output);
         self.0
-            .join(singleton)
+            .try_join(singleton)
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|_| Error::JoinConflict)
+            .map_err(Error::JoinConflict)
     }
 
     /// Sort inputs/outputs and produce a BIP 370 `Constructor<Modifiable>`.
@@ -271,17 +315,14 @@ impl Constructor<Modifiable> {
 impl Constructor<InputsOnlyModifiable> {
     /// Add an input.
     ///
-    /// Returns `Err(Error::JoinConflict)` if the same outpoint is already
+    /// Returns `Err(Error::JoinConflict(_))` if the same outpoint is already
     /// present with conflicting field values.
-    // FIXME reduce duplication by only implementing this once the generic Constructor<M>,
     pub fn input(self, input: Input) -> Result<Self, Error> {
-        let mut singleton = self.0.clone();
-        singleton.inputs = [input].into_iter().collect();
-        singleton.outputs = Default::default();
+        let singleton = UnorderedPsbt::from_input(&self.0.global, input);
         self.0
-            .join(singleton)
+            .try_join(singleton)
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|_| Error::JoinConflict)
+            .map_err(Error::JoinConflict)
     }
 
     /// Wrap an existing PSBT, validating it is unordered and inputs-only modifiable.
@@ -314,19 +355,15 @@ impl Constructor<InputsOnlyModifiable> {
 impl Constructor<OutputsOnlyModifiable> {
     /// Add an output. Requires `PSBT_OUT_UNIQUE_ID`.
     ///
-    /// Returns `Err(Error::JoinConflict)` if the same unique ID is already
+    /// Returns `Err(Error::JoinConflict(_))` if the same unique ID is already
     /// present with conflicting field values.
     pub fn output(self, output: Output) -> Result<Self, Error> {
         validate_output_unique_id(&output)?;
-        // FIXME this should not clone self.0 but start with a new unordered
-        // PSBT. UnorderedPsbt::from_output
-        let mut singleton = self.0.clone();
-        singleton.inputs = Default::default();
-        singleton.outputs = [output].into_iter().collect();
+        let singleton = UnorderedPsbt::from_output(&self.0.global, output);
         self.0
-            .join(singleton) // FIXME define try_join, there is no join for UnorderedPsbt
+            .try_join(singleton)
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|_| Error::JoinConflict) // FIXME replace the outputs_count with a recalculated value, then try_unwrap
+            .map_err(Error::JoinConflict)
     }
 
     /// Wrap an existing PSBT, validating it is unordered and outputs-only modifiable.
@@ -794,6 +831,26 @@ mod tests {
     }
 
     #[test]
+    fn input_conflict_error_has_correct_count() {
+        // Same outpoint, different sequence → conflict.
+        // The error value's global.input_count should reflect the
+        // actual set size (1), not 0 or 2.
+        let c = Creator::new().constructor();
+        let op = bitcoin::OutPoint::null();
+        let mut input_a = psbt_v2::v2::Input::new(&op);
+        input_a.sequence = Some(bitcoin::Sequence::MAX);
+        let mut input_b = psbt_v2::v2::Input::new(&op);
+        input_b.sequence = Some(bitcoin::Sequence::ENABLE_LOCKTIME_NO_RBF);
+        let c = c.input(input_a).unwrap();
+        let err = c.input(input_b).unwrap_err();
+        assert!(matches!(err, Error::JoinConflict(_)));
+        if let Error::JoinConflict(result) = err {
+            // Count must be 1 (one distinct outpoint), not 0 or 2.
+            assert_eq!(result.global.input_count, Ok(1));
+        }
+    }
+
+    #[test]
     fn input_join_conflict_returns_error() {
         // Same outpoint, different sequence → conflict.
         let c = Creator::new().constructor();
@@ -803,7 +860,7 @@ mod tests {
         let mut input_b = psbt_v2::v2::Input::new(&op);
         input_b.sequence = Some(bitcoin::Sequence::ENABLE_LOCKTIME_NO_RBF);
         let c = c.input(input_a).unwrap();
-        assert_eq!(c.input(input_b), Err(Error::JoinConflict));
+        assert!(matches!(c.input(input_b), Err(Error::JoinConflict(_))));
     }
 
     #[test]

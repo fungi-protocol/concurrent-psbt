@@ -1,5 +1,7 @@
 pub use psbt_v2::v2::Psbt;
 
+use psbt_v2::v2::{Input, Output};
+
 use crate::global::Global;
 use crate::global::GlobalExt;
 use crate::global::ResultGlobal;
@@ -18,6 +20,36 @@ pub struct UnorderedPsbt {
 }
 
 impl UnorderedPsbt {
+    /// Build a singleton `UnorderedPsbt` containing only `input`.
+    ///
+    /// The global is cloned from `global` with `input_count = 1` and
+    /// `output_count = 0`.
+    pub(crate) fn from_input(global: &Global, input: Input) -> Self {
+        let mut g = global.clone();
+        g.input_count = 1;
+        g.output_count = 0;
+        Self {
+            global: g,
+            inputs: [input].into_iter().collect(),
+            outputs: Default::default(),
+        }
+    }
+
+    /// Build a singleton `UnorderedPsbt` containing only `output`.
+    ///
+    /// The global is cloned from `global` with `input_count = 0` and
+    /// `output_count = 1`.
+    pub(crate) fn from_output(global: &Global, output: Output) -> Self {
+        let mut g = global.clone();
+        g.input_count = 0;
+        g.output_count = 1;
+        Self {
+            global: g,
+            inputs: Default::default(),
+            outputs: [output].into_iter().collect(),
+        }
+    }
+
     /// Infallible, lossy conversion from PSBT (forgets order). You probably
     /// want `crate::Constructor` instead.
     ///
@@ -45,7 +77,7 @@ impl UnorderedPsbt {
     ///
     /// `input_count` and `output_count` are taken from the post-join set
     /// sizes, so they never cause spurious conflicts.
-    pub fn join(self, other: Self) -> Result<Self, ResultUnorderedPsbt> {
+    pub fn try_join(self, other: Self) -> Result<Self, ResultUnorderedPsbt> {
         // Join content sets first so we can derive the true cardinalities.
         let inputs = self.inputs.wrap().join(other.inputs.wrap());
         let outputs = self.outputs.wrap().join(other.outputs.wrap());
@@ -66,7 +98,11 @@ impl UnorderedPsbt {
 
         let global = a_global.wrap().join(b_global.wrap());
 
-        let result = ResultUnorderedPsbt { global, inputs, outputs };
+        let result = ResultUnorderedPsbt {
+            global,
+            inputs,
+            outputs,
+        };
         result.try_unwrap().map_err(|e| e)
     }
 
