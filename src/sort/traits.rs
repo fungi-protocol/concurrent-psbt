@@ -32,7 +32,7 @@ impl SeedState for Seeded {}
 /// - `0x00`  → [`ExplicitSortKeys`]
 /// - `0x01`  → [`Deterministic<_>`]
 /// - unset   → [`Relaxed<_>`]
-
+///
 /// All sort keys are set explicitly on every input and output.
 ///
 /// Corresponds to `PSBT_GLOBAL_SORT_DETERMINISTIC = 0x00`.

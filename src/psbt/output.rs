@@ -18,6 +18,10 @@ impl OutputSet {
         self.0.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn contains_unique_id(&self, id: &[u8]) -> bool {
         self.0.contains_key(id)
     }
@@ -196,11 +200,11 @@ impl ResultOutputSet {
         let mut ret = Ok(()); // TODO Conflict and absorb?
 
         for result_output in self.0.values_mut() {
-            if let Some(Ok(k)) = result_output.sort_key() {
-                if seen.get(k).copied().unwrap_or(0) > 1 {
-                    result_output.mark_sort_key_violation();
-                    ret = Err(());
-                }
+            if let Some(Ok(k)) = result_output.sort_key()
+                && seen.get(k).copied().unwrap_or(0) > 1
+            {
+                result_output.mark_sort_key_violation();
+                ret = Err(());
             }
         }
 
@@ -210,6 +214,10 @@ impl ResultOutputSet {
     /// Number of distinct outputs (by unique ID) in the joined set.
     pub fn len(&self) -> usize {
         self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     pub fn try_unwrap(self) -> Result<OutputSet, Self> {
@@ -299,12 +307,12 @@ impl ResultOutput {
     pub fn mark_sort_key_violation(&mut self) {
         use crate::lattice::partial::Conflict;
         let sort_key = crate::fields::psbt_out_sort_key();
-        if let Some(entry) = self.proprietaries.get_mut(&sort_key) {
-            if matches!(entry, Ok(_)) {
-                let v = std::mem::replace(entry, Err(Conflict(vec![])));
-                if let Ok(k) = v {
-                    *entry = Err(Conflict(vec![k]));
-                }
+        if let Some(entry) = self.proprietaries.get_mut(&sort_key)
+            && entry.is_ok()
+        {
+            let v = std::mem::replace(entry, Err(Conflict(vec![])));
+            if let Ok(k) = v {
+                *entry = Err(Conflict(vec![k]));
             }
         }
     }

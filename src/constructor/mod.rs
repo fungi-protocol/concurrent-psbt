@@ -74,7 +74,7 @@ impl<M: Mod, S: SortMode + 'static> Constructor<M, S> {
         self.0
             .try_join(other.0)
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|crate::psbt::tx::JoinError(c)| Error::JoinConflict(c))
+            .map_err(|crate::psbt::tx::JoinError(c)| Error::JoinConflict(Box::new(c)))
     }
 }
 
@@ -126,7 +126,7 @@ impl<S: SortMode + 'static> Constructor<Modifiable, S> {
         self.0
             .try_join(UnorderedPsbt::from_input(input))
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|crate::psbt::tx::JoinError(c)| Error::JoinConflict(c))
+            .map_err(|crate::psbt::tx::JoinError(c)| Error::JoinConflict(Box::new(c)))
     }
 
     /// Add an output. Requires `PSBT_OUT_UNIQUE_ID`.
@@ -142,7 +142,7 @@ impl<S: SortMode + 'static> Constructor<Modifiable, S> {
         self.0
             .try_join(UnorderedPsbt::from_output(output))
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|crate::psbt::tx::JoinError(c)| Error::JoinConflict(c))
+            .map_err(|crate::psbt::tx::JoinError(c)| Error::JoinConflict(Box::new(c)))
     }
 
     /// Lock inputs: transition to `OutputsOnlyModifiable`.
@@ -171,7 +171,7 @@ impl<S: SortMode + 'static> Constructor<InputsOnlyModifiable, S> {
         self.0
             .try_join(singleton)
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|crate::psbt::tx::JoinError(c)| Error::JoinConflict(c))
+            .map_err(|crate::psbt::tx::JoinError(c)| Error::JoinConflict(Box::new(c)))
     }
 
     /// Wrap an existing PSBT, validating it is unordered and inputs-only modifiable.
@@ -206,7 +206,7 @@ impl<S: SortMode + 'static> Constructor<OutputsOnlyModifiable, S> {
         self.0
             .try_join(singleton)
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|crate::psbt::tx::JoinError(c)| Error::JoinConflict(c))
+            .map_err(|crate::psbt::tx::JoinError(c)| Error::JoinConflict(Box::new(c)))
     }
 
     /// Wrap an existing PSBT, validating it is unordered and outputs-only modifiable.

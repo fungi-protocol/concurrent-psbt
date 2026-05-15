@@ -50,6 +50,10 @@ impl InputSet {
         self.0.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn insert(&mut self, input: Input) {
         self.0.insert(input.out_point(), input);
     }
@@ -90,11 +94,11 @@ impl ResultInputSet {
 
         let mut err = Ok(());
         for result_input in self.0.values_mut() {
-            if let Some(Ok(k)) = result_input.sort_key() {
-                if seen.get(k).copied().unwrap_or(0) > 1 {
-                    result_input.mark_sort_key_violation();
-                    err = Err(());
-                }
+            if let Some(Ok(k)) = result_input.sort_key()
+                && seen.get(k).copied().unwrap_or(0) > 1
+            {
+                result_input.mark_sort_key_violation();
+                err = Err(());
             }
         }
         err
@@ -103,6 +107,10 @@ impl ResultInputSet {
     /// Number of distinct inputs (by outpoint) in the joined set.
     pub fn len(&self) -> usize {
         self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     pub fn try_unwrap(self) -> Result<InputSet, Self> {
@@ -365,12 +373,12 @@ impl ResultInput {
     pub fn mark_sort_key_violation(&mut self) {
         use crate::lattice::partial::Conflict;
         let sort_key = crate::fields::psbt_in_sort_key();
-        if let Some(entry) = self.proprietaries.get_mut(&sort_key) {
-            if matches!(entry, Ok(_)) {
-                let v = std::mem::replace(entry, Err(Conflict(vec![])));
-                if let Ok(k) = v {
-                    *entry = Err(Conflict(vec![k]));
-                }
+        if let Some(entry) = self.proprietaries.get_mut(&sort_key)
+            && entry.is_ok()
+        {
+            let v = std::mem::replace(entry, Err(Conflict(vec![])));
+            if let Ok(k) = v {
+                *entry = Err(Conflict(vec![k]));
             }
         }
     }
