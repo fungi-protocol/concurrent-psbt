@@ -19,7 +19,7 @@
       timeout = "60";
     in
     {
-      checks = {
+      checks = rec {
         tests = craneLibNightly.cargoNextest (
           commonArgs
           // {
@@ -138,13 +138,18 @@
               fi
               mkdir -p $out
             '';
+
+        # Fast check bundle: tests + clippy only, no fuzzing or coverage.
+        # Run with: nix build .#checks.x86_64-linux.quick
+        quick = pkgs.symlinkJoin {
+          name = "quick-checks";
+          paths = [ tests clippy ];
+        };
       };
     };
 
   # TODO
-  # - checks.quick = bundle of fast checks
   # - a check that denies warnings including in cfg(test)
-  # - clippy
   # - cargo machete or equivalent
   # - cargo audit
   # - nix vuln scanning
