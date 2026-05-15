@@ -431,14 +431,15 @@ prop_compose! {
         unknowns      in proptest::collection::btree_map(arb_raw_key(), proptest::collection::vec(0u8..4, 0..4), 0..3),
         proprietaries in proptest::collection::btree_map(arb_proprietary_key(), proptest::collection::vec(0u8..4, 0..4), 0..3),
     ) -> Global {
-        let mut g = Global::default();
-        g.input_count = input_count;
-        g.output_count = output_count;
-        g.fallback_lock_time = fallback_lock_time;
-        g.tx_modifiable_flags = tx_modifiable_flags;
-        g.unknowns = unknowns;
-        g.proprietaries = proprietaries;
-        g
+        Global {
+            input_count,
+            output_count,
+            fallback_lock_time,
+            tx_modifiable_flags,
+            unknowns,
+            proprietaries,
+            ..Default::default()
+        }
     }
 }
 
