@@ -38,6 +38,10 @@ impl InputSet {
         self.0.contains_key(outpoint)
     }
 
+    pub fn iter_outpoints(&self) -> impl Iterator<Item = &OutPoint> {
+        self.0.keys()
+    }
+
     pub fn len(&self) -> usize {
         self.0.len()
     }

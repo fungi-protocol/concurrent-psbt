@@ -18,6 +18,14 @@ impl OutputSet {
         self.0.len()
     }
 
+    pub fn contains_unique_id(&self, id: &[u8]) -> bool {
+        self.0.contains_key(id)
+    }
+
+    pub fn iter_unique_ids(&self) -> impl Iterator<Item = &Vec<u8>> {
+        self.0.keys()
+    }
+
     pub fn insert(&mut self, output: Output) {
         let key = output.unique_id();
         self.0.insert(key, output);

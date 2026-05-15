@@ -150,6 +150,10 @@ fn validate_output_unique_id(output: &Output) -> Result<(), Error> {
 
 // -- Constructor -------------------------------------------------------------
 
+// FIXME introduce 2nd type param, either ExplicitSortKeys (sort()),
+// DeterministicSeeded (sort()), or DeterministicUnseeded
+// (sort_with_seed(Vec<u8>)) each asserting invariants and witha  minimal
+// sorting interface
 /// Unordered Constructor, mirrors the BIP 370 Constructor but for unordered PSBTs.
 pub struct Constructor<M: Mod>(UnorderedPsbt, PhantomData<M>);
 
@@ -247,29 +251,6 @@ impl<M: Mod> Constructor<M> {
             outputs,
         })
     }
-
-    // FIXME
-    // - fn try_join() on AnyConstructor (but not impl PartialJoin due to trait coherence):
-    //   - for the enum of all types, which allows merging constructors with different modifiability:
-    //     - unmodifiablility is a lattice, the bottom is both modifiable, top
-    //       is both unmodifiable.
-    //       this implies the creator should always set both to modifiable
-    //     - for the unmodifiable side(s), assert that its {in,out}put set is
-    //       equal to the join of it and the other side. the other side may be a
-    //       subset or or empty.
-    //     - first raise both a and b to the join of the modifiability lattice,
-    //       with the idempotent join of the corresponding sets substituted.
-    //       given two constructors of the same typestate, they can now be
-    //       joined with the same type definition
-    // - Constructor::from_{in,out}put(...) constructors
-    //   - make singleton UnorderedPsbt
-    //   - input()/output() methods should make such constructors of single
-    //     element PSBTs, and call try_join on self. the internals of this can
-    //     be implemented once in this impl block. input() and output() on the
-    //     various typestates can wrap self and the new singleton (fully
-    //     modifiable) in their corresponding enum variants and try to join
-    //     those. the singleton will be raised to the typestate of self, so the
-    //     return value can be expect()ed to match self's concrete type
 }
 
 impl Constructor<Modifiable> {
@@ -295,11 +276,13 @@ impl Constructor<Modifiable> {
     /// present with conflicting field values. The payload is the
     /// conflict-annotated `ResultUnorderedPsbt` with correct counts.
     pub fn input(self, input: Input) -> Result<Self, Error> {
-        let singleton = UnorderedPsbt::from_input(&self.0.global, input);
-        self.0
-            .try_join(singleton)
-            .map(|p| Constructor(p, PhantomData))
-            .map_err(Error::JoinConflict)
+        // FIXME no need to go through AnyConstructor for this case, same variant
+        let singleton =
+            AnyConstructor::Modifiable(Constructor(UnorderedPsbt::from_input(input), PhantomData));
+        match AnyConstructor::Modifiable(self).try_join(singleton)? {
+            AnyConstructor::Modifiable(c) => Ok(c),
+            _ => unreachable!("Modifiable joined with Modifiable stays Modifiable"),
+        }
     }
 
     /// Add an output. Requires `PSBT_OUT_UNIQUE_ID`.
@@ -309,11 +292,15 @@ impl Constructor<Modifiable> {
     /// conflict-annotated `ResultUnorderedPsbt` with correct counts.
     pub fn output(self, output: Output) -> Result<Self, Error> {
         validate_output_unique_id(&output)?;
-        let singleton = UnorderedPsbt::from_output(&self.0.global, output);
-        self.0
-            .try_join(singleton)
-            .map(|p| Constructor(p, PhantomData))
-            .map_err(Error::JoinConflict)
+        let singleton = AnyConstructor::Modifiable(Constructor(
+            UnorderedPsbt::from_output(output),
+            PhantomData,
+        ));
+        // FIXME no need to go through AnyConstructor for this case, same variant
+        match AnyConstructor::Modifiable(self).try_join(singleton)? {
+            AnyConstructor::Modifiable(c) => Ok(c),
+            _ => unreachable!("Modifiable joined with Modifiable stays Modifiable"),
+        }
     }
 
     /// Sort inputs/outputs and produce a BIP 370 `Constructor<Modifiable>`.
@@ -341,11 +328,12 @@ impl Constructor<InputsOnlyModifiable> {
     /// Returns `Err(Error::JoinConflict(_))` if the same outpoint is already
     /// present with conflicting field values.
     pub fn input(self, input: Input) -> Result<Self, Error> {
-        let singleton = UnorderedPsbt::from_input(&self.0.global, input);
-        self.0
-            .try_join(singleton)
-            .map(|p| Constructor(p, PhantomData))
-            .map_err(Error::JoinConflict)
+        let singleton =
+            AnyConstructor::Modifiable(Constructor(UnorderedPsbt::from_input(input), PhantomData));
+        match AnyConstructor::InputsOnly(self).try_join(singleton)? {
+            AnyConstructor::InputsOnly(c) => Ok(c),
+            _ => unreachable!("InputsOnly joined with Modifiable stays InputsOnly"),
+        }
     }
 
     /// Wrap an existing PSBT, validating it is unordered and inputs-only modifiable.
@@ -382,11 +370,14 @@ impl Constructor<OutputsOnlyModifiable> {
     /// present with conflicting field values.
     pub fn output(self, output: Output) -> Result<Self, Error> {
         validate_output_unique_id(&output)?;
-        let singleton = UnorderedPsbt::from_output(&self.0.global, output);
-        self.0
-            .try_join(singleton)
-            .map(|p| Constructor(p, PhantomData))
-            .map_err(Error::JoinConflict)
+        let singleton = AnyConstructor::Modifiable(Constructor(
+            UnorderedPsbt::from_output(output),
+            PhantomData,
+        ));
+        match AnyConstructor::OutputsOnly(self).try_join(singleton)? {
+            AnyConstructor::OutputsOnly(c) => Ok(c),
+            _ => unreachable!("OutputsOnly joined with Modifiable stays OutputsOnly"),
+        }
     }
 
     /// Wrap an existing PSBT, validating it is unordered and outputs-only modifiable.
@@ -424,7 +415,7 @@ impl Constructor<OutputsOnlyModifiable> {
 /// Use `AnyConstructor::from_psbt` when you do not know a priori which
 /// typestate applies; match on the variants to get a concrete
 /// `Constructor<M>`.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum AnyConstructor {
     /// Both inputs and outputs are modifiable.
     Modifiable(Constructor<Modifiable>),
@@ -435,6 +426,132 @@ pub enum AnyConstructor {
 }
 
 impl AnyConstructor {
+    /// Extract the inner `UnorderedPsbt` regardless of typestate.
+    fn into_inner(self) -> UnorderedPsbt {
+        match self {
+            AnyConstructor::Modifiable(c) => c.0,
+            AnyConstructor::InputsOnly(c) => c.0,
+            AnyConstructor::OutputsOnly(c) => c.0,
+        }
+    }
+
+    /// Merge two `AnyConstructor`s, raising both to the modifiability-lattice join.
+    ///
+    /// The modifiability lattice: bottom = both modifiable, top = both locked.
+    /// Locking is monotone: if either side has a flag cleared, the result has
+    /// it cleared.
+    ///
+    /// For each locked side the locked set of the more-locked constructor must
+    /// be a superset of (or equal to) the other's corresponding set; if not,
+    /// `Err(LockedSetMismatch)` is returned.
+    ///
+    /// If the lattice join yields both sides locked (e.g. `InputsOnly` ∨
+    /// `OutputsOnly`), we `todo!()` — that case requires the sort/seed path
+    /// which is not yet implemented.
+    ///
+    /// On a value conflict `Err(JoinConflict)` is returned.
+    pub fn try_join(self, other: Self) -> Result<Self, Error> {
+        let self_inputs_mod = match &self {
+            AnyConstructor::Modifiable(_) | AnyConstructor::InputsOnly(_) => true,
+            AnyConstructor::OutputsOnly(_) => false,
+        };
+        let self_outputs_mod = match &self {
+            AnyConstructor::Modifiable(_) | AnyConstructor::OutputsOnly(_) => true,
+            AnyConstructor::InputsOnly(_) => false,
+        };
+        let other_inputs_mod = match &other {
+            AnyConstructor::Modifiable(_) | AnyConstructor::InputsOnly(_) => true,
+            AnyConstructor::OutputsOnly(_) => false,
+        };
+        let other_outputs_mod = match &other {
+            AnyConstructor::Modifiable(_) | AnyConstructor::OutputsOnly(_) => true,
+            AnyConstructor::InputsOnly(_) => false,
+        };
+
+        // Lattice join: a side is locked in the result if either side locks it.
+        let result_inputs_mod = self_inputs_mod && other_inputs_mod;
+        let result_outputs_mod = self_outputs_mod && other_outputs_mod;
+
+        if !result_inputs_mod && !result_outputs_mod {
+            todo!(
+                "AnyConstructor::try_join: both sides locked after modifiability join; \
+                 the resulting unmodifiable constructor can only be sorted (requires seed path)"
+            );
+        }
+
+        let self_inner = self.into_inner();
+        let other_inner = other.into_inner();
+
+        // For each locked side: the locked constructor's set must be a superset
+        // of the other's (i.e. join(locked, other) == locked).
+        if !result_inputs_mod {
+            // inputs are locked — find which side is the locked one and check
+            // the other's inputs are a subset.
+            let locked_inputs = if !self_inputs_mod {
+                &self_inner.inputs
+            } else {
+                &other_inner.inputs
+            };
+            let candidate_inputs = if !self_inputs_mod {
+                &other_inner.inputs
+            } else {
+                &self_inner.inputs
+            };
+            // candidate must be a subset: every key in candidate must be in locked.
+            // Since InputSet uses OutPoint keys, we check via try_join idempotence:
+            // locked ∪ candidate == locked iff candidate ⊆ locked.
+            // Simplest check: all keys in candidate are in locked.
+            if !candidate_inputs
+                .iter_outpoints()
+                .all(|op| locked_inputs.spends_outpoint(op))
+            {
+                return Err(Error::LockedSetMismatch);
+            }
+        }
+        if !result_outputs_mod {
+            let locked_outputs = if !self_outputs_mod {
+                &self_inner.outputs
+            } else {
+                &other_inner.outputs
+            };
+            let candidate_outputs = if !self_outputs_mod {
+                &other_inner.outputs
+            } else {
+                &self_inner.outputs
+            };
+            if !candidate_outputs
+                .iter_unique_ids()
+                .all(|id| locked_outputs.contains_unique_id(id))
+            {
+                return Err(Error::LockedSetMismatch);
+            }
+        }
+
+        // Raise both to the result typestate by applying locking flags, then join.
+        let mut a = self_inner;
+        let mut b = other_inner;
+        if !result_inputs_mod {
+            a.global.clear_inputs_modifiable();
+            b.global.clear_inputs_modifiable();
+        }
+        if !result_outputs_mod {
+            a.global.clear_outputs_modifiable();
+            b.global.clear_outputs_modifiable();
+        }
+
+        let joined = a.try_join(b).map_err(Error::JoinConflict)?;
+
+        match (result_inputs_mod, result_outputs_mod) {
+            (true, true) => Ok(AnyConstructor::Modifiable(Constructor(joined, PhantomData))),
+            (true, false) => Ok(AnyConstructor::InputsOnly(Constructor(joined, PhantomData))),
+            (false, true) => Ok(AnyConstructor::OutputsOnly(Constructor(
+                joined,
+                PhantomData,
+            ))),
+            (false, false) => unreachable!("handled above"),
+        }
+    }
+
     /// Construct from a raw `Psbt`, dispatching to the appropriate typestate
     /// based on the modifiable flags.
     ///
@@ -1108,6 +1225,122 @@ mod tests {
             AnyConstructor::from_psbt(psbt),
             Err(Error::MissingOutputUniqueId)
         ));
+    }
+
+    // -- AnyConstructor::try_join tests -------------------------------------
+
+    #[test]
+    fn any_try_join_modifiable_with_modifiable_merges_inputs() {
+        let mut op_a = bitcoin::OutPoint::null();
+        op_a.vout = 0;
+        let mut op_b = bitcoin::OutPoint::null();
+        op_b.vout = 1;
+        let a = AnyConstructor::Modifiable(
+            Creator::new()
+                .constructor()
+                .input(psbt_v2::v2::Input::new(&op_a))
+                .unwrap(),
+        );
+        let b = AnyConstructor::Modifiable(
+            Creator::new()
+                .constructor()
+                .input(psbt_v2::v2::Input::new(&op_b))
+                .unwrap(),
+        );
+        let joined = a.try_join(b).unwrap();
+        assert!(matches!(joined, AnyConstructor::Modifiable(_)));
+        if let AnyConstructor::Modifiable(c) = joined {
+            assert_eq!(c.into_psbt().inputs.len(), 2);
+        }
+    }
+
+    #[test]
+    fn any_try_join_modifiable_with_inputs_only_raises_to_inputs_only() {
+        // Modifiable ∨ InputsOnly = InputsOnly (inputs stay modifiable, outputs locked).
+        let op = bitcoin::OutPoint::null();
+        let a = AnyConstructor::Modifiable(Creator::new().constructor());
+        let b = AnyConstructor::InputsOnly(
+            Creator::new()
+                .constructor()
+                .input(psbt_v2::v2::Input::new(&op))
+                .unwrap()
+                .no_more_outputs(),
+        );
+        // a's outputs are empty, b's outputs are empty (locked) → identical → OK.
+        let joined = a.try_join(b).unwrap();
+        assert!(matches!(joined, AnyConstructor::InputsOnly(_)));
+    }
+
+    #[test]
+    fn any_try_join_modifiable_with_outputs_only_raises_to_outputs_only() {
+        use crate::fields::psbt_out_unique_id;
+        let a = AnyConstructor::Modifiable(Creator::new().constructor());
+        let mut out = psbt_v2::v2::Output::new(bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(1000),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        });
+        out.proprietaries
+            .insert(psbt_out_unique_id(), vec![0x01; 16]);
+        let b = AnyConstructor::OutputsOnly(
+            Creator::new()
+                .constructor()
+                .output(out)
+                .unwrap()
+                .no_more_inputs(),
+        );
+        // a's inputs are empty, b's inputs are empty (locked) → identical → OK.
+        let joined = a.try_join(b).unwrap();
+        assert!(matches!(joined, AnyConstructor::OutputsOnly(_)));
+    }
+
+    #[test]
+    #[should_panic(expected = "both sides locked after modifiability join")]
+    fn any_try_join_inputs_only_with_outputs_only_panics_todo() {
+        // InputsOnly ∨ OutputsOnly = both locked — not yet implemented (requires seed path).
+        let a = AnyConstructor::InputsOnly(Creator::new().constructor().no_more_outputs());
+        let b = AnyConstructor::OutputsOnly(Creator::new().constructor().no_more_inputs());
+        let _ = a.try_join(b);
+    }
+
+    #[test]
+    fn any_try_join_locked_set_mismatch_returns_error() {
+        // Both InputsOnly; a has an input that b doesn't → b's locked output
+        // set (empty) matches a's, but inputs differ. Since inputs are
+        // *modifiable* in InputsOnly, the join merges them fine.
+        // Test the *outputs* locked mismatch: both InputsOnly, but different output sets.
+        use crate::fields::psbt_out_unique_id;
+
+        let mut out_a = psbt_v2::v2::Output::new(bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(1000),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        });
+        out_a
+            .proprietaries
+            .insert(psbt_out_unique_id(), vec![0x01; 16]);
+
+        let mut out_b = psbt_v2::v2::Output::new(bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(2000),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        });
+        out_b
+            .proprietaries
+            .insert(psbt_out_unique_id(), vec![0x02; 16]);
+
+        let a = AnyConstructor::InputsOnly(
+            Creator::new()
+                .constructor()
+                .output(out_a)
+                .unwrap()
+                .no_more_outputs(),
+        );
+        let b = AnyConstructor::InputsOnly(
+            Creator::new()
+                .constructor()
+                .output(out_b)
+                .unwrap()
+                .no_more_outputs(),
+        );
+        assert_eq!(a.try_join(b), Err(Error::LockedSetMismatch));
     }
 
     #[test]

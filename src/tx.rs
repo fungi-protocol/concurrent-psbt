@@ -20,37 +20,36 @@ pub struct UnorderedPsbt {
 }
 
 impl UnorderedPsbt {
-    /// Build a singleton `UnorderedPsbt` containing only `input`.
-    ///
-    /// The global is cloned from `global` with `input_count = 1` and
-    /// `output_count = 0`.
-    // FIXME remove global argument, just start at bottom (fully modifiable, unordered), AnyConstructor's try_join will raise as necessary
-    // use BIP 370 Constructor to add the input, set unordered, then convert to UnorderedPsbt
-    pub(crate) fn from_input(global: &Global, input: Input) -> Self {
-        let mut g = global.clone();
-        g.input_count = 1;
-        g.output_count = 0;
-        Self {
-            global: g,
-            inputs: [input].into_iter().collect(),
-            outputs: Default::default(),
-        }
+    /// Build a singleton fully-modifiable unordered `UnorderedPsbt` containing only `input`.
+    pub(crate) fn from_input(input: Input) -> Self {
+        let psbt = psbt_v2::v2::Creator::new()
+            .inputs_modifiable()
+            .outputs_modifiable()
+            .psbt();
+        let mut u = Self::unchecked_from_psbt(psbt);
+        u.global
+            .proprietaries
+            .insert(crate::fields::psbt_global_tx_unordered(), vec![crate::fields::UNORDERED_VALUE]);
+        u.global.input_count = 1;
+        u.global.output_count = 0;
+        u.inputs = [input].into_iter().collect();
+        u
     }
 
-    /// Build a singleton `UnorderedPsbt` containing only `output`.
-    ///
-    /// The global is cloned from `global` with `input_count = 0` and
-    /// `output_count = 1`.
-    // FIXME remove global, just start at bottom (fully modifiable)
-    pub(crate) fn from_output(global: &Global, output: Output) -> Self {
-        let mut g = global.clone();
-        g.input_count = 0;
-        g.output_count = 1;
-        Self {
-            global: g,
-            inputs: Default::default(),
-            outputs: [output].into_iter().collect(),
-        }
+    /// Build a singleton fully-modifiable unordered `UnorderedPsbt` containing only `output`.
+    pub(crate) fn from_output(output: Output) -> Self {
+        let psbt = psbt_v2::v2::Creator::new()
+            .inputs_modifiable()
+            .outputs_modifiable()
+            .psbt();
+        let mut u = Self::unchecked_from_psbt(psbt);
+        u.global
+            .proprietaries
+            .insert(crate::fields::psbt_global_tx_unordered(), vec![crate::fields::UNORDERED_VALUE]);
+        u.global.input_count = 0;
+        u.global.output_count = 1;
+        u.outputs = [output].into_iter().collect();
+        u
     }
 
     /// Infallible, lossy conversion from PSBT (forgets order). You probably
@@ -66,6 +65,9 @@ impl UnorderedPsbt {
     }
 
     pub fn to_psbt(self) -> Psbt {
+        // TODO
+        // if all sort keys are defined and distinct, sort inputs/outputs by
+        // sort key
         Psbt {
             global: self.global,
             inputs: self.inputs.into_iter().collect(),
