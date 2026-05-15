@@ -276,13 +276,10 @@ impl Constructor<Modifiable> {
     /// present with conflicting field values. The payload is the
     /// conflict-annotated `ResultUnorderedPsbt` with correct counts.
     pub fn input(self, input: Input) -> Result<Self, Error> {
-        // FIXME no need to go through AnyConstructor for this case, same variant
-        let singleton =
-            AnyConstructor::Modifiable(Constructor(UnorderedPsbt::from_input(input), PhantomData));
-        match AnyConstructor::Modifiable(self).try_join(singleton)? {
-            AnyConstructor::Modifiable(c) => Ok(c),
-            _ => unreachable!("Modifiable joined with Modifiable stays Modifiable"),
-        }
+        self.0
+            .try_join(UnorderedPsbt::from_input(input))
+            .map(|p| Constructor(p, PhantomData))
+            .map_err(Error::JoinConflict)
     }
 
     /// Add an output. Requires `PSBT_OUT_UNIQUE_ID`.
@@ -292,15 +289,10 @@ impl Constructor<Modifiable> {
     /// conflict-annotated `ResultUnorderedPsbt` with correct counts.
     pub fn output(self, output: Output) -> Result<Self, Error> {
         validate_output_unique_id(&output)?;
-        let singleton = AnyConstructor::Modifiable(Constructor(
-            UnorderedPsbt::from_output(output),
-            PhantomData,
-        ));
-        // FIXME no need to go through AnyConstructor for this case, same variant
-        match AnyConstructor::Modifiable(self).try_join(singleton)? {
-            AnyConstructor::Modifiable(c) => Ok(c),
-            _ => unreachable!("Modifiable joined with Modifiable stays Modifiable"),
-        }
+        self.0
+            .try_join(UnorderedPsbt::from_output(output))
+            .map(|p| Constructor(p, PhantomData))
+            .map_err(Error::JoinConflict)
     }
 
     /// Sort inputs/outputs and produce a BIP 370 `Constructor<Modifiable>`.
@@ -451,6 +443,7 @@ impl AnyConstructor {
     ///
     /// On a value conflict `Err(JoinConflict)` is returned.
     pub fn try_join(self, other: Self) -> Result<Self, Error> {
+        // FIXME add methods for these checks
         let self_inputs_mod = match &self {
             AnyConstructor::Modifiable(_) | AnyConstructor::InputsOnly(_) => true,
             AnyConstructor::OutputsOnly(_) => false,
@@ -473,6 +466,15 @@ impl AnyConstructor {
         let result_outputs_mod = self_outputs_mod && other_outputs_mod;
 
         if !result_inputs_mod && !result_outputs_mod {
+            // TODO add an Unmodifiable variant to AnyConstructor, which
+            // provides sort only functionality (new Sorter role, distinct from
+            // Constructor, but where Constructor uses Sorter as part of its
+            // implementation). Unmodifiable Sorter transitions straight to
+            // Updater in bip 174/370 sense, and so should convert to bip 370
+            // constructor internally and call .updater()
+            //
+            // to go down the modifiability lattice, the user should serialize
+            // the Psbt and set its modifiability manually
             todo!(
                 "AnyConstructor::try_join: both sides locked after modifiability join; \
                  the resulting unmodifiable constructor can only be sorted (requires seed path)"
