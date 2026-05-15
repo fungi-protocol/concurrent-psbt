@@ -60,6 +60,7 @@ impl IntoIterator for OutputSet {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) trait OutputExt {
     fn has_unique_id(&self) -> bool;
     fn unique_id(&self) -> Vec<u8>;

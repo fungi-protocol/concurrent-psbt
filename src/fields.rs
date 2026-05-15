@@ -172,6 +172,7 @@ const INPUTS_MODIFIABLE: u8 = 0x01;
 const OUTPUTS_MODIFIABLE: u8 = 0x02;
 
 /// Extension trait for reading and writing the modifiable flags on `Global`.
+#[allow(dead_code)]
 pub(crate) trait GlobalModifiableExt {
     fn is_inputs_modifiable(&self) -> bool;
     fn is_outputs_modifiable(&self) -> bool;

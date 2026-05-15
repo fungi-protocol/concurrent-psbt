@@ -93,6 +93,7 @@ impl ResultInputSet {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) trait InputExt {
     // Input::out_point() exists but is private so we reimeplement it here
     fn out_point(&self) -> OutPoint;
