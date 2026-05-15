@@ -24,7 +24,6 @@ where
     }
 }
 
-// FIXME extract to a separate mod, impl for all result container types, require Join
 pub trait ResultContainer: Sized {
     type Key;
     type Value: PartialJoin;

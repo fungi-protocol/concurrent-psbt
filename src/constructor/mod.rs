@@ -1,6 +1,5 @@
 use core::marker::PhantomData;
 
-use psbt_v2::v2::Constructor as Bip370Constructor;
 use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Psbt};
 
 use crate::sort::{SortMode, Sortable as _, TrySortable as _};
@@ -241,58 +240,31 @@ impl<S: SortMode> Constructor<OutputsOnlyModifiable, S> {
     }
 }
 
-// -- Bip370ConstructorExt -------------------------------------------------------
-// Sealed trait that wraps a sorted `Psbt` into `Bip370Constructor<M>`.
-// Enables blanket generic impls of try_sort / sort on Constructor<M, S>.
-
-mod bip_ctor_sealed {
-    pub trait Bip370ConstructorExt: psbt_v2::v2::Mod {
-        fn new_from_psbt(psbt: psbt_v2::v2::Psbt) -> psbt_v2::v2::Constructor<Self>;
-    }
-}
-pub(crate) use bip_ctor_sealed::Bip370ConstructorExt;
-
-impl Bip370ConstructorExt for Modifiable {
-    fn new_from_psbt(psbt: Psbt) -> Bip370Constructor<Self> {
-        Bip370Constructor::<Modifiable>::new(psbt).expect("flags preserved")
-    }
-}
-impl Bip370ConstructorExt for InputsOnlyModifiable {
-    fn new_from_psbt(psbt: Psbt) -> Bip370Constructor<Self> {
-        Bip370Constructor::<InputsOnlyModifiable>::new(psbt).expect("flags preserved")
-    }
-}
-impl Bip370ConstructorExt for OutputsOnlyModifiable {
-    fn new_from_psbt(psbt: Psbt) -> Bip370Constructor<Self> {
-        Bip370Constructor::<OutputsOnlyModifiable>::new(psbt).expect("flags preserved")
-    }
-}
-
 // -- try_sort / sort on Constructor -----------------------------------------
-// Blanket impls via TrySortable / Sortable + Bip370ConstructorExt.
 
 impl<M, S> Constructor<M, S>
 where
-    M: Mod + Bip370ConstructorExt,
+    M: Mod,
     S: SortMode,
     crate::sort::Sorter<S>: crate::sort::TrySortable,
 {
-    // FIXME into_sorter().try_into_sorted_psbt() ? simpler to return the Psbt instead of the BIP 370 constructor
-    pub fn try_sort(self) -> Result<Bip370Constructor<M>, SortingError> {
-        let psbt = self.into_sorter().try_sort_psbt()?;
-        Ok(M::new_from_psbt(psbt))
+    /// Sort into a `Psbt`. Returns `Err` only for [`ExplicitSortKeys`] when
+    /// a key is missing or duplicated; infallible for seeded modes.
+    pub fn try_sort(self) -> Result<Psbt, SortingError> {
+        self.into_sorter().try_sort_psbt()
     }
 }
 
 impl<M, S> Constructor<M, S>
 where
-    M: Mod + Bip370ConstructorExt,
+    M: Mod,
     S: SortMode,
     crate::sort::Sorter<S>: crate::sort::Sortable,
 {
-    // FIXME into_sorter().sort_psbt())? simpler to return the Psbt instead of the BIP 370 constructor
-    pub fn sort(self) -> Bip370Constructor<M> {
-        M::new_from_psbt(self.into_sorter().sort_psbt())
+    /// Sort into a `Psbt` infallibly (only available for
+    /// [`crate::sort::CanSortInfallibly`] modes).
+    pub fn sort(self) -> Psbt {
+        self.into_sorter().sort_psbt()
     }
 }
 
@@ -422,8 +394,7 @@ mod tests {
         psbt.global.output_count = 2;
 
         let constructor = Constructor::<Modifiable, ExplicitSortKeys>::new(psbt).unwrap();
-        let bip370 = constructor.try_sort().unwrap();
-        let ordered = bip370.psbt().unwrap();
+        let ordered = constructor.try_sort().unwrap();
 
         // After sorting: sort_key 0x01 (vout=0) before 0x02 (vout=1).
         assert_eq!(ordered.inputs[0].spent_output_index, 0);
@@ -442,9 +413,13 @@ mod tests {
 
     #[test]
     fn try_sort_produces_valid_updater() {
+        use psbt_v2::v2::Constructor as Bip370Constructor;
         let constructor = Creator::new().explicit_sort_keys().constructor();
-        let bip370 = constructor.try_sort().unwrap();
-        let _updater = bip370.updater().unwrap();
+        let psbt = constructor.try_sort().unwrap();
+        let _updater = Bip370Constructor::<Modifiable>::new(psbt)
+            .unwrap()
+            .updater()
+            .unwrap();
     }
 
     #[test]
@@ -702,7 +677,7 @@ mod tests {
         psbt.global.clear_outputs_modifiable();
 
         let c = Constructor::<InputsOnlyModifiable, ExplicitSortKeys>::new(psbt).unwrap();
-        let ordered = c.try_sort().unwrap().psbt().unwrap();
+        let ordered = c.try_sort().unwrap();
         assert_eq!(ordered.inputs.len(), 1);
         assert_eq!(
             ordered.inputs[0].previous_txid,
@@ -889,7 +864,7 @@ mod tests {
             .to_psbt();
 
         let c = Constructor::<Modifiable, Deterministic<Seeded>>::new(psbt).unwrap();
-        let ordered = c.try_sort().unwrap().psbt().unwrap();
+        let ordered = c.try_sort().unwrap();
 
         // Both inputs present
         assert_eq!(ordered.inputs.len(), 2);
@@ -909,7 +884,7 @@ mod tests {
             .into_psbt()
             .to_psbt();
         let c2 = Constructor::<Modifiable, Deterministic<Seeded>>::new(psbt2).unwrap();
-        let ordered2 = c2.try_sort().unwrap().psbt().unwrap();
+        let ordered2 = c2.try_sort().unwrap();
         assert_eq!(
             ordered.inputs[0].spent_output_index,
             ordered2.inputs[0].spent_output_index
@@ -946,7 +921,7 @@ mod tests {
             .to_psbt();
 
         let c = Constructor::<Modifiable, Relaxed<Seeded>>::new(psbt).unwrap();
-        let ordered = c.try_sort().unwrap().psbt().unwrap();
+        let ordered = c.try_sort().unwrap();
 
         // input_b had explicit key 0x00, so it sorts first
         assert_eq!(ordered.inputs[0].spent_output_index, 1); // op_b.vout = 1
@@ -972,7 +947,7 @@ mod tests {
                 .into_psbt()
                 .to_psbt();
             let c = Constructor::<Modifiable, Deterministic<Seeded>>::new(psbt).unwrap();
-            let ordered = c.try_sort().unwrap().psbt().unwrap();
+            let ordered = c.try_sort().unwrap();
             ordered
                 .inputs
                 .into_iter()

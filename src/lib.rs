@@ -18,7 +18,6 @@ mod values;
 
 pub mod fields;
 
-// FIXME move to psbt mod
 mod global;
 mod input;
 mod output;

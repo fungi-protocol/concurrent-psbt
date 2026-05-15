@@ -1,8 +1,6 @@
 use crate::lattice::join::Join;
 use crate::lattice::partial::{Absorb, JoinResult, PartialJoin};
 
-// FIXME redo as JoinMut for blanket JoinMut collection impls
-// FIXME impl for Result<V, E> where E : Join + Absorb to allow other error defns?
 impl<V> Join for JoinResult<V>
 where
     V: PartialJoin,

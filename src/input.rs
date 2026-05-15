@@ -55,7 +55,6 @@ impl InputSet {
     }
 
     pub fn wrap(self) -> ResultInputSet {
-        // FIXME can this be generic?
         ResultInputSet(self.0.into_iter().map(|(k, v)| (k, v.wrap())).collect())
     }
 }

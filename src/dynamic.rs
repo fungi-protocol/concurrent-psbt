@@ -527,7 +527,7 @@ mod tests {
         psbt.global.clear_inputs_modifiable();
 
         let c = Constructor::<OutputsOnlyModifiable, ExplicitSortKeys>::new(psbt).unwrap();
-        let ordered = c.try_sort().unwrap().psbt().unwrap();
+        let ordered = c.try_sort().unwrap();
         assert_eq!(ordered.outputs.len(), 1);
         assert_eq!(ordered.outputs[0].amount, bitcoin::Amount::from_sat(1000));
     }

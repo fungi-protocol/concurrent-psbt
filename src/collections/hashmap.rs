@@ -46,7 +46,6 @@ where
     }
 }
 
-// FIXME replace with btreemap ResultContainer trait, which should be moved to the top level collections mod
 #[allow(dead_code)]
 pub trait Transpose: Sized {
     type Key;

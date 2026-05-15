@@ -8,24 +8,9 @@ use crate::collections::btreemap::ResultContainer;
 use crate::collections::option::OptionExt;
 use crate::collections::option::ResultOptionExt;
 
-// FIXME unify with GlobalFieldsExt, define here, impl in fields.rs?
 pub trait GlobalExt {
     fn wrap(self) -> ResultGlobal;
-
-    // FIXME enable this, move from fields.rs
-    // fn clear_inputs_ordered_flag(&mut self);
-    // fn clear_outputs_ordered_flag(&mut self);
 }
-
-// impl GlobalExt for Global {
-//     fn clear_inputs_ordered_flag(&mut self) {
-//         todo!("modify proprietary field")
-//     }
-
-//     fn clear_outputs_ordered_flag(&mut self) {
-//         todo!("modify proprietary field")
-//     }
-// }
 
 impl GlobalExt for Global {
     fn wrap(self) -> ResultGlobal {

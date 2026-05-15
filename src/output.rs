@@ -36,7 +36,6 @@ impl OutputSet {
     }
 
     pub fn wrap(self) -> ResultOutputSet {
-        // FIXME generic?
         ResultOutputSet(self.0.into_iter().map(|(k, v)| (k, v.wrap())).collect())
     }
 }
