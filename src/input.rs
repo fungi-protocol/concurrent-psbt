@@ -46,27 +46,6 @@ impl InputSet {
         self.0.values()
     }
 
-    /// Returns `true` if any input in the set already has this sort key.
-    pub fn has_sort_key(&self, key: &[u8]) -> bool {
-        self.0
-            .values()
-            .any(|i| i.sort_key().map(|k| k.as_slice()) == Some(key))
-    }
-
-    /// Return `Err(())` if any two inputs share the same explicit sort key.
-    pub fn check_no_duplicate_sort_keys(&self) -> Result<(), ()> {
-        use std::collections::HashSet;
-        let mut seen = HashSet::new();
-        for input in self.0.values() {
-            if let Some(k) = input.sort_key() {
-                if !seen.insert(k.clone()) {
-                    return Err(());
-                }
-            }
-        }
-        Ok(())
-    }
-
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -83,12 +62,43 @@ impl InputSet {
 #[derive(Debug, PartialEq, Eq)]
 pub struct ResultInputSet(HashMap<OutPoint, ResultInput>);
 
+// FIXME JoinMut on HashMap and this makes more sense
 impl Join for ResultInputSet {
     fn join(self, other: Self) -> Self {
-        // FIXME after constructing check invariants (no duplicate sort keys).
-        // for any conflicting entries, replace them with separate
-        // Conflict(vec![v]) (just one value)
-        ResultInputSet(self.0.join(other.0))
+        let mut map = self.0.join(other.0);
+
+        // FIXME this should be an additional method, validate_input_invariants()
+        // Enforce the sort-key uniqueness invariant: if two inputs in the
+        // merged set share the same explicit sort key, mark each of their
+        // sort key fields as Err(Conflict(vec![sort_key])). A single-element
+        // Conflict signals an invariant violation rather than a disagreement on
+        // values for the same field.
+        let sort_key = crate::fields::psbt_in_sort_key();
+        let mut seen: std::collections::HashMap<Vec<u8>, usize> = std::collections::HashMap::new();
+        for result_input in map.values() {
+            // FIXME use InputExt getter. avoid keying proprietaries for simple getters
+            if let Some(Ok(k)) = result_input.proprietaries.get(&sort_key) {
+                *seen.entry(k.clone()).or_insert(0) += 1;
+            }
+        }
+        for result_input in map.values_mut() {
+            // FIXME remove and place back to avoid clone/default/replace_with.
+            // again an InputExt method can help do the messy part of converting
+            // to a unary conflict
+            // maybe that can rely on JoinMut for Result once that's implemented?
+            // FIXME consistently implementing JoinMut for all collection types
+            // seems to simplify things and still permits them to all be join
+            if let Some(entry) = result_input.proprietaries.get_mut(&sort_key) {
+                if let Ok(k) = entry {
+                    if seen.get(k).copied().unwrap_or(0) > 1 {
+                        let dup = k.clone();
+                        *entry = Err(crate::lattice::partial::Conflict(vec![dup]));
+                    }
+                }
+            }
+        }
+
+        ResultInputSet(map)
     }
 }
 
@@ -584,6 +594,44 @@ fn test_input_set_accessors() {
 
     let empty = InputSet::from_iter([]);
     assert_eq!(empty.len(), 0);
+}
+
+#[test]
+fn test_result_input_set_join_detects_duplicate_sort_key() {
+    use crate::lattice::join::Join;
+    use crate::lattice::partial::Conflict;
+
+    let mut oa = OutPoint::null();
+    oa.vout = 0;
+    let mut ob = OutPoint::null();
+    ob.vout = 1;
+
+    let mut ia = Input::new(&oa);
+    ia.set_sort_key(vec![0x01]);
+    let mut ib = Input::new(&ob);
+    ib.set_sort_key(vec![0x01]); // duplicate
+
+    let sa = InputSet::from_iter([ia]);
+    let sb = InputSet::from_iter([ib]);
+
+    let result = sa.wrap().join(sb.wrap());
+    // The join should embed an invariant violation in each input's sort key
+    // as Conflict(vec![v]) — single-element, unlike a true conflict.
+    assert!(
+        !result.is_ok(),
+        "duplicate sort key should make result not Ok"
+    );
+
+    let sort_key_prop = crate::fields::psbt_in_sort_key();
+    for result_input in result.0.values() {
+        if let Some(Err(Conflict(values))) = result_input.proprietaries.get(&sort_key_prop) {
+            assert_eq!(
+                values.len(),
+                1,
+                "invariant violation should be Conflict(vec![v]) with exactly one element"
+            );
+        }
+    }
 }
 
 #[test]

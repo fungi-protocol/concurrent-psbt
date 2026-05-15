@@ -39,9 +39,6 @@ pub enum Error {
     #[error("explicit sort key is not permitted in Deterministic sort mode")]
     SortKeyForbidden,
 
-    /// Two inputs or two outputs share the same explicit sort key.
-    #[error("duplicate explicit sort key detected")]
-    DuplicateSortKey,
 }
 
 impl PartialEq for Error {
@@ -56,7 +53,6 @@ impl PartialEq for Error {
                 | (Error::LockedSetMismatch, Error::LockedSetMismatch)
                 | (Error::DuplicateOutputUniqueId, Error::DuplicateOutputUniqueId)
                 | (Error::SortKeyForbidden, Error::SortKeyForbidden)
-                | (Error::DuplicateSortKey, Error::DuplicateSortKey)
         )
     }
 }

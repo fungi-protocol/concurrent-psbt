@@ -26,27 +26,6 @@ impl OutputSet {
         self.0.values()
     }
 
-    /// Returns `true` if any output in the set already has this sort key.
-    pub fn has_sort_key(&self, key: &[u8]) -> bool {
-        self.0
-            .values()
-            .any(|o| o.sort_key().map(|k| k.as_slice()) == Some(key))
-    }
-
-    /// Return `Err(())` if any two outputs share the same explicit sort key.
-    pub fn check_no_duplicate_sort_keys(&self) -> Result<(), ()> {
-        use std::collections::HashSet;
-        let mut seen = HashSet::new();
-        for output in self.0.values() {
-            if let Some(k) = output.sort_key() {
-                if !seen.insert(k.clone()) {
-                    return Err(());
-                }
-            }
-        }
-        Ok(())
-    }
-
     pub fn iter_unique_ids(&self) -> impl Iterator<Item = &Vec<u8>> {
         self.0.keys()
     }
@@ -187,10 +166,45 @@ pub struct ResultOutputSet(HashMap<Vec<u8>, ResultOutput>);
 
 impl Join for ResultOutputSet {
     fn join(self, other: Self) -> Self {
-        // FIXME after constructing check invariants (no duplicate sort keys).
-        // for any conflicting entries, replace them with separate
-        // Conflict(vec![v]) (just one value)
-        ResultOutputSet(self.0.join(other.0))
+        let mut map = self.0.join(other.0);
+
+        // FIXME this should be an additional method, validate_output_invariants()
+        // Enforce the sort-key uniqueness invariant: if two outputs in the
+        // merged set share the same explicit sort key, mark each of their
+        // sort key fields as Err(Conflict(vec![sort_key])). A single-element
+        // Conflict signals an invariant violation rather than a disagreement on
+        // values for the same field.
+        //
+        // this should also be implemented for Psbt conversion, so
+        // InvariantViolation could return a duplicate output ID error
+        // indicating the indices for Psbt structs, but will never need to check
+        // this invariant once it's a ResultUnorderedPsbt or its corresponding
+        // input/output sets, as it's inherent in join and that makes .input()
+        // and .output() idempotent.
+        //
+        // the assert method should return a Result<Self,
+        // InvariantViolation(Self)>, where InvariantViolation contains the
+        // unary conflict markers but also gives
+
+        // Enforce sort-key uniqueness invariant (same logic as ResultInputSet).
+        let sort_key = crate::fields::psbt_out_sort_key();
+        let mut seen: std::collections::HashMap<Vec<u8>, usize> = std::collections::HashMap::new();
+        for result_output in map.values() {
+            if let Some(Ok(k)) = result_output.proprietaries.get(&sort_key) {
+                *seen.entry(k.clone()).or_insert(0) += 1;
+            }
+        }
+        for result_output in map.values_mut() {
+            if let Some(entry) = result_output.proprietaries.get_mut(&sort_key) {
+                if let Ok(k) = entry {
+                    if seen.get(k).copied().unwrap_or(0) > 1 {
+                        let dup = k.clone();
+                        *entry = Err(crate::lattice::partial::Conflict(vec![dup]));
+                    }
+                }
+            }
+        }
+        ResultOutputSet(map)
     }
 }
 

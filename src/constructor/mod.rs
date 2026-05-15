@@ -72,10 +72,7 @@ impl<M: Mod, S: SortMode + 'static> Constructor<M, S> {
         self.0
             .try_join(other.0)
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|e| match e {
-                crate::tx::JoinError::Conflict(c) => Error::JoinConflict(c),
-                crate::tx::JoinError::DuplicateSortKey => Error::DuplicateSortKey,
-            })
+            .map_err(|crate::tx::JoinError(c)| Error::JoinConflict(c))
     }
 }
 
@@ -127,10 +124,7 @@ impl<S: SortMode + 'static> Constructor<Modifiable, S> {
         self.0
             .try_join(UnorderedPsbt::from_input(input))
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|e| match e {
-                crate::tx::JoinError::Conflict(c) => Error::JoinConflict(c),
-                crate::tx::JoinError::DuplicateSortKey => Error::DuplicateSortKey,
-            })
+            .map_err(|crate::tx::JoinError(c)| Error::JoinConflict(c))
     }
 
     /// Add an output. Requires `PSBT_OUT_UNIQUE_ID`.
@@ -146,10 +140,7 @@ impl<S: SortMode + 'static> Constructor<Modifiable, S> {
         self.0
             .try_join(UnorderedPsbt::from_output(output))
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|e| match e {
-                crate::tx::JoinError::Conflict(c) => Error::JoinConflict(c),
-                crate::tx::JoinError::DuplicateSortKey => Error::DuplicateSortKey,
-            })
+            .map_err(|crate::tx::JoinError(c)| Error::JoinConflict(c))
     }
 
     /// Lock inputs: transition to `OutputsOnlyModifiable`.
@@ -178,10 +169,7 @@ impl<S: SortMode + 'static> Constructor<InputsOnlyModifiable, S> {
         self.0
             .try_join(singleton)
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|e| match e {
-                crate::tx::JoinError::Conflict(c) => Error::JoinConflict(c),
-                crate::tx::JoinError::DuplicateSortKey => Error::DuplicateSortKey,
-            })
+            .map_err(|crate::tx::JoinError(c)| Error::JoinConflict(c))
     }
 
     /// Wrap an existing PSBT, validating it is unordered and inputs-only modifiable.
@@ -216,10 +204,7 @@ impl<S: SortMode + 'static> Constructor<OutputsOnlyModifiable, S> {
         self.0
             .try_join(singleton)
             .map(|p| Constructor(p, PhantomData))
-            .map_err(|e| match e {
-                crate::tx::JoinError::Conflict(c) => Error::JoinConflict(c),
-                crate::tx::JoinError::DuplicateSortKey => Error::DuplicateSortKey,
-            })
+            .map_err(|crate::tx::JoinError(c)| Error::JoinConflict(c))
     }
 
     /// Wrap an existing PSBT, validating it is unordered and outputs-only modifiable.
@@ -1039,7 +1024,9 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_input_sort_key_rejected_eagerly() {
+    fn duplicate_input_sort_key_detected_via_join() {
+        // Duplicate sort keys are caught as an invariant violation embedded in
+        // the lattice join (Conflict(vec![v]) with a single element).
         let mut op_a = bitcoin::OutPoint::null();
         op_a.vout = 0;
         let mut op_b = bitcoin::OutPoint::null();
@@ -1050,11 +1037,11 @@ mod tests {
         input_b.set_sort_key(vec![0x01]); // same key
         let c = Creator::new().explicit_sort_keys().constructor();
         let c = c.input(input_a).unwrap();
-        assert_eq!(c.input(input_b), Err(Error::DuplicateSortKey));
+        assert!(matches!(c.input(input_b), Err(Error::JoinConflict(_))));
     }
 
     #[test]
-    fn duplicate_output_sort_key_rejected_eagerly() {
+    fn duplicate_output_sort_key_detected_via_join() {
         let mut out_a = psbt_v2::v2::Output::new(bitcoin::TxOut {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::new(),
@@ -1069,7 +1056,7 @@ mod tests {
         out_b.set_sort_key(vec![0x01]); // same key
         let c = Creator::new().explicit_sort_keys().constructor();
         let c = c.output(out_a).unwrap();
-        assert_eq!(c.output(out_b), Err(Error::DuplicateSortKey));
+        assert!(matches!(c.output(out_b), Err(Error::JoinConflict(_))));
     }
 
     #[test]

@@ -296,10 +296,7 @@ impl Constructor {
             b.global.clear_outputs_modifiable();
         }
 
-        let joined = a.try_join(b).map_err(|e| match e {
-                crate::tx::JoinError::Conflict(c) => Error::JoinConflict(c),
-                crate::tx::JoinError::DuplicateSortKey => Error::DuplicateSortKey,
-            })?;
+        let joined = a.try_join(b).map_err(|crate::tx::JoinError(c)| Error::JoinConflict(c))?;
         Ok(Constructor { modifiable: result_modifiable, sort_mode: self.sort_mode, psbt: joined })
     }
 }

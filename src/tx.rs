@@ -3,13 +3,13 @@ pub use psbt_v2::v2::Psbt;
 use psbt_v2::v2::{Input, Output};
 
 /// Error returned by [`UnorderedPsbt::try_join`].
+///
+/// Both field-level conflicts and invariant violations (e.g. duplicate sort
+/// keys) surface as [`JoinError::Conflict`]: invariant violations are
+/// represented as `Conflict(vec![v])` (single-element) to distinguish them
+/// from true disagreements (`Conflict(vec![v1, v2])`).
 #[derive(Debug)]
-pub enum JoinError {
-    /// A field-level conflict in the joined PSBT.
-    Conflict(ResultUnorderedPsbt),
-    /// Two inputs or outputs share the same explicit sort key after joining.
-    DuplicateSortKey,
-}
+pub struct JoinError(pub ResultUnorderedPsbt);
 
 use crate::fields::GlobalFieldsExt as _;
 use crate::global::Global;
@@ -97,29 +97,22 @@ impl UnorderedPsbt {
     ///
     /// Returns `Ok` when there are no conflicts.
     /// Returns `Err(JoinError::Conflict(_))` on field-level conflicts.
-    /// Returns `Err(JoinError::DuplicateSortKey)` when the merged set contains
-    /// two inputs or two outputs with the same explicit sort key.
+    /// Join two `UnorderedPsbt`s.
+    ///
+    /// Returns `Ok` when there are no conflicts or invariant violations.
+    /// Returns `Err(JoinError(result))` when a field-level conflict or
+    /// invariant violation (e.g. duplicate sort keys) is detected.
+    ///
+    /// Invariant violations are embedded in the result as `Conflict(vec![v])`
+    /// (single-element), distinguishable from true disagreements
+    /// `Conflict(vec![v1, v2])`.
     ///
     /// `input_count` and `output_count` are derived from post-join set sizes.
-    ///
-    /// FIXME: represent duplicate sort keys as a "long-range conflict" in the
-    /// lattice (rather than a separate error variant) as Conflict values with
-    /// len() == 1 instead of the typical len() == 2
     pub fn try_join(self, other: Self) -> Result<Self, JoinError> {
-        let joined = self
-            .wrap()
+        self.wrap()
             .join(other.wrap())
             .try_unwrap()
-            .map_err(JoinError::Conflict)?;
-        joined
-            .inputs
-            .check_no_duplicate_sort_keys()
-            .map_err(|_| JoinError::DuplicateSortKey)?;
-        joined
-            .outputs
-            .check_no_duplicate_sort_keys()
-            .map_err(|_| JoinError::DuplicateSortKey)?;
-        Ok(joined)
+            .map_err(JoinError)
     }
 
     pub fn wrap(self) -> ResultUnorderedPsbt {
@@ -166,6 +159,50 @@ impl Join for ResultUnorderedPsbt {
 }
 
 impl ResultUnorderedPsbt {
+    // TODO iter_fields
+    // information (path in the PSBT where this was found, i.e. global or input
+    // id or output id blah), allowing the error information to be streamed as
+    // the result of an in order traversal.
+    //
+    // Traverse fields in order. The context information can be
+    // added by parent collections, wrapping the key of the nested layer's key
+    // value pairs, so that every key value pair in the psbt is fully qualified
+    // and they all live in the same flat namespace.
+    //
+    // for example global key value pairs are a tagged union, one variant for
+    // global field key value pairs, one variant for input keyvalue pairs with
+    // the outpoint prefixing the key., and one for output key value pairs
+    // similarly prefixed by output uuid.
+    //
+    // this can be fully represented on the wire using the raw library, where
+    // e.g. an input <keyvalue> converts the key to a wrapped keyvalue pair
+    // where the nested key is the value, the key is the tag, and the key data
+    // is the unique id for input/output fields.
+    //
+    // to implement, serialize and re-parse with raw might be a useful cross
+    // check in tests but iter_ields needs to provide a nested enum that is
+    // typed all the way down to the primitive type for the value or conflict
+    //
+    // TODO separate_conflicts(self) -> (UnorderedPsbt, Option<Self>)
+    // return the fields without a conflict in their own psbt, and retain all
+    // the conflicts in the optional result, or None if it's is_ok(). can be
+    // built by streaming iter_fields
+    //
+    // TODO is_conflict_only() dual of is_ok(), checks if a result only contains
+    // conflicts
+    //
+    // TODO iter_conflicts(f) where f takes a Box<dyn &Conflict<T>>, filtered,
+    // flattenning iter_fields
+    //
+    // TODO iter_errors - builds on iter_conflicts but matches invariant errors
+    // grouping by the Conflict([v]) singleton and accumulating provenance paths
+    // in order to report invariant violations.
+    //
+    // although join will never find duplicate output unique ID errors because
+    // they are used to merge recursively, the invariant that there are no
+    // unique IDs should also be detectable and representable as a conflict
+    // here, and reportable cleanly through iter_errors
+    //
     pub fn try_unwrap(self) -> Result<UnorderedPsbt, Self> {
         if !self.is_ok() {
             return Err(self);
