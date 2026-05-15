@@ -75,20 +75,7 @@ pub enum SortingError {
 /// Extract sort keys from items via `take_key`, sort by key, return items in order.
 ///
 /// Fails if any key is missing or if two items share the same sort key.
-fn sort_by_extracted_key<T>(
-    items: impl IntoIterator<Item = T>,
-    mut take_key: impl FnMut(&mut T) -> Option<Vec<u8>>,
-) -> Result<Vec<T>, SortingError> {
-    use std::collections::BTreeMap;
-    let mut map: BTreeMap<Vec<u8>, T> = BTreeMap::new();
-    for mut item in items {
-        let key = take_key(&mut item).ok_or(SortingError::MissingSortKey)?;
-        if map.insert(key, item).is_some() {
-            return Err(SortingError::DuplicateSortKey);
-        }
-    }
-    Ok(map.into_values().collect())
-}
+use crate::sort::sort_by_extracted_key;
 
 // -- Validation --------------------------------------------------------------
 
@@ -162,20 +149,13 @@ impl<M: Mod, S: SortMode> Constructor<M, S> {
     }
 }
 
-impl<M: Mod> Constructor<M, ExplicitSortKeys> {
-    /// Sort inputs and outputs by their explicit sort keys, producing an ordered BIP 370 `Psbt`.
-    fn try_sort_inner(self) -> Result<Psbt, SortingError> {
-        let inputs = sort_by_extracted_key(self.0.inputs, |i| i.take_sort_key())?;
-        let outputs = sort_by_extracted_key(self.0.outputs, |o| o.take_sort_key())?;
-
-        let mut global = self.0.global;
-        global.clear_tx_unordered();
-
-        Ok(Psbt {
-            global,
-            inputs,
-            outputs,
-        })
+impl<M: Mod, S: SortMode> Constructor<M, S> {
+    /// Convert into a [`Sorter<S>`], consuming the constructor.
+    ///
+    /// Allows sorting independently of the modifiability typestate.
+    pub fn into_sorter(self) -> crate::sort::Sorter<S> {
+        // FIXME new_unchecked, which should only be pub(crate)
+        crate::sort::Sorter::new(self.0)
     }
 }
 
@@ -238,14 +218,6 @@ impl<S: SortMode> Constructor<Modifiable, S> {
     }
 }
 
-impl Constructor<Modifiable, ExplicitSortKeys> {
-    /// Sort inputs/outputs by explicit sort keys, producing a BIP 370 `Constructor<Modifiable>`.
-    pub fn try_sort(self) -> Result<Bip370Constructor<Modifiable>, SortingError> {
-        let psbt = self.try_sort_inner()?;
-        Ok(Bip370Constructor::<Modifiable>::new(psbt).expect("modifiable flags are preserved"))
-    }
-}
-
 impl<S: SortMode> Constructor<InputsOnlyModifiable, S> {
     /// Add an input.
     ///
@@ -277,15 +249,6 @@ impl<S: SortMode> Constructor<InputsOnlyModifiable, S> {
     pub fn no_more_inputs(mut self) -> UnorderedPsbt {
         self.0.global.clear_inputs_modifiable();
         self.0
-    }
-}
-
-impl Constructor<InputsOnlyModifiable, ExplicitSortKeys> {
-    /// Sort inputs/outputs by explicit sort keys, producing a BIP 370 `Constructor<InputsOnlyModifiable>`.
-    pub fn try_sort(self) -> Result<Bip370Constructor<InputsOnlyModifiable>, SortingError> {
-        let psbt = self.try_sort_inner()?;
-        Ok(Bip370Constructor::<InputsOnlyModifiable>::new(psbt)
-            .expect("inputs-modifiable flag is preserved"))
     }
 }
 
@@ -326,17 +289,12 @@ impl<S: SortMode> Constructor<OutputsOnlyModifiable, S> {
     }
 }
 
-impl Constructor<OutputsOnlyModifiable, ExplicitSortKeys> {
-    /// Sort inputs/outputs by explicit sort keys, producing a BIP 370 `Constructor<OutputsOnlyModifiable>`.
-    pub fn try_sort(self) -> Result<Bip370Constructor<OutputsOnlyModifiable>, SortingError> {
-        let psbt = self.try_sort_inner()?;
-        Ok(Bip370Constructor::<OutputsOnlyModifiable>::new(psbt)
-            .expect("outputs-modifiable flag is preserved"))
-    }
-}
-
 // -- AnyConstructor ----------------------------------------------------------
 
+// FIXME the whole point of this struct is that it can be constructed from any
+// psbt, so we can't assume modifiability or a sort mode a priori and we want to
+// allow matching for the right static type using this enum, so it should not be
+// generic or have an associated type for the sort mode.
 /// An unordered Constructor whose modifiability typestate is determined at
 /// runtime from the PSBT's flags.
 ///
@@ -345,7 +303,7 @@ impl Constructor<OutputsOnlyModifiable, ExplicitSortKeys> {
 /// `Constructor<M, S>`.
 ///
 /// `S` is the sort mode, uniform across all variants.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum AnyConstructor<S: SortMode = Relaxed<Unseeded>> {
     /// Both inputs and outputs are modifiable.
     Modifiable(Constructor<Modifiable, S>),
@@ -354,6 +312,20 @@ pub enum AnyConstructor<S: SortMode = Relaxed<Unseeded>> {
     /// Only outputs are modifiable (inputs locked).
     OutputsOnly(Constructor<OutputsOnlyModifiable, S>),
 }
+
+// Manual impl: derive would add an unnecessary `S: PartialEq` bound.
+impl<S: SortMode> PartialEq for AnyConstructor<S> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (AnyConstructor::Modifiable(a), AnyConstructor::Modifiable(b)) => a == b,
+            (AnyConstructor::InputsOnly(a), AnyConstructor::InputsOnly(b)) => a == b,
+            (AnyConstructor::OutputsOnly(a), AnyConstructor::OutputsOnly(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl<S: SortMode> Eq for AnyConstructor<S> {}
 
 impl<S: SortMode> AnyConstructor<S> {
     /// Extract the inner `UnorderedPsbt` regardless of typestate.
@@ -627,103 +599,48 @@ impl CreatorWith<Relaxed<Unseeded>> {
     }
 }
 
-// -- finalize_order helpers for seeded modes --------------------------------
+// -- try_sort / sort on Constructor -----------------------------------------
+//
+// Each delegates to Sorter<S>, which owns the sort logic.
 
-impl<M: Mod, S: SortMode> Constructor<M, S> {
-    fn try_sort_deterministic(self) -> Result<Psbt, SortingError> {
-        use crate::sort::OutPointIdentifier as _;
-        let seed = self
-            .0
-            .global
-            .sort_seed()
-            .expect("seeded mode always has a seed")
-            .clone();
-        let inputs = sort_by_extracted_key(self.0.inputs, |i| {
-            Some(crate::sort::derive_sort_key(
-                &seed,
-                &i.out_point().to_identifier(),
-            ))
-        })?;
-        let outputs = sort_by_extracted_key(self.0.outputs, |o| {
-            Some(crate::sort::derive_sort_key(&seed, &o.unique_id()))
-        })?;
-        let mut global = self.0.global;
-        global.clear_tx_unordered();
-        Ok(Psbt {
-            global,
-            inputs,
-            outputs,
-        })
-    }
-
-    fn try_sort_relaxed_seeded(self) -> Result<Psbt, SortingError> {
-        let seed = self
-            .0
-            .global
-            .sort_seed()
-            .expect("seeded mode always has a seed")
-            .clone();
-        let inputs =
-            sort_by_extracted_key(self.0.inputs, |i| Some(i.take_or_derive_sort_key(&seed)))?;
-        let outputs =
-            sort_by_extracted_key(self.0.outputs, |o| Some(o.take_or_derive_sort_key(&seed)))?;
-        let mut global = self.0.global;
-        global.clear_tx_unordered();
-        Ok(Psbt {
-            global,
-            inputs,
-            outputs,
-        })
-    }
+macro_rules! impl_try_sort {
+    ($m:ty, $s:ty) => {
+        impl Constructor<$m, $s> {
+            pub fn try_sort(self) -> Result<Bip370Constructor<$m>, SortingError> {
+                let psbt = self.into_sorter().try_sort()?;
+                Ok(Bip370Constructor::<$m>::new(psbt).expect("flags preserved"))
+            }
+        }
+    };
 }
 
-impl Constructor<Modifiable, Deterministic<Seeded>> {
-    /// Sort all inputs/outputs using seed-derived keys (HMAC-SHA256).
-    pub fn try_sort(self) -> Result<Bip370Constructor<Modifiable>, SortingError> {
-        let psbt = self.try_sort_deterministic()?; // FIXME this should be infallible
-        Ok(Bip370Constructor::<Modifiable>::new(psbt).expect("flags preserved"))
-    }
+macro_rules! impl_sort {
+    ($m:ty, $s:ty) => {
+        impl Constructor<$m, $s> {
+            pub fn sort(self) -> Bip370Constructor<$m> {
+                let psbt = self.into_sorter().sort();
+                Bip370Constructor::<$m>::new(psbt).expect("flags preserved")
+            }
+        }
+    };
 }
 
-impl Constructor<InputsOnlyModifiable, Deterministic<Seeded>> {
-    /// Sort all inputs/outputs using seed-derived keys (HMAC-SHA256).
-    pub fn try_sort(self) -> Result<Bip370Constructor<InputsOnlyModifiable>, SortingError> {
-        let psbt = self.try_sort_deterministic()?;
-        Ok(Bip370Constructor::<InputsOnlyModifiable>::new(psbt).expect("flags preserved"))
-    }
-}
+impl_try_sort!(Modifiable, ExplicitSortKeys);
+impl_try_sort!(InputsOnlyModifiable, ExplicitSortKeys);
+impl_try_sort!(OutputsOnlyModifiable, ExplicitSortKeys);
+impl_try_sort!(Modifiable, Deterministic<Seeded>);
+impl_try_sort!(InputsOnlyModifiable, Deterministic<Seeded>);
+impl_try_sort!(OutputsOnlyModifiable, Deterministic<Seeded>);
+impl_try_sort!(Modifiable, Relaxed<Seeded>);
+impl_try_sort!(InputsOnlyModifiable, Relaxed<Seeded>);
+impl_try_sort!(OutputsOnlyModifiable, Relaxed<Seeded>);
 
-impl Constructor<OutputsOnlyModifiable, Deterministic<Seeded>> {
-    /// Sort all inputs/outputs using seed-derived keys (HMAC-SHA256).
-    pub fn try_sort(self) -> Result<Bip370Constructor<OutputsOnlyModifiable>, SortingError> {
-        let psbt = self.try_sort_deterministic()?;
-        Ok(Bip370Constructor::<OutputsOnlyModifiable>::new(psbt).expect("flags preserved"))
-    }
-}
-
-impl Constructor<Modifiable, Relaxed<Seeded>> {
-    /// Sort inputs/outputs: explicit key if present, otherwise seed-derived.
-    pub fn try_sort(self) -> Result<Bip370Constructor<Modifiable>, SortingError> {
-        let psbt = self.try_sort_relaxed_seeded()?;
-        Ok(Bip370Constructor::<Modifiable>::new(psbt).expect("flags preserved"))
-    }
-}
-
-impl Constructor<InputsOnlyModifiable, Relaxed<Seeded>> {
-    /// Sort inputs/outputs: explicit key if present, otherwise seed-derived.
-    pub fn try_sort(self) -> Result<Bip370Constructor<InputsOnlyModifiable>, SortingError> {
-        let psbt = self.try_sort_relaxed_seeded()?;
-        Ok(Bip370Constructor::<InputsOnlyModifiable>::new(psbt).expect("flags preserved"))
-    }
-}
-
-impl Constructor<OutputsOnlyModifiable, Relaxed<Seeded>> {
-    /// Sort inputs/outputs: explicit key if present, otherwise seed-derived.
-    pub fn try_sort(self) -> Result<Bip370Constructor<OutputsOnlyModifiable>, SortingError> {
-        let psbt = self.try_sort_relaxed_seeded()?;
-        Ok(Bip370Constructor::<OutputsOnlyModifiable>::new(psbt).expect("flags preserved"))
-    }
-}
+impl_sort!(Modifiable, Deterministic<Seeded>);
+impl_sort!(InputsOnlyModifiable, Deterministic<Seeded>);
+impl_sort!(OutputsOnlyModifiable, Deterministic<Seeded>);
+impl_sort!(Modifiable, Relaxed<Seeded>);
+impl_sort!(InputsOnlyModifiable, Relaxed<Seeded>);
+impl_sort!(OutputsOnlyModifiable, Relaxed<Seeded>);
 
 // -- tests -------------------------------------------------------------------
 
@@ -808,7 +725,6 @@ mod tests {
 
     #[test]
     fn try_sort_sorts_by_explicit_sort_keys() {
-
         let mut psbt = Creator::new()
             .explicit_sort_keys()
             .into_unordered_psbt()
@@ -898,7 +814,6 @@ mod tests {
 
     #[test]
     fn try_sort_rejects_duplicate_input_sort_keys() {
-
         let mut psbt = Creator::new()
             .explicit_sort_keys()
             .into_unordered_psbt()
@@ -942,7 +857,6 @@ mod tests {
 
     #[test]
     fn new_modifiable_accepts_output_with_unique_id() {
-
         let mut psbt = Creator::new().into_unordered_psbt().to_psbt();
 
         let mut output = psbt_v2::v2::Output::new(bitcoin::TxOut {
@@ -995,7 +909,6 @@ mod tests {
 
     #[test]
     fn output_count_is_correct_after_adding_outputs() {
-
         let c = Creator::new().constructor();
         let mut o1 = psbt_v2::v2::Output::new(bitcoin::TxOut {
             value: bitcoin::Amount::from_sat(1000),
@@ -1057,7 +970,6 @@ mod tests {
 
     #[test]
     fn modifiable_output_adds_to_set() {
-
         let c = Creator::new().constructor();
         let mut output = psbt_v2::v2::Output::new(bitcoin::TxOut {
             value: bitcoin::Amount::from_sat(1000),
@@ -1090,7 +1002,6 @@ mod tests {
 
     #[test]
     fn outputs_only_output_adds_to_set() {
-
         let c = Creator::new().constructor().no_more_inputs();
         let mut output = psbt_v2::v2::Output::new(bitcoin::TxOut {
             value: bitcoin::Amount::from_sat(1000),
@@ -1121,7 +1032,6 @@ mod tests {
 
     #[test]
     fn try_sort_inputs_only() {
-
         let mut psbt = Creator::new()
             .explicit_sort_keys()
             .into_unordered_psbt()
@@ -1318,7 +1228,6 @@ mod tests {
 
     #[test]
     fn try_sort_outputs_only() {
-
         let mut psbt = Creator::new()
             .explicit_sort_keys()
             .into_unordered_psbt()
@@ -1427,7 +1336,6 @@ mod tests {
 
     #[test]
     fn try_join_outputs_only_different_output_sets_rejected() {
-
         // Constructor<OutputsOnlyModifiable>: inputs are locked.
         // Both have no inputs (identical empty sets) → inputs OK.
         // But if outputs differ beyond the locked empty set, that's different.

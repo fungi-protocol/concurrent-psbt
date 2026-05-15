@@ -25,6 +25,7 @@ mod output;
 mod tx;
 
 pub mod sort;
+pub use sort::Sorter;
 pub mod constructor;
 
 /// Re-exports for fuzzing and internal tooling. Not part of the public API.

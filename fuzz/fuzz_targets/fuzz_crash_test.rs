@@ -2,6 +2,8 @@
 
 use libfuzzer_sys::fuzz_target;
 
+// TODO simplify this target... is the feature needed or is it better to have
+// this do nothing by default so it's easy to run all fuzzing targets?
 fuzz_target!(|data: &[u8]| {
     // Multi-step state machine: requires coverage guidance to solve.
     // Each step depends on the previous, so random fuzzing is unlikely

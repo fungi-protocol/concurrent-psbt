@@ -132,4 +132,13 @@
             '';
       };
     };
+
+  # TODO
+  # - checks.quick = bundle of fast checks
+  # - a check that denies warnings including in cfg(test)
+  # - clippy
+  # - cargo machete or equivalent
+  # - cargo audit
+  # - nix vuln scanning
+  # - ... similar QA / linting tools
 }
