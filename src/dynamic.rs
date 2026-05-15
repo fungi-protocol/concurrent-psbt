@@ -109,14 +109,14 @@ pub enum IntoConstructorError {
 // -- ModifiabilityMarker / SortModeMarker ------------------------------------
 
 mod any_marker {
-    pub trait ModifiabilityMarker {
+    pub(crate) trait ModifiabilityMarker {
         const ANY_MODIFIABILITY: super::AnyModifiability;
     }
-    pub trait SortModeMarker {
+    pub(crate) trait SortModeMarker {
         const ANY_SORT_MODE: super::AnySortMode;
     }
 }
-pub use any_marker::{ModifiabilityMarker, SortModeMarker};
+pub(crate) use any_marker::{ModifiabilityMarker, SortModeMarker};
 
 impl ModifiabilityMarker for Modifiable {
     const ANY_MODIFIABILITY: AnyModifiability = AnyModifiability::Modifiable;
