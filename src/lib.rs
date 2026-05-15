@@ -24,6 +24,7 @@ mod input;
 mod output;
 mod tx;
 
+pub mod sort;
 pub mod constructor;
 
 /// Re-exports for fuzzing and internal tooling. Not part of the public API.
