@@ -4,6 +4,7 @@ use crate::global::Global;
 use crate::global::GlobalExt;
 use crate::global::ResultGlobal;
 use crate::input::{InputSet, ResultInputSet};
+use crate::lattice::join::Join;
 use crate::output::{OutputSet, ResultOutputSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +36,38 @@ impl UnorderedPsbt {
             inputs: self.inputs.into_iter().collect(),
             outputs: self.outputs.into_iter().collect(),
         }
+    }
+
+    /// Join two `UnorderedPsbt`s.
+    ///
+    /// Returns `Ok` when there are no conflicts, `Err` with a
+    /// conflict-annotated result otherwise.
+    ///
+    /// `input_count` and `output_count` are taken from the post-join set
+    /// sizes, so they never cause spurious conflicts.
+    pub fn join(self, other: Self) -> Result<Self, ResultUnorderedPsbt> {
+        // Join content sets first so we can derive the true cardinalities.
+        let inputs = self.inputs.wrap().join(other.inputs.wrap());
+        let outputs = self.outputs.wrap().join(other.outputs.wrap());
+
+        // True cardinality = number of distinct keys in the joined map,
+        // regardless of whether individual values have conflicts.
+        let input_count = inputs.len();
+        let output_count = outputs.len();
+
+        // Sync both globals to the post-join counts before joining globals,
+        // so differing counts (e.g. 0 vs 1) don't produce a spurious conflict.
+        let mut a_global = self.global;
+        let mut b_global = other.global;
+        a_global.input_count = input_count;
+        b_global.input_count = input_count;
+        a_global.output_count = output_count;
+        b_global.output_count = output_count;
+
+        let global = a_global.wrap().join(b_global.wrap());
+
+        let result = ResultUnorderedPsbt { global, inputs, outputs };
+        result.try_unwrap().map_err(|e| e)
     }
 
     pub fn wrap(self) -> ResultUnorderedPsbt {

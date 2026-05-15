@@ -62,6 +62,11 @@ impl Join for ResultInputSet {
 }
 
 impl ResultInputSet {
+    /// Number of distinct inputs (by outpoint) in the joined set.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     pub fn try_unwrap(self) -> Result<InputSet, Self> {
         if !self.is_ok() {
             return Err(self);

@@ -99,6 +99,11 @@ impl Join for ResultOutputSet {
 }
 
 impl ResultOutputSet {
+    /// Number of distinct outputs (by unique ID) in the joined set.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     pub fn try_unwrap(self) -> Result<OutputSet, Self> {
         if !self.is_ok() {
             return Err(self);

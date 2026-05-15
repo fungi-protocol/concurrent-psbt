@@ -5,8 +5,8 @@ use psbt_v2::v2::Creator as Bip370Creator;
 use psbt_v2::v2::{InputsOnlyModifiable, Mod, Modifiable, OutputsOnlyModifiable, Psbt};
 
 use crate::fields::{
-    GlobalModifiableExt as _, UNORDERED_VALUE, psbt_global_sort_deterministic,
-    psbt_global_tx_unordered, psbt_out_unique_id,
+    psbt_global_sort_deterministic, psbt_global_tx_unordered, psbt_out_unique_id,
+    GlobalModifiableExt as _, UNORDERED_VALUE,
 };
 use crate::input::InputExt as _;
 use crate::output::OutputExt as _;
@@ -26,6 +26,8 @@ pub enum Error {
     OutputsNotModifiable,
     /// An output is missing the `PSBT_OUT_UNIQUE_ID` proprietary field.
     MissingOutputUniqueId,
+    /// Joining the new input or output with the existing PSBT produced a conflict.
+    JoinConflict,
 }
 
 impl core::fmt::Display for Error {
@@ -35,6 +37,9 @@ impl core::fmt::Display for Error {
             Error::InputsNotModifiable => f.write_str("inputs are not modifiable"),
             Error::OutputsNotModifiable => f.write_str("outputs are not modifiable"),
             Error::MissingOutputUniqueId => f.write_str("an output is missing PSBT_OUT_UNIQUE_ID"),
+            Error::JoinConflict => {
+                f.write_str("joining the new input or output produced a conflict")
+            }
         }
     }
 }
@@ -186,11 +191,6 @@ impl<M: Mod> Constructor<M> {
         let mut global = self.0.global;
         global.proprietaries.remove(&psbt_global_tx_unordered());
 
-        // input()/output() modify the sets without updating global counts,
-        // so we reconcile here. Will be unnecessary once they use join.
-        global.input_count = inputs.len();
-        global.output_count = outputs.len();
-
         Ok(Psbt {
             global,
             inputs,
@@ -219,26 +219,34 @@ impl Constructor<Modifiable> {
     }
 
     /// Add an input.
-    pub fn input(mut self, input: Input) -> Self {
-        // FIXME: should be implemented by creating a new unordered PSBT with
-        // the input and calling join.
-        //
-        // input count conflicts should be fixed by providing the correct
-        // value, care must be taken that e.g. input_count 1 + input_count 1 is
-        // not an error but the correct value could be 1 or 2 depending on
-        // whether or not the input was the same.
-        self.0.inputs.insert(input);
-        self
+    ///
+    /// Returns `Err(Error::JoinConflict)` if the same outpoint is already
+    /// present with conflicting field values.
+    pub fn input(self, input: Input) -> Result<Self, Error> {
+        // FIXME this should not clone self.0 but start with a new unordered
+        // PSBT. UnorderedPsbt::from_output
+        let mut singleton = self.0.clone();
+        singleton.inputs = [input].into_iter().collect();
+        singleton.outputs = Default::default();
+        self.0
+            .join(singleton) // FIXME define try_join, there is no join for UnorderedPsbt
+            .map(|p| Constructor(p, PhantomData))
+            .map_err(|_| Error::JoinConflict) // FIXME replace the inputs_count with a recalculated value, then try_unwrap()
     }
 
     /// Add an output. Requires `PSBT_OUT_UNIQUE_ID`.
+    ///
+    /// Returns `Err(Error::JoinConflict)` if the same unique ID is already
+    /// present with conflicting field values.
     pub fn output(self, output: Output) -> Result<Self, Error> {
-        // FIXME: should be implemented by creating a new unordered PSBT with
-        // the output and calling join. See input FIXME for details.
         validate_output_unique_id(&output)?;
-        let mut this = self;
-        this.0.outputs.insert(output);
-        Ok(this)
+        let mut singleton = self.0.clone();
+        singleton.inputs = Default::default();
+        singleton.outputs = [output].into_iter().collect();
+        self.0
+            .join(singleton)
+            .map(|p| Constructor(p, PhantomData))
+            .map_err(|_| Error::JoinConflict)
     }
 
     /// Sort inputs/outputs and produce a BIP 370 `Constructor<Modifiable>`.
@@ -262,9 +270,18 @@ impl Constructor<Modifiable> {
 
 impl Constructor<InputsOnlyModifiable> {
     /// Add an input.
-    pub fn input(mut self, input: Input) -> Self {
-        self.0.inputs.insert(input);
-        self
+    ///
+    /// Returns `Err(Error::JoinConflict)` if the same outpoint is already
+    /// present with conflicting field values.
+    // FIXME reduce duplication by only implementing this once the generic Constructor<M>,
+    pub fn input(self, input: Input) -> Result<Self, Error> {
+        let mut singleton = self.0.clone();
+        singleton.inputs = [input].into_iter().collect();
+        singleton.outputs = Default::default();
+        self.0
+            .join(singleton)
+            .map(|p| Constructor(p, PhantomData))
+            .map_err(|_| Error::JoinConflict)
     }
 
     /// Wrap an existing PSBT, validating it is unordered and inputs-only modifiable.
@@ -296,11 +313,20 @@ impl Constructor<InputsOnlyModifiable> {
 
 impl Constructor<OutputsOnlyModifiable> {
     /// Add an output. Requires `PSBT_OUT_UNIQUE_ID`.
+    ///
+    /// Returns `Err(Error::JoinConflict)` if the same unique ID is already
+    /// present with conflicting field values.
     pub fn output(self, output: Output) -> Result<Self, Error> {
         validate_output_unique_id(&output)?;
-        let mut this = self;
-        this.0.outputs.insert(output);
-        Ok(this)
+        // FIXME this should not clone self.0 but start with a new unordered
+        // PSBT. UnorderedPsbt::from_output
+        let mut singleton = self.0.clone();
+        singleton.inputs = Default::default();
+        singleton.outputs = [output].into_iter().collect();
+        self.0
+            .join(singleton) // FIXME define try_join, there is no join for UnorderedPsbt
+            .map(|p| Constructor(p, PhantomData))
+            .map_err(|_| Error::JoinConflict) // FIXME replace the outputs_count with a recalculated value, then try_unwrap
     }
 
     /// Wrap an existing PSBT, validating it is unordered and outputs-only modifiable.
@@ -363,8 +389,12 @@ impl Creator {
     pub fn sort_deterministic(mut self, value: Option<bool>) -> Self {
         let key = psbt_global_sort_deterministic();
         match value {
-            None => { self.0.global.proprietaries.remove(&key); }
-            Some(v) => { self.0.global.proprietaries.insert(key, vec![v as u8]); }
+            None => {
+                self.0.global.proprietaries.remove(&key);
+            }
+            Some(v) => {
+                self.0.global.proprietaries.insert(key, vec![v as u8]);
+            }
         }
         self
     }
@@ -397,16 +427,25 @@ mod tests {
     #[test]
     fn creator_sort_deterministic_none_does_not_set_field() {
         use crate::fields::psbt_global_sort_deterministic;
-        let psbt = Creator::new().sort_deterministic(None).into_unordered_psbt();
-        assert!(!psbt.global.proprietaries.contains_key(&psbt_global_sort_deterministic()));
+        let psbt = Creator::new()
+            .sort_deterministic(None)
+            .into_unordered_psbt();
+        assert!(!psbt
+            .global
+            .proprietaries
+            .contains_key(&psbt_global_sort_deterministic()));
     }
 
     #[test]
     fn creator_sort_deterministic_false_sets_field_to_0x00() {
         use crate::fields::psbt_global_sort_deterministic;
-        let psbt = Creator::new().sort_deterministic(Some(false)).into_unordered_psbt();
+        let psbt = Creator::new()
+            .sort_deterministic(Some(false))
+            .into_unordered_psbt();
         assert_eq!(
-            psbt.global.proprietaries.get(&psbt_global_sort_deterministic()),
+            psbt.global
+                .proprietaries
+                .get(&psbt_global_sort_deterministic()),
             Some(&vec![0x00]),
         );
     }
@@ -414,9 +453,13 @@ mod tests {
     #[test]
     fn creator_sort_deterministic_true_sets_field_to_0x01() {
         use crate::fields::psbt_global_sort_deterministic;
-        let psbt = Creator::new().sort_deterministic(Some(true)).into_unordered_psbt();
+        let psbt = Creator::new()
+            .sort_deterministic(Some(true))
+            .into_unordered_psbt();
         assert_eq!(
-            psbt.global.proprietaries.get(&psbt_global_sort_deterministic()),
+            psbt.global
+                .proprietaries
+                .get(&psbt_global_sort_deterministic()),
             Some(&vec![0x01]),
         );
     }
@@ -711,10 +754,63 @@ mod tests {
     }
 
     #[test]
+    fn input_count_is_correct_after_adding_inputs() {
+        let c = Creator::new().constructor();
+        let mut op1 = bitcoin::OutPoint::null();
+        op1.vout = 0;
+        let mut op2 = bitcoin::OutPoint::null();
+        op2.vout = 1;
+        let c = c
+            .input(psbt_v2::v2::Input::new(&op1))
+            .unwrap()
+            .input(psbt_v2::v2::Input::new(&op2))
+            .unwrap();
+        let psbt = c.into_psbt();
+        assert_eq!(psbt.global.input_count, 2);
+        assert_eq!(psbt.inputs.len(), 2);
+    }
+
+    #[test]
+    fn output_count_is_correct_after_adding_outputs() {
+        use crate::fields::psbt_out_unique_id;
+
+        let c = Creator::new().constructor();
+        let mut o1 = psbt_v2::v2::Output::new(bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(1000),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        });
+        o1.proprietaries
+            .insert(psbt_out_unique_id(), vec![0x01; 16]);
+        let mut o2 = psbt_v2::v2::Output::new(bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(2000),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        });
+        o2.proprietaries
+            .insert(psbt_out_unique_id(), vec![0x02; 16]);
+        let c = c.output(o1).unwrap().output(o2).unwrap();
+        let psbt = c.into_psbt();
+        assert_eq!(psbt.global.output_count, 2);
+        assert_eq!(psbt.outputs.len(), 2);
+    }
+
+    #[test]
+    fn input_join_conflict_returns_error() {
+        // Same outpoint, different sequence → conflict.
+        let c = Creator::new().constructor();
+        let op = bitcoin::OutPoint::null();
+        let mut input_a = psbt_v2::v2::Input::new(&op);
+        input_a.sequence = Some(bitcoin::Sequence::MAX);
+        let mut input_b = psbt_v2::v2::Input::new(&op);
+        input_b.sequence = Some(bitcoin::Sequence::ENABLE_LOCKTIME_NO_RBF);
+        let c = c.input(input_a).unwrap();
+        assert_eq!(c.input(input_b), Err(Error::JoinConflict));
+    }
+
+    #[test]
     fn modifiable_input_adds_to_set() {
         let c = Creator::new().constructor();
         let input = psbt_v2::v2::Input::new(&bitcoin::OutPoint::null());
-        let c = c.input(input);
+        let c = c.input(input).unwrap();
         let psbt = c.into_psbt();
         assert_eq!(psbt.inputs.len(), 1);
     }
@@ -750,7 +846,7 @@ mod tests {
     fn inputs_only_input_adds_to_set() {
         let c = Creator::new().constructor().no_more_outputs();
         let input = psbt_v2::v2::Input::new(&bitcoin::OutPoint::null());
-        let c = c.input(input);
+        let c = c.input(input).unwrap();
         let psbt = c.no_more_inputs();
         assert_eq!(psbt.inputs.len(), 1);
     }
@@ -784,7 +880,8 @@ mod tests {
         let a = Creator::new().constructor();
         let b = Creator::new()
             .constructor()
-            .input(psbt_v2::v2::Input::new(&bitcoin::OutPoint::null()));
+            .input(psbt_v2::v2::Input::new(&bitcoin::OutPoint::null()))
+            .unwrap();
         assert_ne!(a, b);
     }
 
