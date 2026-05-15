@@ -54,6 +54,7 @@ impl UnorderedPsbt {
     /// want `crate::Constructor` instead.
     ///
     /// This constructor does not check that the PSBT is marked as unordered.
+    // FIXME rename unchecked_from_psbt
     pub(crate) fn from_psbt(psbt: Psbt) -> Self {
         Self {
             global: psbt.global,
@@ -77,6 +78,7 @@ impl UnorderedPsbt {
     ///
     /// `input_count` and `output_count` are taken from the post-join set
     /// sizes, so they never cause spurious conflicts.
+    // FIXME self.wrap().join(other.wrap()), move the body of this to ResultUnorderedPsbt::join
     pub fn try_join(self, other: Self) -> Result<Self, ResultUnorderedPsbt> {
         // Join content sets first so we can derive the true cardinalities.
         let inputs = self.inputs.wrap().join(other.inputs.wrap());
@@ -98,12 +100,12 @@ impl UnorderedPsbt {
 
         let global = a_global.wrap().join(b_global.wrap());
 
-        let result = ResultUnorderedPsbt {
+        ResultUnorderedPsbt {
             global,
             inputs,
             outputs,
-        };
-        result.try_unwrap().map_err(|e| e)
+        }
+        .try_unwrap()
     }
 
     pub fn wrap(self) -> ResultUnorderedPsbt {

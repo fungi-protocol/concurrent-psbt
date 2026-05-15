@@ -30,6 +30,8 @@ pub enum Error {
     JoinConflict(crate::tx::ResultUnorderedPsbt),
     /// Neither the inputs-modifiable nor the outputs-modifiable flag is set.
     NeitherModifiable,
+    /// A locked (non-modifiable) set contained items not present in the other side.
+    LockedSetMismatch,
 }
 
 impl core::fmt::Display for Error {
@@ -45,6 +47,9 @@ impl core::fmt::Display for Error {
             Error::NeitherModifiable => {
                 f.write_str("neither inputs-modifiable nor outputs-modifiable flag is set")
             }
+            Error::LockedSetMismatch => {
+                f.write_str("a locked set contained items not present in the other constructor")
+            }
         }
     }
 }
@@ -59,6 +64,7 @@ impl PartialEq for Error {
                 | (Error::MissingOutputUniqueId, Error::MissingOutputUniqueId)
                 | (Error::JoinConflict(_), Error::JoinConflict(_))
                 | (Error::NeitherModifiable, Error::NeitherModifiable)
+                | (Error::LockedSetMismatch, Error::LockedSetMismatch)
         )
     }
 }
@@ -186,6 +192,28 @@ impl<M: Mod> Constructor<M> {
         self.0
     }
 
+    /// Merge two Constructors of the same typestate.
+    ///
+    /// For any side whose flag is locked (not modifiable), the corresponding
+    /// set must be identical between `self` and `other`; if it is not,
+    /// `Err(Error::LockedSetMismatch)` is returned.
+    ///
+    /// On the modifiable side(s) the sets are joined via the lattice join.
+    /// If a value conflict arises, `Err(Error::JoinConflict(_))` is returned.
+    pub fn try_join(self, other: Self) -> Result<Self, Error> {
+        // Check locked sets are identical.
+        if !self.0.global.is_inputs_modifiable() && self.0.inputs != other.0.inputs {
+            return Err(Error::LockedSetMismatch);
+        }
+        if !self.0.global.is_outputs_modifiable() && self.0.outputs != other.0.outputs {
+            return Err(Error::LockedSetMismatch);
+        }
+        self.0
+            .try_join(other.0)
+            .map(|p| Constructor(p, PhantomData))
+            .map_err(Error::JoinConflict)
+    }
+
     /// Sort inputs and outputs by their explicit sort keys, producing an ordered BIP 370 `Psbt`.
     ///
     /// Requires `PSBT_GLOBAL_SORT_DETERMINISTIC` = `0x00` (explicit sort keys).
@@ -221,14 +249,7 @@ impl<M: Mod> Constructor<M> {
     }
 
     // FIXME
-    // - fn try_join() (but not impl PartialJoin due to trait coherence) to merge two Constructors
-    //   - for the generic typestate Constructors:
-    //     - if either inputs or outputs are unmodifiable statically, they will
-    //       be for both. assert that the sets are identical.
-    //     - the input and output count JoinResult<usize> is set to Ok(join(a_set, b_set).len()).
-    //     - after resetting input/output count, which may be a conflict or may
-    //       just be incorrect, return try_unwrap() to attempt to lower down to
-    //       Ok() subspace of the Result lattice if no conflicts exist
+    // - fn try_join() on AnyConstructor (but not impl PartialJoin due to trait coherence):
     //   - for the enum of all types, which allows merging constructors with different modifiability:
     //     - unmodifiablility is a lattice, the bottom is both modifiable, top
     //       is both unmodifiable.
@@ -1120,5 +1141,165 @@ mod tests {
         let ordered = c.finalize_order().unwrap().psbt().unwrap();
         assert_eq!(ordered.outputs.len(), 1);
         assert_eq!(ordered.outputs[0].amount, bitcoin::Amount::from_sat(1000));
+    }
+
+    // -- Constructor::try_join tests -----------------------------------------
+
+    #[test]
+    fn try_join_modifiable_disjoint_inputs_merges() {
+        // Two Modifiable constructors with disjoint inputs — join should succeed
+        // and contain both inputs.
+        let mut op_a = bitcoin::OutPoint::null();
+        op_a.vout = 0;
+        let mut op_b = bitcoin::OutPoint::null();
+        op_b.vout = 1;
+
+        let a = Creator::new()
+            .constructor()
+            .input(psbt_v2::v2::Input::new(&op_a))
+            .unwrap();
+        let b = Creator::new()
+            .constructor()
+            .input(psbt_v2::v2::Input::new(&op_b))
+            .unwrap();
+
+        let joined = a.try_join(b).unwrap();
+        let psbt = joined.into_psbt();
+        assert_eq!(psbt.inputs.len(), 2);
+        assert_eq!(psbt.global.input_count, 2);
+    }
+
+    #[test]
+    fn try_join_modifiable_same_input_no_conflict() {
+        // Same outpoint, same data — idempotent join.
+        let op = bitcoin::OutPoint::null();
+        let a = Creator::new()
+            .constructor()
+            .input(psbt_v2::v2::Input::new(&op))
+            .unwrap();
+        let b = Creator::new()
+            .constructor()
+            .input(psbt_v2::v2::Input::new(&op))
+            .unwrap();
+
+        let joined = a.try_join(b).unwrap();
+        let psbt = joined.into_psbt();
+        assert_eq!(psbt.inputs.len(), 1);
+    }
+
+    #[test]
+    fn try_join_modifiable_conflicting_input_returns_err() {
+        let op = bitcoin::OutPoint::null();
+        let mut input_a = psbt_v2::v2::Input::new(&op);
+        input_a.sequence = Some(bitcoin::Sequence::MAX);
+        let mut input_b = psbt_v2::v2::Input::new(&op);
+        input_b.sequence = Some(bitcoin::Sequence::ENABLE_LOCKTIME_NO_RBF);
+
+        let a = Creator::new().constructor().input(input_a).unwrap();
+        let b = Creator::new().constructor().input(input_b).unwrap();
+
+        assert!(matches!(a.try_join(b), Err(Error::JoinConflict(_))));
+    }
+
+    #[test]
+    fn try_join_inputs_only_identical_outputs_succeeds() {
+        // Constructor<InputsOnlyModifiable>: outputs are locked.
+        // Both have no outputs (identical empty set) → join succeeds.
+        let mut op_a = bitcoin::OutPoint::null();
+        op_a.vout = 0;
+        let mut op_b = bitcoin::OutPoint::null();
+        op_b.vout = 1;
+
+        let a = Creator::new()
+            .constructor()
+            .input(psbt_v2::v2::Input::new(&op_a))
+            .unwrap()
+            .no_more_outputs(); // Constructor<InputsOnlyModifiable>
+
+        let b = Creator::new()
+            .constructor()
+            .input(psbt_v2::v2::Input::new(&op_b))
+            .unwrap()
+            .no_more_outputs();
+
+        // Both have identical (empty) output sets → join succeeds.
+        let joined = a.try_join(b).unwrap();
+        let psbt = joined.into_psbt();
+        assert_eq!(psbt.inputs.len(), 2);
+    }
+
+    #[test]
+    fn try_join_outputs_only_different_output_sets_rejected() {
+        use crate::fields::psbt_out_unique_id;
+
+        // Constructor<OutputsOnlyModifiable>: inputs are locked.
+        // Both have no inputs (identical empty sets) → inputs OK.
+        // But if outputs differ beyond the locked empty set, that's different.
+        // Actually for OutputsOnlyModifiable, *inputs* are locked (empty for both).
+        // We test: if both have different outputs locked, LockedSetMismatch.
+        // But wait — outputs are *modifiable* in OutputsOnlyModifiable.
+        // So we test InputsOnlyModifiable where inputs are modifiable and
+        // outputs are locked: if the locked *output* sets differ → LockedSetMismatch.
+
+        let mut out_a = psbt_v2::v2::Output::new(bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(1000),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        });
+        out_a
+            .proprietaries
+            .insert(psbt_out_unique_id(), vec![0x01; 16]);
+
+        let mut out_b = psbt_v2::v2::Output::new(bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(2000),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        });
+        out_b
+            .proprietaries
+            .insert(psbt_out_unique_id(), vec![0x02; 16]);
+
+        // a has out_a locked (no_more_inputs locks inputs flag, but we want
+        // locked outputs). Use no_more_outputs → InputsOnlyModifiable where
+        // outputs flag is cleared (locked).
+        // Wait: no_more_outputs on Modifiable → InputsOnlyModifiable:
+        //   inputs flag = set (modifiable), outputs flag = clear (locked).
+        // So in InputsOnlyModifiable, *outputs* are locked.
+
+        let a = Creator::new()
+            .constructor()
+            .output(out_a)
+            .unwrap()
+            .no_more_outputs(); // Constructor<InputsOnlyModifiable>, outputs locked
+
+        let b = Creator::new()
+            .constructor()
+            .output(out_b)
+            .unwrap()
+            .no_more_outputs(); // different locked output set
+
+        assert_eq!(a.try_join(b), Err(Error::LockedSetMismatch));
+    }
+
+    #[test]
+    fn try_join_inputs_only_locked_inputs_differ_rejected() {
+        // Constructor<OutputsOnlyModifiable>: inputs are locked.
+        // a has one input locked, b has a different input locked → LockedSetMismatch.
+        let mut op_a = bitcoin::OutPoint::null();
+        op_a.vout = 0;
+        let mut op_b = bitcoin::OutPoint::null();
+        op_b.vout = 1;
+
+        let a = Creator::new()
+            .constructor()
+            .input(psbt_v2::v2::Input::new(&op_a))
+            .unwrap()
+            .no_more_inputs(); // Constructor<OutputsOnlyModifiable>, inputs locked
+
+        let b = Creator::new()
+            .constructor()
+            .input(psbt_v2::v2::Input::new(&op_b))
+            .unwrap()
+            .no_more_inputs();
+
+        assert_eq!(a.try_join(b), Err(Error::LockedSetMismatch));
     }
 }
