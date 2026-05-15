@@ -39,10 +39,7 @@ impl<V: PartialJoin> ResultOptionExt for Option<JoinResult<V>> {
     type Value = V;
 
     fn is_ok(&self) -> bool {
-        match self {
-            Some(Err(_)) => false,
-            _ => true,
-        }
+        !matches!(self, Some(Err(_)))
     }
 
     fn try_unwrap(self) -> Result<Option<V>, Conflict<V>> {
