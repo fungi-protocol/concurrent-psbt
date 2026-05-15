@@ -127,7 +127,9 @@ impl GlobalFieldsExt for Global {
     }
 
     fn sort_deterministic_absent(&self) -> bool {
-        !self.proprietaries.contains_key(&psbt_global_sort_deterministic())
+        !self
+            .proprietaries
+            .contains_key(&psbt_global_sort_deterministic())
     }
 
     fn is_sort_explicit(&self) -> bool {

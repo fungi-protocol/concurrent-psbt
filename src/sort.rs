@@ -5,7 +5,7 @@
 /// The derived key is the full 32-byte HMAC output, giving a uniform
 /// lexicographic ordering that is deterministic given `seed` and `id`.
 pub(crate) fn derive_sort_key(seed: &[u8], id: &[u8]) -> Vec<u8> {
-    use bitcoin::hashes::{hmac, sha256, Hash, HashEngine};
+    use bitcoin::hashes::{Hash, HashEngine, hmac, sha256};
     // FIXME use a taproot style hash with two copies of the hash of tag as full 1st block
     // (so midstate is cacheable) for the type, as a domain separator.
     // then two copies of the hash of the seed. this midstate is sharable for
@@ -57,7 +57,7 @@ mod sealed {
 
 /// Seed state: seed not yet provided.
 ///
-/// `try_sort` always fails in this state; call `set_seed` to transition to
+/// `try_sort` always fails in this state; call `set_deterministic_sort_seed` to transition to
 /// [`Seeded`].
 #[derive(Debug)]
 pub enum Unseeded {}
@@ -235,6 +235,8 @@ impl Sorter<Relaxed<Unseeded>> {
         }
         Ok(Self::new_unchecked(psbt))
     }
+
+    // FIXME needs set_deterministic_sort_seed
 }
 
 impl Sorter<ExplicitSortKeys> {
@@ -255,7 +257,7 @@ impl Sorter<ExplicitSortKeys> {
 }
 
 impl Sorter<Deterministic<Seeded>> {
-    /// Sort by seed-derived keys (HMAC-SHA256 of seed ‖ outpoint/unique-id).
+    /// Sort by seed-derived keys
     ///
     /// This is infallible — keys are always derivable from the seed.
     pub fn try_sort(self) -> Result<Psbt, crate::constructor::SortingError> {
@@ -429,7 +431,7 @@ mod tests {
     fn sorter_deterministic_seeded_new_accepts_seed() {
         let u = Creator::new()
             .deterministic_sorting()
-            .set_seed(b"seed-16-bytes!!!".to_vec())
+            .set_deterministic_sort_seed(b"seed-16-bytes!!!".to_vec())
             .into_unordered_psbt();
         assert!(Sorter::<Deterministic<Seeded>>::new(u).is_ok());
     }
@@ -447,7 +449,7 @@ mod tests {
     #[test]
     fn sorter_relaxed_seeded_new_accepts_seed() {
         let u = Creator::new()
-            .set_seed(b"seed-16-bytes!!!".to_vec())
+            .set_deterministic_sort_seed(b"seed-16-bytes!!!".to_vec())
             .into_unordered_psbt();
         assert!(Sorter::<Relaxed<Seeded>>::new(u).is_ok());
     }
@@ -488,7 +490,7 @@ mod tests {
 
         let mut unordered = Creator::new()
             .deterministic_sorting()
-            .set_seed(seed.clone())
+            .set_deterministic_sort_seed(seed.clone())
             .into_unordered_psbt();
         unordered.global.input_count = 2;
         unordered.inputs = [
@@ -504,7 +506,7 @@ mod tests {
         // Verify determinism: same seed → same order.
         let mut unordered2 = Creator::new()
             .deterministic_sorting()
-            .set_seed(seed)
+            .set_deterministic_sort_seed(seed)
             .into_unordered_psbt();
         unordered2.global.input_count = 2;
         unordered2.inputs = [
