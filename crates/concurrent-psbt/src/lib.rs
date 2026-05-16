@@ -6,3 +6,4 @@
 mod lattice;
 
 pub use lattice::join::{Join, JoinMut};
+pub use lattice::partial::{Conflict, JoinResult, PartialJoin};
