@@ -34,7 +34,6 @@
           // {
             cargoArtifacts = deps;
             CARGO_PROFILE = profile;
-            cargoNextestExtraArgs = "--no-tests=warn";
           }
         );
 
@@ -77,10 +76,9 @@
               cargo-nextest
             ];
             buildPhaseCargoCommand = ''
-              cargo llvm-cov nextest --no-report --no-tests=warn --no-default-features --features ${features}
+              cargo llvm-cov nextest --no-report --no-default-features --features ${features}
 
               mkdir -p $out
-
               find target/llvm-cov-target -name '*.prof*' -print -quit | grep -q . || {
                 echo "coverage: no profile data produced; refusing to pass vacuously" >&2
                 exit 1
