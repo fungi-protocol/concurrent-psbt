@@ -5,4 +5,5 @@
 //! clean and result representations.
 
 pub(crate) mod btreemap;
+pub(crate) mod hashmap;
 pub(crate) mod option;
