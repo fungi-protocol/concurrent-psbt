@@ -4,6 +4,7 @@
 
 #[macro_use]
 mod lattice;
+mod collections;
 
 pub use lattice::join::{Join, JoinMut};
 pub use lattice::partial::{Conflict, JoinResult, PartialJoin};
