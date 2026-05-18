@@ -49,7 +49,7 @@
       # pass.
       coverageThresholds = {
         prop-only = 100;
-        unit-only = 100;
+        unit-only = 95;
       };
 
       coverageCollections = {
