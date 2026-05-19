@@ -11,6 +11,7 @@
         craneLib:
         craneLib.devShell {
           packages = with pkgs; [
+            config.treefmt.build.wrapper
           ];
         };
     in
