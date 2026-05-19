@@ -14,6 +14,7 @@
       systems = [ "x86_64-linux" ];
 
       imports = [
+        ./nix/checks.nix
         ./nix/treefmt.nix
       ];
     };
