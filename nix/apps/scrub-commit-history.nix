@@ -15,7 +15,7 @@
       apps.scrub-commit-history = {
         type = "app";
         program = "${scrub-commit-history}/bin/scrub-commit-history";
-        meta.description = "Check commit history for message hygiene";
+        meta.description = "Check commit history for hygiene and flake check regressions";
       };
     };
 }
