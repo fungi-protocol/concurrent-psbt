@@ -15,25 +15,24 @@ usage() {
   cat >&2 <<EOF
 Usage: ${0##*/} [options] [-- <revset-args>...]
 
-Sequential ordering (default: --reverse):
-  --forward      first to last (CI: verify whole history)
-  --reverse      last to first (development: find recent breakage)
-  --bisect       midpoint first (rewriting: find breakage fast)
+For each commit in the revset, runs: message hygiene check, gitignore
+monotonicity check, and a flake check phase.
 
-Options:
-  -h, --help            show this help
-  -L, --print-build-logs  print build logs
-  --check NAME          run only named check(s) (repeatable; default: all checks)
-  --all-checks          run all checks (error if --check also given)
-  --no-flake-checks     skip flake build checks (message-only mode)
+The flake check phase builds checks.\$system.NAME for each commit.
+Without --check, all checks run (all-checks mode).
+With --check NAME, only that check runs (repeatable for multiple).
+
+Traversal order (default: --reverse):
+  --forward      oldest→newest  (CI: validate full history)
+  --reverse      newest→oldest  (development: surface recent failures first)
+  --bisect       midpoint-first (history rewriting: locate breakage in O(log n))
+
+Flake check phase — check selection:
+  --check NAME          run only checks.\$system.NAME (repeatable)
+  --all-checks          explicitly run all checks (error if --check also given)
+  --no-flake-checks     skip the flake check phase entirely
   --no-nom              disable nix-output-monitor (default: use nom on tty)
-  --no-skip-missing     fail commits missing a named check (default: skip them)
-  --fail-fast           stop at the first failing commit
-  --keep-going          pass --keep-going to nix (build unrelated targets despite failures)
-  --log=jj|git          VCS for revset resolution (default: jj if available, else git)
-  --git                 alias for --log=git
-  --log-revset          use the VCS's own default revset (skip default range)
-  --everything          scrub all branches (jj: all() ~ root(); git: --all)
+  --no-skip-missing     fail commits that lack a named --check (default: skip)
 
 Quick pre-check (all-checks mode only):
   The flake may define checks.\$system.quick — a lightweight fast-feedback subset.
@@ -43,12 +42,34 @@ Quick pre-check (all-checks mode only):
   --quick=first     (default) run quick as a separate pre-phase, then all checks
   --quick=deferred  no separate pre-phase; quick runs as part of all checks
 
+Failure handling (default: report all per-commit failures, then continue):
+  --fail-fast     stop at the first failing commit
+  --keep-going    pass --keep-going to nix (build unrelated targets despite failures)
+
+Batching:
+  --parallel      collect all check targets across commits, build in one nix
+                  invocation (nix schedules across cores); falls back to
+                  sequential on failure to isolate broken commits
+                  (best for CI or mostly-passing history)
+
+Output:
+  -h, --help              show this help
+  -L, --print-build-logs  print nix build logs
+
+VCS mode (default: jj if available, else git):
+  --log=jj|git    select VCS for revset resolution
+  --git           alias for --log=git
+
 Extra arguments are passed through as-is to jj log or git rev-list.
 A single bookmark/branch name or commit hash works in both modes.
 
 Revset defaults (when no extra arguments given):
   jj mode:   -r 'trunk()..@' (ancestors of @ since trunk)
   git mode:  origin/main..HEAD (or all commits if no remote)
+
+Revset options:
+  --log-revset    use the VCS's own default revset (skip default range)
+  --everything    scrub all branches (jj: all() ~ root(); git: --all)
 EOF
   exit 1
 }
@@ -63,6 +84,7 @@ nix_build_args=()
 vcs_mode=auto
 everything=false
 use_log_revset=false
+mode=sequential
 fail_fast=false
 quick=auto # auto resolves after arg parsing
 
@@ -88,6 +110,7 @@ while [ $# -gt 0 ]; do
     ;;
   --no-flake-checks) run_flake_checks=false ;;
   --no-nom) use_nom=false ;;
+  --parallel) mode=parallel ;;
   --fail-fast) fail_fast=true ;;
   --quick) quick=only ;;
   --quick=*) quick="${1#--quick=}" ;;
@@ -388,6 +411,17 @@ for hash in "${linear[@]}"; do
   fi
 done
 
+# Build phase-specific ordered arrays (pre-filtered)
+flake_ordered=()
+quick_ordered=()
+for idx in "${ordered[@]}"; do
+  hash=${linear[$idx]}
+  [ -z "${no_flake[$hash]:-}" ] || continue
+  flake_ordered+=("$idx")
+  [ -z "${no_quick[$hash]:-}" ] || continue
+  quick_ordered+=("$idx")
+done
+
 # Check each commit message for unresolved work-item markers
 # Conflict check — jj conflict trees and git conflict markers
 conflict_failed=()
@@ -459,30 +493,131 @@ fi
 # Quick pre-check (--quick=first, all-checks mode only)
 build_failed=()
 if [ "$run_flake_checks" = true ] && [ "$quick" = first ]; then
-  echo "Quick pre-check: running checks.$system.quick ($order)..."
-  for idx in "${ordered[@]}"; do
-    hash=${linear[$idx]}
-    git log -1 --format='%B' "$hash" | grep -qE '\[EXPECT-FAIL: [^]]+\]' && continue
-    [ -z "${no_flake[$hash]:-}" ] || continue
-    [ -z "${no_quick[$hash]:-}" ] || continue
-    target="git+file://$repo_root?rev=$hash#checks.$system.quick"
-    if ! nix_build "$target"; then
-      echo "  ✗ $(fmt_commit "$hash") (quick failed)"
-      build_failed+=("$hash")
-      if [ "$fail_fast" = true ]; then break; fi
+  if [ "$mode" = parallel ]; then
+    quick_targets=()
+    for idx in "${quick_ordered[@]}"; do
+      hash=${linear[$idx]}
+      [ -z "${expect_fail_check[$hash]:-}" ] || continue
+      quick_targets+=("git+file://$repo_root?rev=$hash#checks.$system.quick")
+    done
+    if [ ${#quick_targets[@]} -gt 0 ]; then
+      echo "Quick pre-check: building ${#quick_targets[@]} quick targets in parallel..."
+      if nix_build "${quick_targets[@]}"; then
+        echo "  ✓ quick pre-check passed"
+      else
+        echo "  ✗ quick pre-check had failures, falling back to sequential..."
+        mode=sequential
+      fi
     fi
-  done
+  fi
+  # Sequential quick: either started sequential, or parallel quick failed above.
+  # In the fallback case this identifies which commits failed quick before the
+  # expensive full phase. Nix caching prevents redundant builds.
+  if [ "$mode" = sequential ]; then
+    echo "Quick pre-check: running checks.$system.quick ($order)..."
+    for idx in "${quick_ordered[@]}"; do
+      hash=${linear[$idx]}
+      [ -z "${expect_fail_check[$hash]:-}" ] || continue
+      target="git+file://$repo_root?rev=$hash#checks.$system.quick"
+      if ! nix_build "$target"; then
+        echo "  ✗ $(fmt_commit "$hash") (quick failed)"
+        build_failed+=("$hash")
+        if [ "$fail_fast" = true ]; then break; fi
+      fi
+    done
+  fi
 fi
 
 # Flake check phase (skipped with --no-flake-checks or --quick=only)
 if [ "$run_flake_checks" = true ] && [ "$quick" != only ]; then
-  echo "Flake check phase: verifying $total commits ($order)..."
-  for idx in "${ordered[@]}"; do
-    hash=${linear[$idx]}
-    check_one_commit "$hash" || {
-      if [ "$fail_fast" = true ]; then break; fi
-    }
-  done
+  if [ "$mode" = parallel ]; then
+    echo "Flake check phase: collecting targets for parallel build..."
+    # Categorize commits and collect nix build targets for batching
+    flake_targets=()
+    expect_fail_indices=()
+    no_checks_indices=()
+    for idx in "${flake_ordered[@]}"; do
+      hash=${linear[$idx]}
+      expect_fail="${expect_fail_check[$hash]:-}"
+      if [ -n "$expect_fail" ]; then
+        if expect_fail_matches_checks "$expect_fail"; then
+          expect_fail_indices+=("$idx")
+        fi
+        continue
+      fi
+      flakeref="git+file://$repo_root?rev=$hash"
+      n_before=${#flake_targets[@]} # track whether this commit adds any targets
+      # --check mode: build only the named checks
+      if [ ${#check_names[@]} -gt 0 ]; then
+        for cn in "${check_names[@]}"; do
+          target="$flakeref#checks.$system.$cn"
+          if [ "$no_skip_missing" = true ]; then
+            flake_targets+=("$target")
+          elif nix eval --no-update-lock-file "$target" --apply 'x: true' >/dev/null 2>/dev/null; then
+            flake_targets+=("$target")
+          fi
+        done
+      else
+        while IFS= read -r attr; do
+          [ -n "$attr" ] || continue
+          flake_targets+=("$flakeref#checks.$system.$attr")
+        done < <(nix eval --no-update-lock-file "$flakeref#checks.$system" --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrNames cs) + "\n"' --raw 2>/dev/null || true)
+      fi
+      if [ ${#flake_targets[@]} -eq "$n_before" ]; then
+        no_checks_indices+=("$idx")
+      fi
+    done
+    # Batch-build all collected targets; fall back to sequential on failure
+    if [ ${#flake_targets[@]} -gt 0 ]; then
+      n_commits=$((${#flake_ordered[@]} - ${#expect_fail_indices[@]} - ${#no_checks_indices[@]}))
+      echo "Flake check phase: building ${#flake_targets[@]} targets across $n_commits commits..."
+      if nix_build "${flake_targets[@]}"; then
+        echo "  ✓ all flake checks passed"
+      else
+        echo "  ✗ parallel build had failures, falling back to sequential..."
+        mode=sequential
+      fi
+    fi
+    # Report skip/EXPECT-FAIL/no-checks only if parallel succeeded
+    # (sequential fallback handles them in its own loop)
+    if [ "$mode" = parallel ]; then
+      for idx in "${expect_fail_indices[@]}"; do
+        hash=${linear[$idx]}
+        flakeref="git+file://$repo_root?rev=$hash"
+        expect_fail="${expect_fail_check[$hash]:-}"
+        named_target="$flakeref#checks.$system.$expect_fail"
+        if ! nix eval --no-update-lock-file "$named_target" --apply 'x: true' >/dev/null 2>/dev/null; then
+          echo "  ✗ $(fmt_commit "$hash") (EXPECT-FAIL: $expect_fail — check not defined)"
+          build_failed+=("$hash")
+        elif nix_build "$named_target"; then
+          echo "  ✗ $(fmt_commit "$hash") (EXPECT-FAIL: $expect_fail unexpectedly passed)"
+          build_failed+=("$hash")
+        else
+          echo "  ✓ $(fmt_commit "$hash") (EXPECT-FAIL: $expect_fail correctly fails)"
+        fi
+      done
+      for idx in "${no_checks_indices[@]}"; do
+        hash=${linear[$idx]}
+        flakeref="git+file://$repo_root?rev=$hash"
+        if nix_flake_check "$flakeref"; then
+          echo "  ✓ $(fmt_commit "$hash") (flake check only)"
+        else
+          echo "  ✗ $(fmt_commit "$hash")"
+          build_failed+=("$hash")
+        fi
+      done
+    fi
+  fi
+
+  # Sequential mode: either started sequential, or parallel fell back above
+  if [ "$mode" = sequential ]; then
+    echo "Flake check phase: verifying $total commits ($order)..."
+    for idx in "${ordered[@]}"; do
+      check_one_commit "${linear[$idx]}" || {
+        if [ "$fail_fast" = true ]; then break; fi
+      }
+    done
+  fi
 fi
 
 # Summary
