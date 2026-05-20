@@ -28,6 +28,7 @@ Options:
   --no-flake-checks     skip flake build checks (message-only mode)
   --no-nom              disable nix-output-monitor (default: use nom on tty)
   --no-skip-missing     fail commits missing a named check (default: skip them)
+  --fail-fast           stop at the first failing commit
   --keep-going          pass --keep-going to nix (build unrelated targets despite failures)
   --log=jj|git          VCS for revset resolution (default: jj if available, else git)
   --git                 alias for --log=git
@@ -54,6 +55,7 @@ nix_build_args=()
 vcs_mode=auto
 everything=false
 use_log_revset=false
+fail_fast=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -77,6 +79,7 @@ while [ $# -gt 0 ]; do
     ;;
   --no-flake-checks) run_flake_checks=false ;;
   --no-nom) use_nom=false ;;
+  --fail-fast) fail_fast=true ;;
   -k | --keep-going | -L | --print-build-logs) nix_build_args+=("$1") ;;
   *) log_args+=("$1") ;;
   esac
@@ -408,7 +411,9 @@ if [ "$run_flake_checks" = true ]; then
   echo "Flake check phase: verifying $total commits ($order)..."
   for idx in "${ordered[@]}"; do
     hash=${linear[$idx]}
-    check_one_commit "$hash" || true
+    check_one_commit "$hash" || {
+      if [ "$fail_fast" = true ]; then break; fi
+    }
   done
 fi
 
