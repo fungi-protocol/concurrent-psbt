@@ -6,10 +6,21 @@ on:
   pull_request:
 
 jobs:
-  flake-check:
+  scrub:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
-      - run: nix flake check
+      - name: Initialize jj workspace
+        run: nix run nixpkgs#jujutsu -- git init --colocate
+      - name: Scrub commit history
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            nix run .#scrub-commit-history -- --forward --parallel --keep-going -L \
+              -r '${{ github.event.pull_request.base.sha }}..${{ github.sha }}'
+          else
+            nix run .#scrub-commit-history -- --forward --parallel --keep-going -L
+          fi
