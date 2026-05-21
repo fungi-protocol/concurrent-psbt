@@ -4,6 +4,8 @@
 
 #[macro_use]
 mod lattice;
+mod values;
+
 mod collections;
 
 #[cfg(test)]
