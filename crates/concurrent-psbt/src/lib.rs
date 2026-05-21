@@ -4,6 +4,8 @@
 
 #[macro_use]
 mod lattice;
+mod values;
+
 mod collections;
 
 pub use lattice::join::{Join, JoinMut};
