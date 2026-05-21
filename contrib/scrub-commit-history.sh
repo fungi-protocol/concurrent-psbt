@@ -75,6 +75,7 @@ EOF
 }
 
 order=reverse
+shallow_param="${NIX_FLAKE_SHALLOW:+&shallow=1}"
 run_flake_checks=true
 check_names=()
 no_skip_missing=false
@@ -333,7 +334,7 @@ check_one_commit() {
     fi
   fi
 
-  local flakeref="git+file://$repo_root?rev=$hash"
+  local flakeref="git+file://$repo_root?rev=$hash$shallow_param"
 
   # EXPECT-FAIL commits: verify the named check does fail
   local expect_fail="${expect_fail_check[$hash]:-}"
@@ -493,7 +494,7 @@ if [ "$run_flake_checks" = true ] && [ "$quick" = first ]; then
     for idx in "${quick_ordered[@]}"; do
       hash=${linear[$idx]}
       [ -z "${expect_fail_check[$hash]:-}" ] || continue
-      quick_targets+=("git+file://$repo_root?rev=$hash#checks.$system.quick")
+      quick_targets+=("git+file://$repo_root?rev=$hash$shallow_param#checks.$system.quick")
     done
     if [ ${#quick_targets[@]} -gt 0 ]; then
       echo "Quick pre-check: building ${#quick_targets[@]} quick targets in parallel..."
@@ -513,7 +514,7 @@ if [ "$run_flake_checks" = true ] && [ "$quick" = first ]; then
     for idx in "${quick_ordered[@]}"; do
       hash=${linear[$idx]}
       [ -z "${expect_fail_check[$hash]:-}" ] || continue
-      target="git+file://$repo_root?rev=$hash#checks.$system.quick"
+      target="git+file://$repo_root?rev=$hash$shallow_param#checks.$system.quick"
       if ! nix_build "$target"; then
         echo "  ✗ $(fmt_commit "$hash") (quick failed)"
         build_failed+=("$hash")
@@ -540,7 +541,7 @@ if [ "$run_flake_checks" = true ] && [ "$quick" != only ]; then
         fi
         continue
       fi
-      flakeref="git+file://$repo_root?rev=$hash"
+      flakeref="git+file://$repo_root?rev=$hash$shallow_param"
       n_before=${#flake_targets[@]} # track whether this commit adds any targets
       # --check mode: build only the named checks
       if [ ${#check_names[@]} -gt 0 ]; then
@@ -578,7 +579,7 @@ if [ "$run_flake_checks" = true ] && [ "$quick" != only ]; then
     if [ "$mode" = parallel ]; then
       for idx in "${expect_fail_indices[@]}"; do
         hash=${linear[$idx]}
-        flakeref="git+file://$repo_root?rev=$hash"
+        flakeref="git+file://$repo_root?rev=$hash$shallow_param"
         expect_fail="${expect_fail_check[$hash]:-}"
         named_target="$flakeref#checks.$system.$expect_fail"
         if ! nix eval --no-update-lock-file "$named_target" --apply 'x: true' >/dev/null 2>/dev/null; then
@@ -593,7 +594,7 @@ if [ "$run_flake_checks" = true ] && [ "$quick" != only ]; then
       done
       for idx in "${no_checks_indices[@]}"; do
         hash=${linear[$idx]}
-        flakeref="git+file://$repo_root?rev=$hash"
+        flakeref="git+file://$repo_root?rev=$hash$shallow_param"
         if nix_flake_check "$flakeref"; then
           echo "  ✓ $(fmt_commit "$hash") (flake check only)"
         else

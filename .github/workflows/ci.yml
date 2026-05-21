@@ -9,18 +9,24 @@ jobs:
   scrub:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Compute fetch depth
+        id: fetch-depth
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "depth=$(( ${{ github.event.pull_request.commits }} + 1 ))" >> "$GITHUB_OUTPUT"
+          else
+            echo "depth=0" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          fetch-depth: ${{ steps.fetch-depth.outputs.depth }}
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
-      - name: Initialize jj workspace
-        run: nix run nixpkgs#jujutsu -- git init --colocate
       - name: Scrub commit history
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            nix run .#scrub-commit-history -- --forward --parallel --keep-going -L \
-              -r '${{ github.event.pull_request.base.sha }}..${{ github.sha }}'
+            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#scrub-commit-history' -- --git --forward --parallel --keep-going --print-build-logs \
+              '${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}'
           else
-            nix run .#scrub-commit-history -- --forward --parallel --keep-going -L
+            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#scrub-commit-history' -- --git --forward --parallel --keep-going --print-build-logs
           fi
