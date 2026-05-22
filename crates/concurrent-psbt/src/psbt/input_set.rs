@@ -49,6 +49,11 @@ impl InputSet {
         self.0.set().is_empty()
     }
 
+    /// Iterate over the inputs, in no particular order.
+    pub(crate) fn values(&self) -> impl Iterator<Item = &Input> {
+        self.0.set().values()
+    }
+
     /// Return `true` if the set contains an input spending the given outpoint.
     pub fn spends_outpoint(&self, op: &OutPoint) -> bool {
         self.0.set().contains_key(op)

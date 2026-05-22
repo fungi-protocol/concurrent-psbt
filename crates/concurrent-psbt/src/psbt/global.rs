@@ -190,7 +190,7 @@ impl SortKeyDerivation {
         }
     }
 
-    fn to_byte(self) -> u8 {
+    pub(crate) fn to_byte(self) -> u8 {
         match self {
             Self::Explicit => 0x00,
             Self::Derived => 0x01,
