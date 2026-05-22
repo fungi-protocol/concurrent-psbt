@@ -4,4 +4,5 @@
 //! plus helper traits for lifting (`wrap`) and lowering (`try_unwrap`) between
 //! clean and result representations.
 
+pub(crate) mod btreemap;
 pub(crate) mod option;
