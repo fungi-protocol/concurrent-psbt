@@ -4,13 +4,6 @@ use crate::lattice::join::{Join, JoinMut};
 use crate::lattice::partial::{JoinResult, PartialJoin};
 
 /// Extension trait for lifting `BTreeMap<K, V>` values to `Ok`, entering the result domain.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used once PSBT field types join in the result domain"
-    )
-)]
 pub(crate) trait BTreeMapExt {
     type Key;
     type Value: PartialJoin;
@@ -28,13 +21,6 @@ impl<K: Ord, V: PartialJoin> BTreeMapExt for BTreeMap<K, V> {
 
 /// Extension trait for `BTreeMap<K, JoinResult<V>>` — `is_ok` checks all values,
 /// `try_unwrap` extracts the plain map or returns `self` on conflict.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used once PSBT field types join in the result domain"
-    )
-)]
 pub(crate) trait ResultBTreeMapExt: Sized {
     type Key;
     type Value: PartialJoin;
