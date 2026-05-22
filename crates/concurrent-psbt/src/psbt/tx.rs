@@ -200,6 +200,31 @@ mod tests {
     use super::*;
     use crate::lattice::join::Join;
 
+    #[cfg(any(feature = "unit-tests", feature = "prop-tests"))]
+    #[test]
+    fn join_flags_preexisting_count_mismatch() {
+        let empty = || UnorderedPsbt {
+            global: Global::default(),
+            inputs: InputSet::default(),
+            outputs: OutputSet::default(),
+        };
+        let mut inconsistent = empty().wrap();
+        inconsistent.global.input_count = Ok(1);
+
+        let joined = inconsistent.join(empty().wrap());
+
+        assert_eq!(
+            joined.global.input_count,
+            Err(Conflict::from_values([1, 0]))
+        );
+
+        let rejoined = joined.join(empty().wrap());
+        assert_eq!(
+            rejoined.global.input_count,
+            Err(Conflict::from_values([1, 0]))
+        );
+    }
+
     #[cfg(feature = "unit-tests")]
     mod unit {
         use super::*;
@@ -636,6 +661,33 @@ mod tests {
                 };
                 let result = ResultUnorderedPsbt::try_from_psbt(psbt).unwrap();
                 prop_assert!(result.is_ok());
+            }
+
+            #[test]
+            fn result_try_from_psbt_flags_count_mismatches(
+                input_count in 1usize..10,
+                output_count in 1usize..10,
+            ) {
+                let psbt = Psbt {
+                    global: Global {
+                        input_count,
+                        output_count,
+                        ..Global::default()
+                    },
+                    inputs: vec![],
+                    outputs: vec![],
+                };
+
+                let result = ResultUnorderedPsbt::try_from_psbt(psbt).unwrap();
+
+                prop_assert_eq!(
+                    result.global.input_count,
+                    Err(Conflict::from_values([input_count, 0]))
+                );
+                prop_assert_eq!(
+                    result.global.output_count,
+                    Err(Conflict::from_values([output_count, 0]))
+                );
             }
 
             #[test]
