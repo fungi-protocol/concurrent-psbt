@@ -2,6 +2,7 @@
 mod joinable_struct_macro;
 pub mod global;
 pub mod input;
+mod input_set;
 #[cfg_attr(
     not(test),
     expect(

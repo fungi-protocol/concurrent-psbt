@@ -87,6 +87,7 @@ pub(crate) fn out_point(input: &Input) -> OutPoint {
     }
 }
 
+pub use super::input_set::{DuplicateInput, InputSet, ResultInputSet};
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub(crate) mod tests {
