@@ -7,6 +7,7 @@ mod lattice;
 mod values;
 
 mod collections;
+mod psbt;
 
 #[cfg(test)]
 mod tests {

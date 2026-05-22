@@ -8,5 +8,12 @@ default = ["unit-tests", "prop-tests"]
 unit-tests = []
 prop-tests = []
 
+[dependencies]
+bitcoin = "0.32"
+psbt-v2 = { git = "https://github.com/arminsabouri/rust-psbt", branch = "update-consensus-decode-trait-bound" }
+
+[dev-dependencies]
+proptest = "1"
+
 [lints]
 workspace = true
