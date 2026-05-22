@@ -80,6 +80,41 @@ pub(crate) fn out_point(input: &Input) -> OutPoint {
 }
 
 pub use super::input_set::{InputSet, ResultInputSet};
+/// Subtype for `PSBT_IN_SORT_KEY`.
+///
+/// Up to 32 bytes of arbitrary data used as a lexicographic sort key.
+/// Must be distinct across all inputs in a PSBT.
+pub const PSBT_IN_SORT_KEY_SUBTYPE: u8 = 0x10;
+
+/// Extension trait on [`psbt_v2::v2::Input`] for accessing the sort key proprietary field.
+pub trait InputSortKeyExt {
+    /// Get the sort key, if set.
+    fn sort_key(&self) -> Option<&[u8]>;
+    /// Set the sort key.
+    #[cfg(test)]
+    fn set_sort_key(&mut self, key: Vec<u8>);
+}
+
+impl InputSortKeyExt for Input {
+    fn sort_key(&self) -> Option<&[u8]> {
+        let key = psbt_v2::raw::ProprietaryKey {
+            prefix: crate::PROPRIETARY_PREFIX.to_vec(),
+            subtype: PSBT_IN_SORT_KEY_SUBTYPE,
+            key: vec![],
+        };
+        self.proprietaries.get(&key).map(|v| v.as_slice())
+    }
+
+    #[cfg(test)]
+    fn set_sort_key(&mut self, sort_key: Vec<u8>) {
+        let key = psbt_v2::raw::ProprietaryKey {
+            prefix: crate::PROPRIETARY_PREFIX.to_vec(),
+            subtype: PSBT_IN_SORT_KEY_SUBTYPE,
+            key: vec![],
+        };
+        self.proprietaries.insert(key, sort_key);
+    }
+}
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub(crate) mod tests {
