@@ -30,6 +30,86 @@ joinable_struct! {
     }
 }
 
+/// Opaque byte-vector identifier for a PSBT output.
+///
+/// Computed from the `PSBT_OUT_UNIQUE_ID` proprietary field, keyed by subtype
+/// [`PSBT_OUT_UNIQUE_ID_SUBTYPE`]. Used as the map key in `OutputSet`
+/// so that outputs can be merged in an order-independent way.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct UniqueId(Vec<u8>);
+
+impl UniqueId {
+    /// Create a `UniqueId` from raw bytes.
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+
+    /// Access the raw bytes of this unique identifier.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Consume and return the raw bytes.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+
+    /// Generate a fresh random 16-byte unique identifier.
+    ///
+    /// The bytes come straight from the operating system's RNG rather than a
+    /// userspace generator such as `ThreadRng`, whose state a forked child
+    /// would share with its parent. Two calls therefore collide only with
+    /// negligible probability, so copies of an otherwise identical txout can
+    /// coexist as separate outputs.
+    ///
+    /// # Panics
+    /// Panics if the operating system's RNG is unavailable.
+    pub fn generate() -> Self {
+        use rand::{RngCore, TryRngCore, rngs::OsRng};
+
+        let mut bytes = [0u8; 16];
+        OsRng.unwrap_err().fill_bytes(&mut bytes);
+        Self(bytes.to_vec())
+    }
+}
+
+impl crate::values::IdempotentValue for UniqueId {}
+
+pub const PSBT_OUT_UNIQUE_ID_SUBTYPE: u8 = 0x01;
+
+/// Extension trait on [`psbt_v2::v2::Output`] for accessing the unique-ID proprietary field.
+pub trait OutputUniqueIdExt {
+    /// Return the [`UniqueId`] stored in the `PSBT_OUT_UNIQUE_ID` proprietary field, if present.
+    fn unique_id(&self) -> Option<UniqueId>;
+    /// Return `true` if this output carries a [`UniqueId`].
+    fn has_unique_id(&self) -> bool {
+        self.unique_id().is_some()
+    }
+    /// Store `id` in the `PSBT_OUT_UNIQUE_ID` proprietary field, replacing
+    /// any existing value.
+    fn set_unique_id(&mut self, id: UniqueId);
+}
+
+impl OutputUniqueIdExt for Output {
+    fn unique_id(&self) -> Option<UniqueId> {
+        let key = psbt_v2::raw::ProprietaryKey {
+            prefix: b"concurrent-psbt".to_vec(),
+            subtype: PSBT_OUT_UNIQUE_ID_SUBTYPE,
+            key: vec![],
+        };
+        self.proprietaries.get(&key).map(|v| UniqueId(v.clone()))
+    }
+
+    fn set_unique_id(&mut self, id: UniqueId) {
+        let key = psbt_v2::raw::ProprietaryKey {
+            prefix: b"concurrent-psbt".to_vec(),
+            subtype: PSBT_OUT_UNIQUE_ID_SUBTYPE,
+            key: vec![],
+        };
+        self.proprietaries.insert(key, id.into_bytes());
+    }
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -165,6 +245,75 @@ mod tests {
                 }
             }
 
+        }
+    }
+
+    #[cfg(feature = "prop-tests")]
+    mod prop_uid {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn output_with_uid(uid: &[u8]) -> Output {
+            let mut output = Output::default();
+            let key = psbt_v2::raw::ProprietaryKey {
+                prefix: b"concurrent-psbt".to_vec(),
+                subtype: PSBT_OUT_UNIQUE_ID_SUBTYPE,
+                key: vec![],
+            };
+            output.proprietaries.insert(key, uid.to_vec());
+            output
+        }
+
+        proptest! {
+            #[test]
+            fn unique_id_roundtrip(uid in proptest::collection::vec(0u8..=255, 1..=32)) {
+                let output = output_with_uid(&uid);
+                prop_assert!(output.has_unique_id());
+                prop_assert_eq!(output.unique_id().unwrap().into_bytes(), uid);
+            }
+        }
+    }
+
+    #[cfg(feature = "unit-tests")]
+    mod unit_uid {
+        use super::*;
+
+        fn output_with_uid(uid: &[u8]) -> Output {
+            let mut output = Output::default();
+            let key = psbt_v2::raw::ProprietaryKey {
+                prefix: b"concurrent-psbt".to_vec(),
+                subtype: PSBT_OUT_UNIQUE_ID_SUBTYPE,
+                key: vec![],
+            };
+            output.proprietaries.insert(key, uid.to_vec());
+            output
+        }
+
+        #[test]
+        fn unique_id_present() {
+            let output = output_with_uid(&[1, 2, 3]);
+            assert!(output.has_unique_id());
+            assert_eq!(output.unique_id().unwrap().into_bytes(), vec![1, 2, 3]);
+        }
+
+        #[test]
+        fn unique_id_absent() {
+            let output = Output::default();
+            assert!(!output.has_unique_id());
+            assert!(output.unique_id().is_none());
+        }
+
+        #[test]
+        fn unique_id_construction_generation_and_setting() {
+            let id = UniqueId::new(vec![1, 2, 3]);
+            assert_eq!(id.as_bytes(), &[1, 2, 3]);
+
+            let generated = UniqueId::generate();
+            assert_eq!(generated.as_bytes().len(), 16);
+
+            let mut output = Output::default();
+            output.set_unique_id(id);
+            assert_eq!(output.unique_id().unwrap().into_bytes(), vec![1, 2, 3]);
         }
     }
 }

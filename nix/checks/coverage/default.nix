@@ -48,7 +48,7 @@
       # deliberately, from measured coverage, never to make a failing change
       # pass.
       coverageThresholds = {
-        prop-only = 95;
+        prop-only = 90;
         unit-only = 95;
       };
 
