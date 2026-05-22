@@ -69,8 +69,8 @@ impl Output {
 pub enum InvalidOutput {
     /// It has no `PSBT_OUT_UNIQUE_ID`.
     MissingUniqueId,
-    /// Its `PSBT_OUT_UNIQUE_ID` is empty or longer than [`UniqueId::MAX_LEN`]
-    /// bytes.
+    /// Its `PSBT_OUT_UNIQUE_ID` is shorter than [`UniqueId::MIN_LEN`] or
+    /// longer than [`UniqueId::MAX_LEN`] bytes.
     InvalidUniqueId(InvalidUniqueId),
 }
 
@@ -107,21 +107,16 @@ impl From<Output> for psbt_v2::v2::Output {
 /// [`PSBT_OUT_UNIQUE_ID_SUBTYPE`]. Identifies an output independently of its
 /// position in a transaction.
 ///
-/// A unique ID built with [`TryFrom`] or read from a BIP 370 output is 1 to
-/// [`UniqueId::MAX_LEN`] bytes long. An empty ID would make unrelated outputs
-/// join as one.
+/// A unique ID is between [`UniqueId::MIN_LEN`] and [`UniqueId::MAX_LEN`]
+/// bytes long, inclusive.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UniqueId(Vec<u8>);
 
 impl UniqueId {
+    /// The minimum length of a unique ID in bytes.
+    pub const MIN_LEN: usize = 16;
     /// The maximum length of a unique ID in bytes.
     pub const MAX_LEN: usize = 32;
-
-    /// Create a `UniqueId` from raw bytes without checking their length.
-    #[cfg(test)]
-    pub(crate) fn new(bytes: Vec<u8>) -> Self {
-        Self(bytes)
-    }
 
     /// Access the raw bytes of this unique identifier.
     pub fn as_bytes(&self) -> &[u8] {
@@ -146,7 +141,7 @@ impl UniqueId {
     pub fn generate() -> Self {
         use rand::{RngCore, TryRngCore, rngs::OsRng};
 
-        let mut bytes = [0u8; 16];
+        let mut bytes = [0u8; Self::MIN_LEN];
         OsRng.unwrap_err().fill_bytes(&mut bytes);
         Self(bytes.to_vec())
     }
@@ -154,8 +149,7 @@ impl UniqueId {
 
 impl crate::values::IdempotentValue for UniqueId {}
 
-/// Bytes that are not a valid [`UniqueId`]: empty, or longer than
-/// [`UniqueId::MAX_LEN`].
+/// Output ID bytes whose length is outside the allowed range.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvalidUniqueId(pub Vec<u8>);
 
@@ -163,7 +157,7 @@ impl TryFrom<Vec<u8>> for UniqueId {
     type Error = InvalidUniqueId;
 
     fn try_from(bytes: Vec<u8>) -> Result<Self, InvalidUniqueId> {
-        if bytes.is_empty() || bytes.len() > Self::MAX_LEN {
+        if !(Self::MIN_LEN..=Self::MAX_LEN).contains(&bytes.len()) {
             return Err(InvalidUniqueId(bytes));
         }
         Ok(Self(bytes))
@@ -174,8 +168,9 @@ impl std::fmt::Display for InvalidUniqueId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "unique ID is {} bytes, not 1 to {}",
+            "unique ID is {} bytes, expected {} to {}",
             self.0.len(),
+            UniqueId::MIN_LEN,
             UniqueId::MAX_LEN
         )
     }
@@ -206,20 +201,19 @@ impl ProprietaryField for UniqueIdField {
 /// Sets `PSBT_OUT_UNIQUE_ID` on BIP 370 outputs, for tests that parse them.
 #[cfg(test)]
 pub(crate) trait OutputUniqueIdExt {
-    /// Store `id` in the `PSBT_OUT_UNIQUE_ID` proprietary field, replacing
-    /// any existing value.
-    fn set_unique_id(&mut self, id: UniqueId);
+    /// Write raw bytes to the proprietary ID field to exercise decoding.
+    fn set_unique_id_bytes(&mut self, bytes: Vec<u8>);
 }
 
 #[cfg(test)]
 impl OutputUniqueIdExt for psbt_v2::v2::Output {
-    fn set_unique_id(&mut self, id: UniqueId) {
-        self.proprietaries.insert(
-            super::proprietary::key(PSBT_OUT_UNIQUE_ID_SUBTYPE),
-            id.into_bytes(),
-        );
+    fn set_unique_id_bytes(&mut self, bytes: Vec<u8>) {
+        self.proprietaries
+            .insert(super::proprietary::key(PSBT_OUT_UNIQUE_ID_SUBTYPE), bytes);
     }
 }
+
+pub use super::output_set::{DuplicateOutput, OutputSet, ResultOutputSet};
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -227,9 +221,12 @@ mod tests {
     use super::*;
     use crate::lattice::join::Join;
 
-    /// An output with unique ID `[tag]` and every other field unset.
     fn output(tag: u8) -> Output {
-        Output::new(UniqueId::new(vec![tag]), Amount::ZERO, ScriptBuf::new())
+        Output::new(
+            UniqueId::try_from(vec![tag; 16]).unwrap(),
+            Amount::ZERO,
+            ScriptBuf::new(),
+        )
     }
 
     #[cfg(feature = "unit-tests")]
@@ -365,13 +362,13 @@ mod tests {
             #[test]
             fn unique_id_roundtrip(uid in proptest::collection::vec(0u8..=255, 0..=40)) {
                 let Ok(id) = UniqueId::try_from(uid.clone()) else {
-                    prop_assert!(uid.is_empty() || uid.len() > UniqueId::MAX_LEN);
+                    prop_assert!(!(16..=32).contains(&uid.len()));
                     let error = InvalidUniqueId(uid.clone());
-                    prop_assert!(error.to_string().contains("not 1 to 32"));
+                    prop_assert!(error.to_string().contains("expected 16 to 32"));
                     prop_assert_eq!(UniqueId::try_from(uid), Err(error));
                     return Ok(());
                 };
-                prop_assert_eq!(&id, &UniqueId::new(uid.clone()));
+                prop_assert!((16..=32).contains(&uid.len()));
                 prop_assert_eq!(id.as_bytes(), uid.as_slice());
                 prop_assert_eq!(id.into_bytes(), uid);
             }
@@ -394,17 +391,17 @@ mod tests {
                     Err(InvalidOutput::MissingUniqueId)
                 );
 
-                v2.set_unique_id(UniqueId::new(uid.clone()));
+                v2.set_unique_id_bytes(uid.clone());
                 match Output::try_from(v2.clone()) {
                     Ok(output) => {
-                        prop_assert!((1..=UniqueId::MAX_LEN).contains(&uid.len()));
+                        prop_assert!((16..=32).contains(&uid.len()));
                         prop_assert_eq!(output.unique_id().as_bytes(), uid.as_slice());
                         prop_assert!(output.proprietaries.is_empty());
                         prop_assert_eq!(output.amount, Amount::from_sat(amount));
                         prop_assert_eq!(psbt_v2::v2::Output::from(output), v2);
                     }
                     Err(error) => {
-                        prop_assert!(uid.is_empty() || uid.len() > UniqueId::MAX_LEN);
+                        prop_assert!(!(16..=32).contains(&uid.len()));
                         prop_assert!(error.to_string().starts_with("output unique ID is"));
                         prop_assert_eq!(
                             error,
@@ -428,9 +425,9 @@ mod tests {
                 key: vec![],
             };
             let v2 = psbt_v2::v2::Output::from(output(7));
-            assert_eq!(v2.proprietaries.get(&key), Some(&vec![7]));
+            assert_eq!(v2.proprietaries.get(&key), Some(&vec![7; 16]));
             let mut set = psbt_v2::v2::Output::default();
-            set.set_unique_id(UniqueId::new(vec![7]));
+            set.set_unique_id_bytes(vec![7; 16]);
             assert_eq!(set, v2);
             assert_eq!(
                 InvalidOutput::MissingUniqueId.to_string(),
@@ -439,26 +436,26 @@ mod tests {
         }
 
         #[test]
-        fn unique_id_is_1_to_32_bytes() {
-            for len in [1, 32] {
+        fn unique_id_is_16_to_32_bytes() {
+            for len in [16, 32] {
                 let mut v2 = psbt_v2::v2::Output::default();
-                v2.set_unique_id(UniqueId::new(vec![0; len]));
+                v2.set_unique_id_bytes(vec![0; len]);
                 let output = Output::try_from(v2).expect("a valid unique ID");
-                assert_eq!(output.unique_id(), &UniqueId::new(vec![0; len]));
+                assert_eq!(output.unique_id().as_bytes(), &[0; 32][..len]);
             }
-            for len in [0, 33] {
+            for len in [0, 15, 33] {
                 let error = UniqueId::try_from(vec![0; len]).unwrap_err();
                 assert_eq!(error, InvalidUniqueId(vec![0; len]));
                 assert_eq!(
                     error.to_string(),
-                    format!("unique ID is {len} bytes, not 1 to 32")
+                    format!("unique ID is {len} bytes, expected 16 to 32")
                 );
                 let mut v2 = psbt_v2::v2::Output::default();
-                v2.set_unique_id(UniqueId::new(vec![0; len]));
+                v2.set_unique_id_bytes(vec![0; len]);
                 let error = Output::try_from(v2).unwrap_err();
                 assert_eq!(
                     error.to_string(),
-                    format!("output unique ID is {len} bytes, not 1 to 32")
+                    format!("output unique ID is {len} bytes, expected 16 to 32")
                 );
             }
         }
