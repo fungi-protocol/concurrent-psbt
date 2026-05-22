@@ -23,3 +23,4 @@ mod tests {
 
 pub use lattice::join::{Join, JoinMut};
 pub use lattice::partial::{Conflict, JoinResult, PartialJoin};
+pub use psbt::global;

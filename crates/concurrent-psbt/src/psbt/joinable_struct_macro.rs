@@ -13,7 +13,6 @@
 /// 3. `Join for $Result`
 /// 4. `$Result::is_ok`
 /// 5. `$Result::try_unwrap`
-#[allow(unused_macros)]
 macro_rules! joinable_struct {
     // ── Entry point ──────────────────────────────────────────
     (

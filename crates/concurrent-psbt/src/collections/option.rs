@@ -20,7 +20,6 @@ where
 }
 
 /// Extension trait for lifting `Option<V>` into the result domain.
-#[allow(dead_code)]
 pub(crate) trait OptionExt {
     type Item: PartialJoin;
     /// Lift each inner value to `Ok`, preserving `None`.
@@ -35,7 +34,6 @@ impl<V: PartialJoin> OptionExt for Option<V> {
 }
 
 /// Extension trait for `Option<JoinResult<V>>` — conflict detection and extraction.
-#[allow(dead_code)]
 pub(crate) trait ResultOptionExt {
     type Value: PartialJoin;
     /// Returns `true` if the option is `None` or contains `Ok`.
