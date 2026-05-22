@@ -11,6 +11,7 @@ prop-tests = []
 [dependencies]
 bitcoin = "0.32"
 psbt-v2 = "0.3.0"
+rand = "0.9"
 
 [dev-dependencies]
 proptest = "1"
