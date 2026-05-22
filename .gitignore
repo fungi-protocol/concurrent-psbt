@@ -4,3 +4,8 @@
 /result
 /result-*
 /target
+/crates/concurrent-psbt/afl/in
+/crates/concurrent-psbt/afl/out
+/crates/concurrent-psbt/fuzz/artifacts
+/crates/concurrent-psbt/fuzz/corpus
+/crates/concurrent-psbt/hfuzz/hfuzz_workspace

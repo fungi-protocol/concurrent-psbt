@@ -1,0 +1,24 @@
+[package]
+name = "concurrent-psbt-afl"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+afl = "0.15"
+concurrent-psbt-fuzz-support = { path = "../fuzz-support" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "afl_join_inputs"
+path = "src/bin/afl_join_inputs.rs"
+
+[[bin]]
+name = "afl_join_outputs"
+path = "src/bin/afl_join_outputs.rs"
+
+[[bin]]
+name = "afl_crash_test"
+path = "src/bin/afl_crash_test.rs"

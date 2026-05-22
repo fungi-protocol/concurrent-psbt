@@ -1,0 +1,33 @@
+[package]
+name = "concurrent-psbt-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+concurrent-psbt-fuzz-support = { path = "../fuzz-support" }
+libfuzzer-sys = "0.4"
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_join_inputs"
+path = "fuzz_targets/fuzz_join_inputs.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_join_outputs"
+path = "fuzz_targets/fuzz_join_outputs.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_crash_test"
+path = "fuzz_targets/fuzz_crash_test.rs"
+test = false
+doc = false

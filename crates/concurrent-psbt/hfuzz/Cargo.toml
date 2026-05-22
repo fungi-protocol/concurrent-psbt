@@ -1,0 +1,24 @@
+[package]
+name = "concurrent-psbt-hfuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+concurrent-psbt-fuzz-support = { path = "../fuzz-support" }
+honggfuzz = "0.5"
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "hfuzz_join_inputs"
+path = "src/bin/hfuzz_join_inputs.rs"
+
+[[bin]]
+name = "hfuzz_join_outputs"
+path = "src/bin/hfuzz_join_outputs.rs"
+
+[[bin]]
+name = "hfuzz_crash_test"
+path = "src/bin/hfuzz_crash_test.rs"
