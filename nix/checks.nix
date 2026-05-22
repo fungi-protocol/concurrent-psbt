@@ -49,6 +49,23 @@
       checks = testChecks // {
         build = toolchains.nightly.buildPackage (checkArgs // { cargoArtifacts = cargoArtifactsRelease; });
 
+        mutants = toolchains.nightly.mkCargoDerivation (
+          checkArgs
+          // {
+            cargoArtifacts = cargoArtifactsDev;
+            CARGO_PROFILE = "dev";
+            pnameSuffix = "-mutants";
+            nativeBuildInputs = [
+              pkgs.cargo-mutants
+              pkgs.cargo-nextest
+            ];
+            buildPhaseCargoCommand = ''
+              cargo mutants --in-place --test-tool nextest
+            '';
+            installPhase = "mkdir -p $out";
+          }
+        );
+
         coverage = toolchains.nightly.mkCargoDerivation (
           checkArgs
           // {
@@ -143,7 +160,7 @@
         };
         nightly = pkgs.symlinkJoin {
           name = "nightly-checks-${rev}";
-          paths = builtins.attrValues checks;
+          paths = builtins.attrValues (removeAttrs checks [ "mutants" ]);
         };
       };
     };
