@@ -8,6 +8,10 @@ default = ["unit-tests", "prop-tests"]
 unit-tests = []
 prop-tests = []
 
+[dependencies]
+bitcoin = "0.32"
+psbt-v2 = "0.3.0"
+
 [dev-dependencies]
 proptest = "1"
 
