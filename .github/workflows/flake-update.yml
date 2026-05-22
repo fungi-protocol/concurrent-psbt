@@ -1,0 +1,22 @@
+name: Flake update
+on:
+  schedule:
+    - cron: '0 4 * * 1' # weekly, Monday 04:00 UTC
+  workflow_dispatch:
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Update flake.lock
+        run: nix flake update
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: 'chore: update flake.lock'
+          title: 'chore: update flake.lock'
+          body: 'Automated weekly flake.lock update. CI checks run on this PR to catch toolchain regressions.'
+          branch: 'auto/flake-update'
+          delete-branch: true
