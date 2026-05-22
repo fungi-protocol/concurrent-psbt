@@ -2,3 +2,11 @@
 name = "concurrent-psbt"
 version = "0.1.0"
 edition = "2024"
+
+[features]
+default = ["unit-tests", "prop-tests"]
+unit-tests = []
+prop-tests = []
+
+[lints.rust]
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(coverage_nightly)'] }
