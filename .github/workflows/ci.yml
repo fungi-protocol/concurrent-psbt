@@ -30,3 +30,11 @@ jobs:
           else
             NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#scrub-commit-history' -- --git --forward --parallel --keep-going --print-build-logs
           fi
+      - name: Link recorded nextest result
+        run: |
+          # The history check already realized this derivation; this only adds an out-link.
+          nix build --no-update-lock-file --out-link result-nextest '.#checks.x86_64-linux.tests-nightly-dev'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nextest-nightly-dev-x86_64-linux
+          path: result-nextest/nextest-run.zip
