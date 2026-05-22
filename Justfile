@@ -1,16 +1,18 @@
 system := `nix eval --offline --raw --impure --expr builtins.currentSystem`
+has_nom := `which nom 2>/dev/null || true`
+nix_cmd := if has_nom != "" { "nom" } else { "nix" }
 
 # Quick checks (fast dev cycle feedback)
 check:
-    nix build --no-update-lock-file '.#checks.{{ system }}.quick'
+    {{ nix_cmd }} build --no-update-lock-file '.#checks.{{ system }}.quick'
 
 # All flake checks
 check-all:
-    nix flake check --no-update-lock-file
+    {{ if has_nom != "" { "nix flake check --no-update-lock-file --log-format internal-json -v 2>&1 | nom --json" } else { "nix flake check --no-update-lock-file" } }}
 
 # Lint checks (formatting + source invariants)
 lint:
-    nix build --no-update-lock-file '.#checks.{{ system }}.lint'
+    {{ nix_cmd }} build --no-update-lock-file '.#checks.{{ system }}.lint'
  
 # Auto-format all files
 fmt:
@@ -26,7 +28,7 @@ clippy:
 
 # Build nix coverage check
 coverage:
-    nom build --no-update-lock-file '.#checks.{{ system }}.coverage'
+    {{ nix_cmd }} build --no-update-lock-file '.#checks.{{ system }}.coverage'
 
 # Scrub history: quick check + message hygiene for every commit
 scrub:
