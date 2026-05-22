@@ -17,7 +17,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-nextest
-      - run: cargo nextest run --no-tests=warn
+      - run: cargo nextest run
       # Warn-only: this toolchain is rolling (not pinned), which may cause
       # unrelated PRs to start failing due to nightly containing new lints.
       # Nix clippy checks in ci.yml, which pins the toolchain via a flake.lock,

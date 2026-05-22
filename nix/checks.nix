@@ -34,7 +34,20 @@
           // {
             cargoArtifacts = deps;
             CARGO_PROFILE = profile;
-            cargoNextestExtraArgs = "--no-tests=warn";
+            cargoNextestExtraArgs = "--user-config-file ${./nextest-record.toml}";
+            nativeBuildInputs = [ pkgs.unzip ];
+            preCheck = ''
+              export NEXTEST_STATE_DIR="$TMPDIR/nextest-state"
+              mkdir -p "$NEXTEST_STATE_DIR"
+            '';
+            postCheck = ''
+              cargo nextest store export \
+                --no-pager \
+                --user-config-file ${./nextest-record.toml} \
+                --archive-file "$out/nextest-run.zip" \
+                latest
+              unzip -tqq "$out/nextest-run.zip"
+            '';
           }
         );
 
