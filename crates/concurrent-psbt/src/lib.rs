@@ -17,3 +17,10 @@ pub use psbt::global;
 pub use psbt::input;
 pub use psbt::output;
 pub use psbt::tx;
+
+/// Proprietary field prefix for all concurrent-psbt extensions.
+///
+/// All fields defined by this crate use this prefix in their
+/// [`ProprietaryKey`](psbt_v2::raw::ProprietaryKey). The subtype byte
+/// distinguishes individual fields.
+pub const PROPRIETARY_PREFIX: &[u8] = b"concurrent-psbt";
