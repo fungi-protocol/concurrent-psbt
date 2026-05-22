@@ -68,6 +68,7 @@
         "flake-parts": "flake-parts",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay",
+        "rustsec-advisory-db": "rustsec-advisory-db",
         "treefmt-nix": "treefmt-nix"
       }
     },
@@ -88,6 +89,22 @@
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rustsec-advisory-db": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1784741571,
+        "narHash": "sha256-ZAK7+XkYOnLGpa7boc5RGtIpWrS7nt6glXCKjcIpV7U=",
+        "owner": "RustSec",
+        "repo": "advisory-db",
+        "rev": "b54e9b51596ad6a02ca5355c1f2743cc5b5d502f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "RustSec",
+        "repo": "advisory-db",
         "type": "github"
       }
     },
