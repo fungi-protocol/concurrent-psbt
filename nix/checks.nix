@@ -46,18 +46,17 @@
         ) profiles
       ) toolchains;
 
-      checks = testChecks // {
-        build = toolchains.nightly.buildPackage (checkArgs // { cargoArtifacts = cargoArtifactsRelease; });
-
-        coverage = toolchains.nightly.mkCargoDerivation (
+      mkCoverage =
+        suffix: features:
+        toolchains.nightly.mkCargoDerivation (
           checkArgs
           // {
             cargoArtifacts = cargoArtifactsDev;
-            pnameSuffix = "-coverage";
+            pnameSuffix = "-coverage${suffix}";
             nativeBuildInputs = [ pkgs.cargo-llvm-cov ];
             buildPhaseCargoCommand = ''
               mkdir -p $out
-              cargo llvm-cov --all-features --lcov --output-path $out/coverage.lcov || {
+              cargo llvm-cov --no-default-features --features ${features} --lcov --output-path $out/coverage.lcov || {
                 # no coverage data when there are no tests yet
                 if [ ! -s $out/coverage.lcov ]; then
                   echo "no coverage data (no tests), skipping assertion"
@@ -70,6 +69,13 @@
             installPhase = "true";
           }
         );
+
+      checks = testChecks // {
+        build = toolchains.nightly.buildPackage (commonArgs // { cargoArtifacts = cargoArtifactsRelease; });
+
+        coverage = mkCoverage "" "unit-tests,prop-tests";
+        coverage-no-unit-tests = mkCoverage "-no-unit-tests" "prop-tests";
+        coverage-no-prop-tests = mkCoverage "-no-prop-tests" "unit-tests";
 
         clippy = toolchains.nightly.cargoClippy (
           checkArgs
