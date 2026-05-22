@@ -36,25 +36,6 @@ joinable_struct! {
     }
 }
 
-/// Extension trait on [`psbt_v2::v2::Input`] providing lattice-protocol helpers.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "migrated to input::out_point when InputSet starts keying inputs by spent outpoint"
-    )
-)]
-pub(crate) trait InputExt {
-    /// Extract the [`OutPoint`](bitcoin::OutPoint) used as the key for `InputSet`.
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    fn out_point(input: &psbt_v2::v2::Input) -> bitcoin::OutPoint {
-        bitcoin::OutPoint {
-            txid: input.previous_txid,
-            vout: input.spent_output_index,
-        }
-    }
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -64,19 +45,6 @@ mod tests {
     #[cfg(feature = "unit-tests")]
     mod unit {
         use super::*;
-
-        struct InputExtImpl;
-        impl InputExt for InputExtImpl {}
-
-        #[test]
-        fn input_ext_out_point() {
-            use bitcoin::hashes::Hash;
-            let txid = bitcoin::Txid::from_byte_array([1; 32]);
-            let input = psbt_v2::v2::Input::new(&bitcoin::OutPoint { txid, vout: 7 });
-            let op = InputExtImpl::out_point(&input);
-            assert_eq!(op.txid, txid);
-            assert_eq!(op.vout, 7);
-        }
 
         #[test]
         fn wrap_default_global_is_ok() {
@@ -185,23 +153,7 @@ mod tests {
             ]
         }
 
-        struct InputExtImpl;
-        impl InputExt for InputExtImpl {}
-
         proptest! {
-            #[test]
-            fn input_ext_out_point_roundtrip(
-                txid_byte in 0u8..5,
-                vout in 0u32..10,
-            ) {
-                use bitcoin::hashes::Hash;
-                let txid = bitcoin::Txid::from_byte_array([txid_byte; 32]);
-                let input = psbt_v2::v2::Input::new(&bitcoin::OutPoint { txid, vout });
-                let op = InputExtImpl::out_point(&input);
-                prop_assert_eq!(op.txid, txid);
-                prop_assert_eq!(op.vout, vout);
-            }
-
             #[test]
             fn idempotent(a in arb_result_global()) {
                 prop_assert_eq!(a.clone().join(a.clone()), a);
