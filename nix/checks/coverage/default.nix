@@ -43,10 +43,9 @@
               ${report}/coverage.lcov
           '';
 
-      # Line coverage each suite must reach on its own, independently of the
-      # other. They only catch a collapse of one category of test; lower them
-      # deliberately, from measured coverage, never to make a failing change
-      # pass.
+      # Line coverage each suite must reach on its own. These only catch a
+      # collapse of one category of test; lower one when reaching it would
+      # need contrived tests in that suite.
       coverageThresholds = {
         prop-only = 95;
         unit-only = 95;

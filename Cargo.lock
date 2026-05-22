@@ -134,6 +134,7 @@ dependencies = [
  "bitcoin",
  "proptest",
  "psbt-v2",
+ "rand",
 ]
 
 [[package]]
