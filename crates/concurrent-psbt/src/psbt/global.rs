@@ -1,11 +1,4 @@
 #![allow(clippy::result_large_err)]
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "exported once UnorderedPsbt composes the PSBT types"
-    )
-)]
 
 //! PSBT global fields and their merging.
 //!
