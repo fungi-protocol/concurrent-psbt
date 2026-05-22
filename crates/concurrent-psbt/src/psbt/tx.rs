@@ -327,6 +327,7 @@ impl UnorderedPsbt {
     /// Return a PSBTv2 [`Psbt`] marked unordered for exchange during construction.
     /// Its input and output vectors have arbitrary order. Their lengths supply the
     /// global counts.
+    /// Use the [`Sorter`](crate::sorter::Sorter) to fix their order before signing.
     pub fn into_psbt(mut self) -> Psbt {
         self.global.set_unordered();
         let inputs: Vec<_> = self.inputs.into_iter().map(Into::into).collect();
