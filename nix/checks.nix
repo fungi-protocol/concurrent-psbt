@@ -11,6 +11,12 @@
     }:
     let
       rev = inputs.self.shortRev or "dirty";
+      checkArgs = commonArgs // {
+        version = rev;
+        dontFixup = true;
+        doInstallCargoArtifacts = false;
+        CARGO_PROFILE = "";
+      };
       src = commonArgs.src;
 
       profiles = {
@@ -23,13 +29,14 @@
         let
           deps = craneLib.buildDepsOnly (commonArgs // { CARGO_PROFILE = profile; });
         in
-        craneLib.cargoNextest {
-          inherit src;
-          strictDeps = true;
-          cargoArtifacts = deps;
-          CARGO_PROFILE = profile;
-          cargoNextestExtraArgs = "--no-tests=warn";
-        };
+        craneLib.cargoNextest (
+          checkArgs
+          // {
+            cargoArtifacts = deps;
+            CARGO_PROFILE = profile;
+            cargoNextestExtraArgs = "--no-tests=warn";
+          }
+        );
 
       testChecks = pkgs.lib.concatMapAttrs (
         tcName: craneLib:
@@ -40,13 +47,12 @@
       ) toolchains;
 
       checks = testChecks // {
-        build = toolchains.nightly.buildPackage (commonArgs // { cargoArtifacts = cargoArtifactsRelease; });
+        build = toolchains.nightly.buildPackage (checkArgs // { cargoArtifacts = cargoArtifactsRelease; });
 
         coverage = toolchains.nightly.mkCargoDerivation (
-          commonArgs
+          checkArgs
           // {
             cargoArtifacts = cargoArtifactsDev;
-            CARGO_PROFILE = "dev";
             pnameSuffix = "-coverage";
             nativeBuildInputs = [ pkgs.cargo-llvm-cov ];
             buildPhaseCargoCommand = ''
@@ -66,10 +72,9 @@
         );
 
         clippy = toolchains.nightly.cargoClippy (
-          commonArgs
+          checkArgs
           // {
             cargoArtifacts = cargoArtifactsDev;
-            CARGO_PROFILE = "dev";
             cargoClippyExtraArgs = "--all-targets --all-features -- -D warnings";
           }
         );
@@ -86,21 +91,21 @@
     {
       checks = checks // {
         quick = pkgs.symlinkJoin {
-          name = "quick-checks";
+          name = "quick-checks-${rev}";
           paths = [
             checks.tests-nightly-dev
             checks.clippy
           ];
         };
         lint = pkgs.symlinkJoin {
-          name = "lint-checks";
+          name = "lint-checks-${rev}";
           paths = [
             checks.clippy
             checks.no-todo-comments
           ];
         };
         nightly = pkgs.symlinkJoin {
-          name = "nightly-checks";
+          name = "nightly-checks-${rev}";
           paths = builtins.attrValues checks;
         };
       };
