@@ -120,6 +120,16 @@
           fi
           mkdir -p $out
         '';
+
+        validate-commits-repository-probes =
+          pkgs.runCommand "validate-commits-repository-probes-${rev}"
+            {
+              nativeBuildInputs = [ pkgs.git ];
+            }
+            ''
+              bash ${./checks/validate-commits-repository-probes.sh} ${./validate-commits.sh}
+              mkdir -p $out
+            '';
       };
     in
     {
@@ -137,6 +147,7 @@
             cargo-sort
             clippy
             doc
+            validate-commits-repository-probes
             unused-lints
             no-todo-comments
           ];

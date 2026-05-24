@@ -1,5 +1,5 @@
 {
   imports = [
-    ./apps/scrub-commit-history.nix
+    ./apps/validate-commits.nix
   ];
 }
