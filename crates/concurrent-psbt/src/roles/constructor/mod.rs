@@ -1,8 +1,11 @@
 //! The BIP 370 Constructor role: adding inputs and outputs.
 //!
-//! [`typed::Constructor`] tracks modifiability in the type system.
+//! [`typed::Constructor`] tracks modifiability in the type system;
+//! [`dynamic::Constructor`] recovers it at runtime from
+//! `tx_modifiable_flags`.
 #![allow(clippy::result_large_err)]
 
+pub mod dynamic;
 pub mod typed;
 
 pub use typed::{Constructor, ResultConstructor};
@@ -50,6 +53,8 @@ pub enum ConstructorError {
     MissingUniqueId(Box<Output>),
     /// The unordered PSBT accumulated conflicting fields while parsing.
     Conflict(Box<ResultUnorderedPsbt>),
+    /// Neither inputs nor outputs are modifiable.
+    NotModifiable(u8),
     /// The PSBT's `tx_modifiable_flags` don't match the requested modifiability.
     FlagsMismatch {
         /// The flags value required by the modifiability type.
@@ -64,6 +69,12 @@ impl fmt::Display for ConstructorError {
         match self {
             Self::MissingUniqueId(_) => write!(f, "output missing PSBT_OUT_UNIQUE_ID"),
             Self::Conflict(_) => write!(f, "unordered PSBT contains conflicting fields"),
+            Self::NotModifiable(flags) => {
+                write!(
+                    f,
+                    "PSBT is not modifiable (tx_modifiable_flags=0x{flags:02x})"
+                )
+            }
             Self::FlagsMismatch { expected, actual } => {
                 write!(
                     f,

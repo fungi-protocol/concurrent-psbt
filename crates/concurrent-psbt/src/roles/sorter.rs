@@ -5,7 +5,9 @@ use psbt_v2::v2::Psbt;
 
 use crate::global::GlobalSortExt;
 use crate::input::{InputSortKeyExt, out_point};
+use crate::negotiation::GlobalNegotiationExt;
 use crate::output::{OutputSortKeyExt, OutputUniqueIdExt};
+use crate::removal::{GlobalRemovalExt, retain_live_inputs, retain_live_outputs};
 use crate::tx::UnorderedPsbt;
 
 sha256t_hash_newtype! {
@@ -182,6 +184,13 @@ where
     let mut inputs: Vec<_> = psbt.inputs.into_iter().collect();
     let mut outputs: Vec<_> = psbt.outputs.into_iter().collect();
 
+    // PROJECTION: drop tombstoned (removed) elements BEFORE building sort keys
+    // and recomputing counts. No-op when the `removal` feature is off (fail-safe:
+    // tombstones are simply ignored). This is the ONLY place the 2P-set collapses
+    // to its live set for the signing artifact.
+    retain_live_inputs(&psbt.global, &mut inputs);
+    retain_live_outputs(&psbt.global, &mut outputs);
+
     let mut input_keys = inputs
         .iter()
         .enumerate()
@@ -202,6 +211,15 @@ where
 
     let mut global = psbt.global;
     global.clear_unordered();
+    // Negotiation metadata (payments/confirmations) has done its job once
+    // ordering begins; do not leak the payment graph into the signing artifact.
+    global.clear_negotiation();
+    // Strip the removal + fee band too: tombstones have done their job once the
+    // live set is materialized; they must not leak into the signed PSBT. This is
+    // the TERMINAL exit — tombstones are dropped one-way, so the sorter output
+    // must never be re-parsed back into the unordered CRDT domain (that would
+    // resurrect removed elements). Use into_psbt for a re-parseable artifact.
+    global.clear_removal_and_fee();
     global.input_count = sorted_inputs.len();
     global.output_count = sorted_outputs.len();
 

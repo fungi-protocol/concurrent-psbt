@@ -14,7 +14,7 @@ use crate::tx::{ResultUnorderedPsbt, UnorderedPsbt, UnorderedPsbtError};
 
 use super::Modifiability;
 
-/// Typed wrapper that tracks modifiability `M` and sort state `S`.
+/// Typed wrapper over [`UnorderedPsbt`] that tracks modifiability `M` and sort state `S`.
 ///
 /// The type parameters enforce the BIP 370 constructor state machine at compile time:
 /// `M` is one of `BothModifiable`, `InputsModifiable`, or `OutputsModifiable`.
