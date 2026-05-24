@@ -46,31 +46,44 @@
         ) profiles
       ) toolchains;
 
-      checks = testChecks // {
-        build = toolchains.nightly.buildPackage (checkArgs // { cargoArtifacts = cargoArtifactsRelease; });
-
-        coverage = toolchains.nightly.mkCargoDerivation (
+      mkCoverage =
+        suffix: features: failUnder:
+        toolchains.nightly.mkCargoDerivation (
           checkArgs
           // {
             cargoArtifacts = cargoArtifactsDev;
-            pnameSuffix = "-coverage";
-            nativeBuildInputs = [ pkgs.cargo-llvm-cov ];
+            pnameSuffix = "-coverage${suffix}";
+            nativeBuildInputs = with pkgs; [
+              cargo-llvm-cov
+              cargo-nextest
+            ];
             buildPhaseCargoCommand = ''
+              cargo llvm-cov nextest --no-report --no-default-features --features ${features}
+
               mkdir -p $out
-              cargo llvm-cov --all-features --lcov --output-path $out/coverage.lcov || {
-                # no coverage data when there are no tests yet
-                if [ ! -s $out/coverage.lcov ]; then
-                  echo "no coverage data (no tests), skipping assertion"
-                  exit 0
-                fi
+
+              find target/llvm-cov-target -name '*.prof*' -print -quit | grep -q . || {
+
+                echo "coverage: no profile data produced; refusing to pass vacuously" >&2
+
                 exit 1
+
               }
-              cargo llvm-cov report --fail-under-regions 100
+
+              cargo llvm-cov report --summary-only
+
+              cargo llvm-cov report --lcov --output-path $out/coverage.lcov --fail-under-regions ${toString failUnder}
             '';
             installPhase = "true";
           }
         );
 
+      checks = testChecks // {
+        build = toolchains.nightly.buildPackage (commonArgs // { cargoArtifacts = cargoArtifactsRelease; });
+
+        coverage = mkCoverage "" "unit-tests,prop-tests" 100;
+        coverage-no-unit-tests = mkCoverage "-no-unit-tests" "prop-tests" 100;
+        coverage-no-prop-tests = mkCoverage "-no-prop-tests" "unit-tests" 100;
         clippy = toolchains.nightly.cargoClippy (
           checkArgs
           // {
