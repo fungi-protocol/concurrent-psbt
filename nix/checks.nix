@@ -46,30 +46,68 @@
         ) profiles
       ) toolchains;
 
-      checks = testChecks // {
-        build = toolchains.nightly.buildPackage (checkArgs // { cargoArtifacts = cargoArtifactsRelease; });
-
-        coverage = toolchains.nightly.mkCargoDerivation (
+      mkCoverageCollection =
+        suffix: features:
+        toolchains.nightly.mkCargoDerivation (
           checkArgs
           // {
             cargoArtifacts = cargoArtifactsDev;
-            pnameSuffix = "-coverage";
-            nativeBuildInputs = [ pkgs.cargo-llvm-cov ];
+            pnameSuffix = "-coverage-collect${suffix}";
+            nativeBuildInputs = with pkgs; [
+              cargo-llvm-cov
+              cargo-nextest
+            ];
             buildPhaseCargoCommand = ''
-              mkdir -p $out
-              cargo llvm-cov --all-features --lcov --output-path $out/coverage.lcov || {
-                # no coverage data when there are no tests yet
-                if [ ! -s $out/coverage.lcov ]; then
-                  echo "no coverage data (no tests), skipping assertion"
-                  exit 0
-                fi
-                exit 1
-              }
-              cargo llvm-cov report --fail-under-regions 100
+              bash ${./coverage/collect.sh} \
+                "$out" \
+                '${features}'
             '';
             installPhase = "true";
           }
         );
+
+      mkCoverageGate =
+        suffix: coveragePercent: collections:
+        pkgs.runCommand "concurrent-psbt-coverage${suffix}-${rev}"
+          {
+            nativeBuildInputs = [ pkgs.lcov ];
+          }
+          ''
+            bash ${./coverage/gate.sh} \
+              "$out" \
+              '${toString coveragePercent}' \
+              ${pkgs.lib.escapeShellArgs (map (collection: "${collection}/coverage.lcov") collections)}
+          '';
+
+      coverageCollections = {
+        coverage-collect-prop-only = mkCoverageCollection "-prop-only" "prop-tests";
+        coverage-collect-unit-only = mkCoverageCollection "-unit-only" "unit-tests";
+      };
+
+      checks = testChecks // {
+        coverage-gate-tests =
+          pkgs.runCommand "coverage-gate-tests-${rev}"
+            {
+              flakeSrc = inputs.self;
+              nativeBuildInputs = [ pkgs.lcov ];
+            }
+            ''
+              bash ${./coverage/test-gate.sh} \
+                "$flakeSrc/nix/coverage/gate.sh" \
+                "$out"
+            '';
+
+        build = toolchains.nightly.buildPackage (checkArgs // { cargoArtifacts = cargoArtifactsRelease; });
+
+        coverage-collect-prop-only = coverageCollections.coverage-collect-prop-only;
+        coverage-collect-unit-only = coverageCollections.coverage-collect-unit-only;
+        coverage = mkCoverageGate "" 100 (builtins.attrValues coverageCollections);
+        coverage-prop-only = mkCoverageGate "-prop-only" 100 [
+          coverageCollections.coverage-collect-prop-only
+        ];
+        coverage-unit-only = mkCoverageGate "-unit-only" 100 [
+          coverageCollections.coverage-collect-unit-only
+        ];
 
         clippy = toolchains.nightly.cargoClippy (
           checkArgs

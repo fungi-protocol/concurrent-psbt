@@ -7,3 +7,6 @@ edition = "2024"
 default = ["unit-tests", "prop-tests"]
 unit-tests = []
 prop-tests = []
+
+[lints]
+workspace = true
