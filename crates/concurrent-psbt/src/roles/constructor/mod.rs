@@ -31,8 +31,10 @@ use crate::sorter::{ExplicitKeysForbidden, ExplicitKeysRequired};
 ///
 /// [`try_from_psbt`](Self::try_from_psbt) checks that the input and output
 /// modifiability flags match `M` and the sort fields agree with `S`.
-/// A [`Seeded`] mode also requires a transaction UUID.
-/// [`try_set_uuid`](Self::try_set_uuid) refines it to a [`Seeded`] mode.
+/// A [`Seeded`] mode also requires a transaction UUID. A
+/// [`Creator`](crate::roles::creator::Creator) always produces a [`Seeded`]
+/// mode; a parsed PSBT is refined to one by
+/// [`try_set_uuid`](Self::try_set_uuid).
 #[derive(Debug)]
 pub struct Constructor<M, S>(pub(crate) UnorderedPsbt, pub(crate) PhantomData<(M, S)>);
 
