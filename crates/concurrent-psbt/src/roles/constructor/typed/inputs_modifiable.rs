@@ -1,12 +1,12 @@
 use psbt_v2::v2::{Input, Psbt};
 
-use crate::sort::Sorter;
+use crate::sorter::{Sorter, Unset};
 use crate::tx::UnorderedPsbt;
 
 use super::Constructor;
 use super::super::{ConstructorError, InputsModifiable, validate_flags};
 
-impl<S> Constructor<InputsModifiable, S> {
+impl Constructor<InputsModifiable, Unset> {
     /// Parse a v2 PSBT into an inputs-modifiable constructor.
     ///
     /// # Errors
@@ -19,15 +19,15 @@ impl<S> Constructor<InputsModifiable, S> {
             psbt,
         )?))
     }
+}
 
+impl<S> Constructor<InputsModifiable, S> {
     /// Add an input to the PSBT.
     pub fn input(mut self, input: Input) -> Self {
         self.0.inputs.add(input);
         self
     }
-}
 
-impl<S> Constructor<InputsModifiable, S> {
     /// Finalize inputs and transition to the [`Sorter`] for ordering.
     pub fn no_more_inputs(self) -> Sorter<S> {
         Sorter::from_unordered_psbt(self.0)

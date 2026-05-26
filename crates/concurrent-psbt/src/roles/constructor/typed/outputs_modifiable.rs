@@ -1,12 +1,13 @@
 use psbt_v2::v2::{Output, Psbt};
 
-use crate::sort::Sorter;
+use crate::output::{OutputUniqueIdExt, UniqueId};
+use crate::sorter::{Sorter, Unset};
 use crate::tx::UnorderedPsbt;
 
-use super::Constructor;
 use super::super::{ConstructorError, OutputsModifiable, validate_flags};
+use super::Constructor;
 
-impl<S> Constructor<OutputsModifiable, S> {
+impl Constructor<OutputsModifiable, Unset> {
     /// Parse a v2 PSBT into an outputs-modifiable constructor.
     ///
     /// # Errors
@@ -19,15 +20,24 @@ impl<S> Constructor<OutputsModifiable, S> {
             psbt,
         )?))
     }
+}
 
+impl<S> Constructor<OutputsModifiable, S> {
     /// Add an output to the PSBT.
     pub fn output(mut self, output: Output) -> Self {
         self.0.outputs.add(output);
         self
     }
-}
 
-impl<S> Constructor<OutputsModifiable, S> {
+    /// Add an output, stamping a freshly generated [`UniqueId`].
+    ///
+    /// Each call generates a new random `PSBT_OUT_UNIQUE_ID`, so adding
+    /// copies of the same txout yields distinct outputs.
+    pub fn output_with_new_uid(self, mut output: Output) -> Self {
+        output.set_unique_id(UniqueId::generate());
+        self.output(output)
+    }
+
     /// Finalize outputs and transition to the [`Sorter`] for ordering.
     pub fn no_more_outputs(self) -> Sorter<S> {
         Sorter::from_unordered_psbt(self.0)

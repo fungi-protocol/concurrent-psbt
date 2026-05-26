@@ -2,14 +2,16 @@ use std::marker::PhantomData;
 
 use psbt_v2::v2::{Input, Output, Psbt};
 
+use crate::output::{OutputUniqueIdExt, UniqueId};
+use crate::sorter::Unset;
 use crate::tx::UnorderedPsbt;
 
-use super::Constructor;
 use super::super::{
     BothModifiable, ConstructorError, InputsModifiable, OutputsModifiable, validate_flags,
 };
+use super::Constructor;
 
-impl<S> Constructor<BothModifiable, S> {
+impl Constructor<BothModifiable, Unset> {
     /// Parse a v2 PSBT into a both-modifiable constructor.
     ///
     /// # Errors
@@ -22,7 +24,9 @@ impl<S> Constructor<BothModifiable, S> {
             psbt,
         )?))
     }
+}
 
+impl<S> Constructor<BothModifiable, S> {
     /// Add an input to the PSBT.
     pub fn input(mut self, input: Input) -> Self {
         self.0.inputs.add(input);
@@ -33,6 +37,15 @@ impl<S> Constructor<BothModifiable, S> {
     pub fn output(mut self, output: Output) -> Self {
         self.0.outputs.add(output);
         self
+    }
+
+    /// Add an output, stamping a freshly generated [`UniqueId`].
+    ///
+    /// Each call generates a new random `PSBT_OUT_UNIQUE_ID`, so adding
+    /// copies of the same txout yields distinct outputs.
+    pub fn output_with_new_uid(self, mut output: Output) -> Self {
+        output.set_unique_id(UniqueId::generate());
+        self.output(output)
     }
 
     /// Transition to [`OutputsModifiable`]: no more inputs will be added.
