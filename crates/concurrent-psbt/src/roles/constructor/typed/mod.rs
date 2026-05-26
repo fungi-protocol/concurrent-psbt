@@ -1,5 +1,9 @@
 //! Compile-time modifiability: the constructor typestate machine.
 
+mod both_modifiable;
+mod inputs_modifiable;
+mod outputs_modifiable;
+
 use std::marker::PhantomData;
 
 use psbt_v2::v2::Psbt;
@@ -7,6 +11,8 @@ use psbt_v2::v2::Psbt;
 use crate::lattice::join::Join;
 use crate::sorter::Unset;
 use crate::tx::{ResultUnorderedPsbt, UnorderedPsbt, UnorderedPsbtError};
+
+use super::Modifiability;
 
 /// Typed wrapper that tracks modifiability `M` and sort state `S`.
 ///
@@ -39,7 +45,6 @@ impl<M, S> Constructor<M, S> {
         ResultConstructor(self.0.wrap(), PhantomData)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn from_unordered(psbt: UnorderedPsbt) -> Self {
         Constructor(psbt, PhantomData)
     }
@@ -80,11 +85,27 @@ impl<M, S> ResultConstructor<M, S> {
 
     /// Extract a clean [`Constructor`] if no conflicts remain.
     ///
+    /// Re-validates that `tx_modifiable_flags` matches the expected value for `M`.
+    /// This prevents a typestate soundness hole where `try_from_psbt` (which
+    /// skips flag validation) could produce a `Constructor<BothModifiable>` from
+    /// a PSBT with `flags=0x00`.
+    ///
     /// # Errors
-    /// Returns `Err(self)` if any field contains a conflict.
-    pub fn try_unwrap(self) -> Result<Constructor<M, S>, Self> {
+    /// Returns `Err(self)` if any field contains a conflict, or if the resolved
+    /// `tx_modifiable_flags` don't match `M::EXPECTED_FLAGS`.
+    pub fn try_unwrap(self) -> Result<Constructor<M, S>, Self>
+    where
+        M: Modifiability,
+    {
         match self.0.try_unwrap() {
-            Ok(psbt) => Ok(Constructor(psbt, PhantomData)),
+            Ok(psbt) => {
+                if psbt.global.tx_modifiable_flags & 0x03 != M::EXPECTED_FLAGS {
+                    // Flags don't match the type parameter. Wrap back and return Err.
+                    Err(ResultConstructor(psbt.wrap(), PhantomData))
+                } else {
+                    Ok(Constructor(psbt, PhantomData))
+                }
+            }
             Err(result) => Err(ResultConstructor(result, PhantomData)),
         }
     }
@@ -101,12 +122,17 @@ impl<M, S> Join for ResultConstructor<M, S> {
 mod tests {
     use super::*;
 
-    type TestConstructor = Constructor<(), Unset>;
+    use crate::roles::constructor::{BothModifiable, InputsModifiable, OutputsModifiable};
+
+    type TestConstructor = Constructor<BothModifiable, crate::sort::Unset>;
 
     fn empty_constructor() -> TestConstructor {
         Constructor(
             UnorderedPsbt {
-                global: psbt_v2::v2::Global::default(),
+                global: psbt_v2::v2::Global {
+                    tx_modifiable_flags: 0x03,
+                    ..psbt_v2::v2::Global::default()
+                },
                 inputs: crate::input::InputSet::default(),
                 outputs: crate::output::OutputSet::default(),
             },
@@ -118,6 +144,126 @@ mod tests {
         let mut constructor = empty_constructor();
         constructor.0.global.tx_version = bitcoin::transaction::Version(version);
         constructor
+    }
+
+    fn psbt_with_flags(flags: u8, version: i32) -> Psbt {
+        Psbt {
+            global: psbt_v2::v2::Global {
+                tx_modifiable_flags: flags,
+                tx_version: bitcoin::transaction::Version(version),
+                ..psbt_v2::v2::Global::default()
+            },
+            inputs: vec![],
+            outputs: vec![],
+        }
+    }
+
+    fn test_input(tag: u8) -> psbt_v2::v2::Input {
+        use bitcoin::hashes::Hash;
+
+        psbt_v2::v2::Input::new(&bitcoin::OutPoint {
+            txid: bitcoin::Txid::from_byte_array([tag; 32]),
+            vout: u32::from(tag),
+        })
+    }
+
+    fn test_output(tag: u8) -> psbt_v2::v2::Output {
+        use crate::output::{OutputUniqueIdExt, UniqueId};
+
+        let mut output = psbt_v2::v2::Output::default();
+        output.set_unique_id(UniqueId::new(vec![tag]));
+        output
+    }
+
+    fn exercise_modifiability_transitions(version: i32) {
+        let both = Constructor::<BothModifiable, Unset>::try_from_psbt(psbt_with_flags(0x03, version))
+            .expect("both-modifiable flags are valid")
+            .input(test_input(1))
+            .output(test_output(1));
+        assert_eq!(both.0.inputs.len(), 1);
+        assert_eq!(both.0.outputs.len(), 1);
+
+        let outputs = both.no_more_inputs().output(test_output(2));
+        assert_eq!(outputs.0.global.tx_modifiable_flags & 0x03, 0x02);
+        assert_eq!(outputs.no_more_outputs().into_inner().outputs.len(), 2);
+
+        let inputs = Constructor::<BothModifiable, Unset>::try_from_psbt(psbt_with_flags(0x03, version))
+            .expect("both-modifiable flags are valid")
+            .no_more_outputs()
+            .input(test_input(2));
+        assert_eq!(inputs.0.global.tx_modifiable_flags & 0x03, 0x01);
+        assert_eq!(inputs.no_more_inputs().into_inner().inputs.len(), 1);
+
+        let inputs = Constructor::<InputsModifiable, Unset>::try_from_psbt(psbt_with_flags(0x01, version))
+            .expect("inputs-modifiable flags are valid")
+            .input(test_input(3));
+        assert_eq!(inputs.no_more_inputs().into_inner().inputs.len(), 1);
+
+        let outputs = Constructor::<OutputsModifiable, Unset>::try_from_psbt(psbt_with_flags(0x02, version))
+            .expect("outputs-modifiable flags are valid")
+            .output(test_output(3));
+        assert_eq!(outputs.no_more_outputs().into_inner().outputs.len(), 1);
+    }
+
+    fn exercise_constructor_errors(version: i32) {
+        use crate::roles::constructor::ConstructorError;
+
+        let wrong_typestate = ResultConstructor::<BothModifiable, Unset>::try_from_psbt(
+            psbt_with_flags(0x00, version),
+        )
+        .expect("the result domain accepts flags before typestate validation");
+        assert!(wrong_typestate.try_unwrap().is_err());
+
+        let both_error = Constructor::<BothModifiable, Unset>::try_from_psbt(psbt_with_flags(0x01, version))
+            .expect_err("both-modifiable rejects inputs-only flags");
+        assert!(matches!(
+            both_error,
+            ConstructorError::FlagsMismatch { expected: 0x03, actual: 0x01 }
+        ));
+        assert!(both_error.to_string().contains("expected 0x03"));
+
+        assert!(matches!(
+            Constructor::<InputsModifiable, Unset>::try_from_psbt(psbt_with_flags(0x02, version)),
+            Err(ConstructorError::FlagsMismatch { expected: 0x01, actual: 0x02 })
+        ));
+        assert!(matches!(
+            Constructor::<OutputsModifiable, Unset>::try_from_psbt(psbt_with_flags(0x03, version)),
+            Err(ConstructorError::FlagsMismatch { expected: 0x02, actual: 0x03 })
+        ));
+
+        for error in [
+            Constructor::<BothModifiable, Unset>::try_from_psbt({
+                let mut psbt = psbt_with_flags(0x03, version);
+                psbt.outputs.push(psbt_v2::v2::Output::default());
+                psbt
+            })
+            .expect_err("output identity is required"),
+            Constructor::<InputsModifiable, Unset>::try_from_psbt({
+                let mut psbt = psbt_with_flags(0x01, version);
+                psbt.outputs.push(psbt_v2::v2::Output::default());
+                psbt
+            })
+            .expect_err("output identity is required"),
+            Constructor::<OutputsModifiable, Unset>::try_from_psbt({
+                let mut psbt = psbt_with_flags(0x02, version);
+                psbt.outputs.push(psbt_v2::v2::Output::default());
+                psbt
+            })
+            .expect_err("output identity is required"),
+        ] {
+            assert!(matches!(error, ConstructorError::MissingUniqueId(_)));
+            assert!(error.to_string().contains("PSBT_OUT_UNIQUE_ID"));
+        }
+
+        let mut duplicate_inputs = psbt_with_flags(0x03, version);
+        duplicate_inputs.inputs = vec![test_input(4), test_input(4)];
+        let conflict = Constructor::<BothModifiable, Unset>::try_from_psbt(duplicate_inputs)
+            .expect_err("duplicate outpoints conflict");
+        assert!(matches!(conflict, ConstructorError::Conflict(_)));
+        assert!(conflict.to_string().contains("conflicting fields"));
+
+        let converted = ConstructorError::from(psbt_v2::v2::Output::default());
+        assert!(matches!(converted, ConstructorError::MissingUniqueId(_)));
     }
 
     #[cfg(feature = "unit-tests")]
@@ -166,7 +312,7 @@ mod tests {
 
         #[test]
         fn result_constructor_parses_empty_psbt() {
-            let parsed = ResultConstructor::<(), Unset>::try_from_psbt(
+            let parsed = ResultConstructor::<BothModifiable, Unset>::try_from_psbt(
                 empty_constructor().into_psbt(),
             )
             .expect("an empty PSBT has no duplicate identities");
@@ -178,7 +324,7 @@ mod tests {
         fn result_constructor_rejects_output_without_unique_id() {
             let mut psbt = empty_constructor().into_psbt();
             psbt.outputs.push(psbt_v2::v2::Output::default());
-            assert!(ResultConstructor::<(), Unset>::try_from_psbt(psbt).is_err());
+            assert!(ResultConstructor::<BothModifiable, Unset>::try_from_psbt(psbt).is_err());
         }
 
         #[test]
@@ -191,6 +337,42 @@ mod tests {
             let joined = a.wrap().join(b.wrap());
             assert!(!joined.is_ok());
             assert!(joined.try_unwrap().is_err());
+        }
+
+        #[test]
+        fn try_unwrap_rejects_wrong_flags() {
+            // A PSBT with flags=0x00 loaded into ResultConstructor<BothModifiable>
+            // must fail try_unwrap even though all fields are Ok.
+            use crate::roles::constructor::ResultConstructor;
+            let psbt = psbt_v2::v2::Psbt {
+                global: psbt_v2::v2::Global {
+                    tx_modifiable_flags: 0x00,
+                    ..psbt_v2::v2::Global::default()
+                },
+                inputs: vec![],
+                outputs: vec![],
+            };
+            let rc = ResultConstructor::<BothModifiable, crate::sort::Unset>::try_from_psbt(psbt);
+            assert!(
+                rc.is_ok(),
+                "try_from_psbt should succeed (no flag validation)"
+            );
+            let rc = rc.unwrap();
+            assert!(rc.is_ok(), "all fields should be conflict-free");
+            assert!(
+                rc.try_unwrap().is_err(),
+                "try_unwrap must reject: flags=0x00 but type says BothModifiable"
+            );
+        }
+
+        #[test]
+        fn modifiability_state_machine() {
+            exercise_modifiability_transitions(7);
+        }
+
+        #[test]
+        fn constructor_error_paths() {
+            exercise_constructor_errors(7);
         }
     }
 
@@ -219,7 +401,7 @@ mod tests {
             fn clean_result_roundtrips_and_joins(version in any::<i32>()) {
                 let constructor = constructor_with_version(version);
                 let psbt = constructor.into_psbt();
-                let parsed = ResultConstructor::<(), Unset>::try_from_psbt(psbt)
+                let parsed = ResultConstructor::<BothModifiable, Unset>::try_from_psbt(psbt)
                     .expect("an empty PSBT has no duplicate identities");
                 prop_assert!(parsed.is_ok());
 
@@ -245,7 +427,17 @@ mod tests {
             fn output_without_unique_id_is_rejected(version in any::<i32>()) {
                 let mut psbt = constructor_with_version(version).into_psbt();
                 psbt.outputs.push(psbt_v2::v2::Output::default());
-                prop_assert!(ResultConstructor::<(), Unset>::try_from_psbt(psbt).is_err());
+                prop_assert!(ResultConstructor::<BothModifiable, Unset>::try_from_psbt(psbt).is_err());
+            }
+
+            #[test]
+            fn modifiability_state_machine(version in any::<i32>()) {
+                exercise_modifiability_transitions(version);
+            }
+
+            #[test]
+            fn constructor_error_paths(version in any::<i32>()) {
+                exercise_constructor_errors(version);
             }
         }
     }
