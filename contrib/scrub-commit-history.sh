@@ -116,10 +116,19 @@ while [ $# -gt 0 ]; do
   --quick) quick=only ;;
   --quick=*) quick="${1#--quick=}" ;;
   -k | --keep-going | -L | --print-build-logs) nix_build_args+=("$1") ;;
-  *) log_args+=("$1") ;;
+  --)
+    shift
+    break
+    ;;
+  *)
+    echo "error: unrecognized argument: $1" >&2
+    echo "(hint: use -- to indicate the beginning of git/jj log arguments)" >&2
+    exit 1
+    ;;
   esac
   shift
 done
+log_args+=("$@")
 
 # Resolve --quick before validation (--quick=only implies --fail-fast)
 case "$quick" in
@@ -159,6 +168,7 @@ if [ "$quick" = only ] && [ "$all_checks" = true ]; then
 fi
 
 repo_root=$(git rev-parse --show-toplevel)
+
 system=$(nix eval --offline --raw --impure --expr builtins.currentSystem)
 
 # Resolve VCS mode

@@ -26,7 +26,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#scrub-commit-history' -- --git --forward --parallel --keep-going --print-build-logs \
-              '${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}'
+              -- '${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}'
           else
             NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#scrub-commit-history' -- --git --forward --parallel --keep-going --print-build-logs
           fi
