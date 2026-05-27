@@ -7,6 +7,7 @@ mod lattice;
 mod values;
 
 mod collections;
+#[macro_use]
 mod psbt;
 
 #[cfg(test)]

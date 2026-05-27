@@ -89,4 +89,60 @@ mod tests {
             );
         }
     }
+
+    #[cfg(feature = "prop-tests")]
+    mod prop {
+        use bitcoin::TapLeafHash;
+        use bitcoin::bip32::{DerivationPath, Fingerprint, KeySource};
+        use bitcoin::hashes::Hash;
+        use proptest::prelude::*;
+
+        use crate::lattice::partial::PartialJoin;
+
+        fn key_source(byte: u8) -> KeySource {
+            (Fingerprint::from([byte; 4]), DerivationPath::master())
+        }
+
+        fn leaves(bytes: &[u8]) -> Vec<TapLeafHash> {
+            bytes
+                .iter()
+                .map(|byte| TapLeafHash::from_byte_array([*byte; 32]))
+                .collect()
+        }
+
+        proptest! {
+            #[test]
+            fn reordered_leaf_multisets_join(bytes in proptest::collection::vec(any::<u8>(), 0..8)) {
+                let a = (leaves(&bytes), key_source(0));
+                let mut reversed = bytes;
+                reversed.reverse();
+                let b = (leaves(&reversed), key_source(0));
+
+                prop_assert_eq!(a.clone().try_join(b), Ok(a));
+            }
+
+            #[test]
+            fn different_leaf_multisets_conflict(
+                left in proptest::collection::vec(any::<u8>(), 0..8),
+                right in proptest::collection::vec(any::<u8>(), 0..8),
+            ) {
+                let mut sorted_left = left.clone();
+                let mut sorted_right = right.clone();
+                sorted_left.sort_unstable();
+                sorted_right.sort_unstable();
+                prop_assume!(sorted_left != sorted_right);
+
+                let a = (leaves(&left), key_source(0));
+                let b = (leaves(&right), key_source(0));
+                prop_assert!(a.try_join(b).is_err());
+            }
+
+            #[test]
+            fn different_key_sources_conflict(bytes in proptest::collection::vec(any::<u8>(), 0..8)) {
+                let a = (leaves(&bytes), key_source(0));
+                let b = (leaves(&bytes), key_source(1));
+                prop_assert!(a.try_join(b).is_err());
+            }
+        }
+    }
 }
