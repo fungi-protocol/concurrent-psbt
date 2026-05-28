@@ -1,12 +1,12 @@
-[package]
-name = "concurrent-psbt"
+[workspace]
+members = ["crates/concurrent-psbt"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
-edition = "2024"
 
-[features]
-default = ["unit-tests", "prop-tests"]
-unit-tests = []
-prop-tests = []
+[workspace.metadata.crane]
+name = "concurrent-psbt"
 
-[lints.rust]
+[workspace.lints.rust]
 unexpected_cfgs = { level = "deny", check-cfg = ['cfg(coverage_nightly)'] }
