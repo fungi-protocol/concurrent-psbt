@@ -1,0 +1,9 @@
+[package]
+name = "concurrent-psbt"
+version.workspace = true
+edition = "2024"
+
+[features]
+default = ["unit-tests", "prop-tests"]
+unit-tests = []
+prop-tests = []
