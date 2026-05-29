@@ -100,6 +100,19 @@
               mkdir -p $out
             '';
 
+        unused-lints = toolchains.nightly.mkCargoDerivation (
+          commonArgs
+          // {
+            cargoArtifacts = cargoArtifactsDev;
+            CARGO_PROFILE = "dev";
+            pnameSuffix = "-unused-lints";
+            buildPhaseCargoCommand = ''
+              RUSTFLAGS="''${RUSTFLAGS:-} -D unused" cargo check --all-targets --all-features
+            '';
+            installPhase = "mkdir -p $out";
+          }
+        );
+
         no-todo-comments = pkgs.runCommand "no-todo-comments-${rev}" { inherit src; } ''
           if grep -rn --exclude-dir=contrib 'TO[D]O\|FIX[M]E' $src/ 2>/dev/null; then
             echo "FAIL: unresolved work-item markers found"
@@ -113,18 +126,19 @@
       checks = checks // {
         quick = pkgs.symlinkJoin {
           name = "quick-checks-${rev}";
-          paths = [
-            checks.tests-nightly-dev
-            checks.clippy
+          paths = with checks; [
+            tests-nightly-dev
+            clippy
           ];
         };
         lint = pkgs.symlinkJoin {
           name = "lint-checks-${rev}";
-          paths = [
-            checks.cargo-sort
-            checks.clippy
-            checks.doc
-            checks.no-todo-comments
+          paths = with checks; [
+            cargo-sort
+            clippy
+            doc
+            unused-lints
+            no-todo-comments
           ];
         };
         nightly = pkgs.symlinkJoin {
