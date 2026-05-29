@@ -10,3 +10,6 @@ workspace = true
 default = ["unit-tests", "prop-tests"]
 unit-tests = []
 prop-tests = []
+
+[dependencies]
+psbt-v2 = "0.3.0"
