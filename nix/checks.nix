@@ -79,6 +79,16 @@
           }
         );
 
+        doc = toolchains.nightly.cargoDoc (
+          commonArgs
+          // {
+            cargoArtifacts = cargoArtifactsDev;
+            CARGO_PROFILE = "dev";
+            cargoDocExtraArgs = "--no-deps --all-features";
+            RUSTDOCFLAGS = "-D warnings";
+          }
+        );
+
         no-todo-comments = pkgs.runCommand "no-todo-comments-${rev}" { inherit src; } ''
           if grep -rn --exclude-dir=contrib 'TO[D]O\|FIX[M]E' $src/ 2>/dev/null; then
             echo "FAIL: unresolved work-item markers found"
@@ -101,6 +111,7 @@
           name = "lint-checks-${rev}";
           paths = [
             checks.clippy
+            checks.doc
             checks.no-todo-comments
           ];
         };
