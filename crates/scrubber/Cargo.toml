@@ -3,5 +3,10 @@ name = "scrubber"
 version.workspace = true
 edition = "2024"
 
+[features]
+default = ["unit-tests", "prop-tests"]
+prop-tests = []
+unit-tests = []
+
 [lints]
 workspace = true
