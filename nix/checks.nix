@@ -89,6 +89,17 @@
           }
         );
 
+        cargo-sort =
+          pkgs.runCommand "cargo-sort-${rev}"
+            {
+              inherit src;
+              nativeBuildInputs = [ pkgs.cargo-sort ];
+            }
+            ''
+              cargo-sort --check --workspace "$src"
+              mkdir -p $out
+            '';
+
         no-todo-comments = pkgs.runCommand "no-todo-comments-${rev}" { inherit src; } ''
           if grep -rn --exclude-dir=contrib 'TO[D]O\|FIX[M]E' $src/ 2>/dev/null; then
             echo "FAIL: unresolved work-item markers found"
@@ -110,6 +121,7 @@
         lint = pkgs.symlinkJoin {
           name = "lint-checks-${rev}";
           paths = [
+            checks.cargo-sort
             checks.clippy
             checks.doc
             checks.no-todo-comments

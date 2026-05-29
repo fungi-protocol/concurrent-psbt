@@ -13,7 +13,7 @@ check-all:
 # Lint checks (formatting + source invariants)
 lint:
     {{ nix_cmd }} build --no-update-lock-file '.#checks.{{ system }}.lint'
- 
+
 # Auto-format all files
 fmt:
     nix fmt
