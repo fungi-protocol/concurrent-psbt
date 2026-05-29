@@ -1,0 +1,7 @@
+[package]
+name = "scrubber"
+version.workspace = true
+edition = "2024"
+
+[lints]
+workspace = true

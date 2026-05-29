@@ -5,3 +5,7 @@ version = 4
 [[package]]
 name = "concurrent-psbt"
 version = "0.1.0"
+
+[[package]]
+name = "scrubber"
+version = "0.1.0"
