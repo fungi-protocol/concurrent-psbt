@@ -187,6 +187,14 @@ jj | git) ;;
   ;;
 esac
 
+# Colocated jj repo: warn if git mode with detached HEAD
+if [ "$vcs_mode" = git ] && [ -d "$repo_root/.jj" ]; then
+  if ! git symbolic-ref HEAD >/dev/null 2>&1; then
+    echo "warning: HEAD is detached in a colocated jj repo" >&2
+    echo "hint: use --log=jj to resolve revsets via jj instead of git" >&2
+  fi
+fi
+
 # Use nom (nix-output-monitor) when available and on a tty, unless --no-nom
 if [ "${use_nom-unset}" = unset ]; then
   use_nom=false
