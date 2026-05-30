@@ -8,10 +8,11 @@ name = "ptj"
 path = "src/main.rs"
 
 [dependencies]
+bitcoin = "0.32"
+clap = { version = "4", features = ["derive"] }
 concurrent-psbt = { path = "../concurrent-psbt" }
-psbt-v2 = { version = "0.3.0", features = [
-  "base64",
-] }
+psbt-v2 = { version = "0.3.0", features = ["base64"] }
+rand = "0.9"
 
 [lints]
 workspace = true
