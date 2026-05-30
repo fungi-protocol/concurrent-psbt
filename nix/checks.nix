@@ -91,6 +91,14 @@
           }
         );
 
+      ptj-bin = toolchains.nightly.buildPackage (
+        commonArgs
+        // {
+          cargoArtifacts = cargoArtifactsDev;
+          pnameSuffix = "-ptj";
+        }
+      );
+
       checks = testChecks // {
         build = toolchains.nightly.buildPackage (commonArgs // { cargoArtifacts = cargoArtifactsRelease; });
 
@@ -159,6 +167,7 @@
               testScripts = ../contrib/tests;
             }
             ''
+              export PATH="${ptj-bin}/bin:$PATH"
               bash "$testScripts/joinpsbt-gap.sh"
             '';
 
@@ -172,7 +181,22 @@
               testScripts = ../contrib/tests;
             }
             ''
+              export PATH="${ptj-bin}/bin:$PATH"
               bash "$testScripts/sneakernet-lattice.sh"
+            '';
+
+        ptj-sneakernet =
+          pkgs.runCommand "ptj-sneakernet-${rev}"
+            {
+              nativeBuildInputs = with pkgs; [
+                bitcoind
+                jq
+              ];
+              testScripts = ../contrib/tests;
+            }
+            ''
+              export PATH="${ptj-bin}/bin:$PATH"
+              bash "$testScripts/ptj-sneakernet.sh"
             '';
       };
     in

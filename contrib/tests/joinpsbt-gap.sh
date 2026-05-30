@@ -12,6 +12,9 @@ set -euo pipefail
 # shellcheck disable=SC1091 # treefmt shellcheck does not follow sourced files.
 source "$(dirname "$0")/regtest-lib.sh"
 
+WORKDIR=$(mktemp -d)
+trap 'regtest_cleanup; rm -rf "$WORKDIR"' EXIT
+
 # ── Create wallet and fund it ──────────────────────────────────────
 
 $CLI createwallet "test" >/dev/null
@@ -90,6 +93,31 @@ else
   echo "  combinepsbt rejects them because the unsigned transactions differ."
   echo "  DEMONSTRATED: combinepsbt cannot merge concurrent constructor contributions."
 fi
+
+echo
+echo "ptj positive controls"
+
+ptj create --network regtest \
+  --input "$UTXO_A_TXID:$UTXO_A_VOUT" \
+  --output "$DEST:1.0" >"$WORKDIR/ptj-a.psbt"
+
+ptj join "$WORKDIR/ptj-a.psbt" "$WORKDIR/ptj-a.psbt" >"$WORKDIR/ptj-aa.psbt"
+PTJ_AA=$(cat "$WORKDIR/ptj-aa.psbt")
+assert_psbt_content "ptj join(A, A)" "$PTJ_AA" 1 1 1.0
+echo "  ptj join(A, A): idempotent, no duplicated output"
+
+ptj create --network regtest \
+  --input "$UTXO_A_TXID:$UTXO_A_VOUT" \
+  --output "$DEST:1.0" >"$WORKDIR/ptj-alice.psbt"
+
+ptj create --network regtest \
+  --input "$UTXO_A_TXID:$UTXO_A_VOUT" \
+  --output "$DEST2:1.0" >"$WORKDIR/ptj-bob.psbt"
+
+ptj join "$WORKDIR/ptj-alice.psbt" "$WORKDIR/ptj-bob.psbt" >"$WORKDIR/ptj-alice-bob.psbt"
+PTJ_ALICE_BOB=$(cat "$WORKDIR/ptj-alice-bob.psbt")
+assert_psbt_content "ptj same-input output union" "$PTJ_ALICE_BOB" 1 2 2.0
+echo "  ptj join(Alice, Bob): same input retained once; distinct outputs unioned"
 
 echo
 echo "concurrent-psbt addresses both gaps:"

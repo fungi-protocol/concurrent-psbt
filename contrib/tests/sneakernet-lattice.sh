@@ -22,6 +22,9 @@ set -euo pipefail
 # shellcheck disable=SC1091 # treefmt shellcheck does not follow sourced files.
 source "$(dirname "$0")/regtest-lib.sh"
 
+WORKDIR=$(mktemp -d)
+trap 'regtest_cleanup; rm -rf "$WORKDIR"' EXIT
+
 # ── Setup: 3 wallets, each with a funded UTXO ─────────────────────
 
 for PARTY in alice bob carol; do
@@ -192,6 +195,79 @@ else
   echo "No problems detected (unexpected)."
   exit 1
 fi
+
+echo
+echo "--- ptj positive control: same lattice converges ---"
+echo
+
+ptj create --network regtest \
+  --input "$A_TXID:$A_VOUT" \
+  --output "$ALICE_DEST:9.999" >"$WORKDIR/ptj-a.psbt"
+
+ptj create --network regtest \
+  --input "$B_TXID:$B_VOUT" \
+  --output "$BOB_DEST:9.999" >"$WORKDIR/ptj-b.psbt"
+
+ptj create --network regtest \
+  --input "$C_TXID:$C_VOUT" \
+  --output "$CAROL_DEST:9.999" >"$WORKDIR/ptj-c.psbt"
+
+ptj join "$WORKDIR/ptj-a.psbt" "$WORKDIR/ptj-b.psbt" >"$WORKDIR/ptj-ab.psbt"
+ptj join "$WORKDIR/ptj-b.psbt" "$WORKDIR/ptj-c.psbt" >"$WORKDIR/ptj-bc.psbt"
+ptj join "$WORKDIR/ptj-a.psbt" "$WORKDIR/ptj-c.psbt" >"$WORKDIR/ptj-ac.psbt"
+
+ptj join "$WORKDIR/ptj-a.psbt" "$WORKDIR/ptj-b.psbt" "$WORKDIR/ptj-c.psbt" \
+  >"$WORKDIR/ptj-abc-direct.psbt"
+ptj join "$WORKDIR/ptj-ab.psbt" "$WORKDIR/ptj-c.psbt" >"$WORKDIR/ptj-abc-via-ab-c.psbt"
+ptj join "$WORKDIR/ptj-a.psbt" "$WORKDIR/ptj-bc.psbt" >"$WORKDIR/ptj-abc-via-a-bc.psbt"
+ptj join "$WORKDIR/ptj-ac.psbt" "$WORKDIR/ptj-b.psbt" >"$WORKDIR/ptj-abc-via-ac-b.psbt"
+ptj join "$WORKDIR/ptj-abc-direct.psbt" "$WORKDIR/ptj-abc-direct.psbt" \
+  >"$WORKDIR/ptj-abc-idem.psbt"
+ptj join "$WORKDIR/ptj-abc-direct.psbt" "$WORKDIR/ptj-a.psbt" \
+  >"$WORKDIR/ptj-abc-plus-a.psbt"
+ptj join "$WORKDIR/ptj-ab.psbt" "$WORKDIR/ptj-bc.psbt" "$WORKDIR/ptj-ac.psbt" \
+  >"$WORKDIR/ptj-abc-gossip.psbt"
+
+for f in \
+  ptj-abc-direct \
+  ptj-abc-via-ab-c \
+  ptj-abc-via-a-bc \
+  ptj-abc-via-ac-b \
+  ptj-abc-idem \
+  ptj-abc-plus-a \
+  ptj-abc-gossip; do
+  PSBT=$(cat "$WORKDIR/$f.psbt")
+  assert_psbt_content "$f" "$PSBT" 3 3 29.997
+done
+
+SEED="deadbeefdeadbeefdeadbeefdeadbeef"
+for f in \
+  ptj-abc-direct \
+  ptj-abc-via-ab-c \
+  ptj-abc-via-a-bc \
+  ptj-abc-via-ac-b \
+  ptj-abc-idem \
+  ptj-abc-plus-a \
+  ptj-abc-gossip; do
+  ptj sort --seed "$SEED" "$WORKDIR/$f.psbt" >"$WORKDIR/${f}-sorted.psbt"
+done
+
+PTJ_REFERENCE=$(cat "$WORKDIR/ptj-abc-direct-sorted.psbt")
+for f in \
+  ptj-abc-via-ab-c \
+  ptj-abc-via-a-bc \
+  ptj-abc-via-ac-b \
+  ptj-abc-idem \
+  ptj-abc-plus-a \
+  ptj-abc-gossip; do
+  RESULT=$(cat "$WORKDIR/${f}-sorted.psbt")
+  if [ "$RESULT" != "$PTJ_REFERENCE" ]; then
+    echo "FAIL: $f does not converge to direct ABC after sorting"
+    exit 1
+  fi
+done
+
+echo "ptj: all merge paths have 3 inputs, 3 outputs, 29.997 BTC, and converge."
 
 # shellcheck disable=SC2154 # Nix sets $out for the treefmt check derivation.
 mkdir -p "$out"
