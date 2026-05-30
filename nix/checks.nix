@@ -149,6 +149,31 @@
           fi
           mkdir -p $out
         '';
+        joinpsbt-gap =
+          pkgs.runCommand "joinpsbt-gap-${rev}"
+            {
+              nativeBuildInputs = with pkgs; [
+                bitcoind
+                jq
+              ];
+              testScripts = ../contrib/tests;
+            }
+            ''
+              bash "$testScripts/joinpsbt-gap.sh"
+            '';
+
+        sneakernet-lattice =
+          pkgs.runCommand "sneakernet-lattice-${rev}"
+            {
+              nativeBuildInputs = with pkgs; [
+                bitcoind
+                jq
+              ];
+              testScripts = ../contrib/tests;
+            }
+            ''
+              bash "$testScripts/sneakernet-lattice.sh"
+            '';
       };
     in
     {
