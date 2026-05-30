@@ -29,9 +29,9 @@ impl Constructor {
     pub fn try_from_psbt(psbt: Psbt) -> Result<Self, ConstructorError> {
         let flags = psbt.global.tx_modifiable_flags & 0x03;
         match flags {
-            0x03 => Ok(Self::Both(typed::Constructor::<BothModifiable, _>::try_from_psbt(
-                psbt,
-            )?)),
+            0x03 => Ok(Self::Both(
+                typed::Constructor::<BothModifiable, _>::try_from_psbt(psbt)?,
+            )),
             0x01 => Ok(Self::InputsOnly(
                 typed::Constructor::<InputsModifiable, _>::try_from_psbt(psbt)?,
             )),
@@ -138,21 +138,17 @@ impl ResultConstructor {
             Ok(psbt) => {
                 let flags = psbt.global.tx_modifiable_flags & 0x03;
                 match flags {
-                    0x03 => Ok(Constructor::Both(typed::Constructor::from_unordered(
+                    0x03 => Ok(Constructor::Both(typed::Constructor::from_unordered(psbt))),
+                    0x01 => Ok(Constructor::InputsOnly(typed::Constructor::from_unordered(
                         psbt,
                     ))),
-                    0x01 => Ok(Constructor::InputsOnly(
-                        typed::Constructor::from_unordered(psbt),
-                    )),
                     0x02 => Ok(Constructor::OutputsOnly(
                         typed::Constructor::from_unordered(psbt),
                     )),
                     // flags 0x00 means neither is modifiable; still a valid
                     // state after joining (e.g. both sides cleared flags).
                     // Default to Both since construction is complete.
-                    _ => Ok(Constructor::Both(typed::Constructor::from_unordered(
-                        psbt,
-                    ))),
+                    _ => Ok(Constructor::Both(typed::Constructor::from_unordered(psbt))),
                 }
             }
             Err(result) => Err(Self(result)),
