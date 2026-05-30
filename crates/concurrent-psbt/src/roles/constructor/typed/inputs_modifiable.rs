@@ -3,8 +3,8 @@ use psbt_v2::v2::{Input, Psbt};
 use crate::sorter::{Sorter, Unset};
 use crate::tx::UnorderedPsbt;
 
-use super::Constructor;
 use super::super::{ConstructorError, InputsModifiable, validate_flags};
+use super::Constructor;
 
 impl Constructor<InputsModifiable, Unset> {
     /// Parse a v2 PSBT into an inputs-modifiable constructor.
