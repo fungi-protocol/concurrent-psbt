@@ -8,7 +8,7 @@ const MAGIC: [u8; 5] = [0x70, 0x73, 0x62, 0x74, 0xff];
 
 /// Global map key types retained when scrubbing (non-sensitive).
 #[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GlobalInsensitive {
     UnsignedTx = 0x00,
     TxVersion = 0x02,
@@ -37,7 +37,7 @@ impl GlobalInsensitive {
 
 /// Input map key types retained when scrubbing (non-sensitive).
 #[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InputInsensitive {
     NonWitnessUtxo = 0x00,
     WitnessUtxo = 0x01,
@@ -82,7 +82,7 @@ impl InputInsensitive {
 
 /// Output map key types retained when scrubbing (non-sensitive).
 #[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OutputInsensitive {
     Amount = 0x03,
     Script = 0x04,
@@ -478,5 +478,197 @@ mod tests {
         psbt.extend(kv(0x09, &[], &[0xDE, 0xAD]));
         psbt.push(0x00);
         assert_eq!(scrub(&psbt), Err(Error::InvalidGlobal));
+    }
+}
+
+#[cfg(all(test, feature = "prop-tests"))]
+mod prop {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn arb_value() -> impl Strategy<Value = Vec<u8>> {
+        proptest::collection::vec(any::<u8>(), 0..=64)
+    }
+
+    fn encoded_pair(type_value: u8, key: Vec<u8>, value: Vec<u8>) -> Vec<u8> {
+        let pair = Pair {
+            key: Key { type_value, key },
+            value,
+        };
+        let mut buf = Vec::new();
+        encode_pair(&mut buf, &pair);
+        buf
+    }
+
+    fn encoded_global(key: GlobalInsensitive, value: Vec<u8>) -> Vec<u8> {
+        encoded_pair(key as u8, vec![], value)
+    }
+
+    fn encoded_input(key: InputInsensitive, key_suffix: Vec<u8>, value: Vec<u8>) -> Vec<u8> {
+        encoded_pair(key as u8, key_suffix, value)
+    }
+
+    fn encoded_output(key: OutputInsensitive, key_suffix: Vec<u8>, value: Vec<u8>) -> Vec<u8> {
+        encoded_pair(key as u8, key_suffix, value)
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum InsensitiveField {
+        Global(GlobalInsensitive),
+        Input(InputInsensitive),
+        Output(OutputInsensitive),
+    }
+
+    fn arb_global_insensitive() -> impl Strategy<Value = GlobalInsensitive> {
+        proptest::sample::select(GlobalInsensitive::ALL.to_vec())
+    }
+
+    fn arb_output_insensitive() -> impl Strategy<Value = OutputInsensitive> {
+        proptest::sample::select(OutputInsensitive::ALL.to_vec())
+    }
+
+    fn arb_insensitive_field() -> impl Strategy<Value = InsensitiveField> {
+        prop_oneof![
+            arb_global_insensitive().prop_map(InsensitiveField::Global),
+            arb_input_insensitive().prop_map(InsensitiveField::Input),
+            arb_output_insensitive().prop_map(InsensitiveField::Output),
+        ]
+    }
+
+    fn encode_insensitive(field: InsensitiveField, value: Vec<u8>) -> Vec<u8> {
+        match field {
+            InsensitiveField::Global(key) => encoded_global(key, value),
+            InsensitiveField::Input(key) => encoded_input(key, vec![], value),
+            InsensitiveField::Output(key) => encoded_output(key, vec![], value),
+        }
+    }
+
+    fn build_psbt_with_insensitive(field: InsensitiveField, pair: &[u8]) -> Vec<u8> {
+        let mut test_psbt = MAGIC.to_vec();
+        let (n_inputs, n_outputs) = match field {
+            InsensitiveField::Global(_) => (0, 0),
+            InsensitiveField::Input(_) => (1, 0),
+            InsensitiveField::Output(_) => (0, 1),
+        };
+        let extra_global = match field {
+            InsensitiveField::Global(_) => &[pair][..],
+            _ => &[],
+        };
+        append_v2_global_fields(&mut test_psbt, n_inputs, n_outputs, extra_global);
+        if !matches!(field, InsensitiveField::Global(_)) {
+            test_psbt.extend_from_slice(pair);
+            test_psbt.push(0x00);
+        }
+        test_psbt
+    }
+
+    fn arb_pair() -> impl Strategy<Value = Vec<u8>> {
+        (any::<u8>(), arb_value()).prop_map(|(t, v)| encoded_pair(t, vec![], v))
+    }
+
+    fn arb_map() -> impl Strategy<Value = Vec<u8>> {
+        proptest::collection::vec(arb_pair(), 0..=4).prop_map(|pairs| {
+            let mut map: Vec<u8> = pairs.into_iter().flatten().collect();
+            map.push(0x00);
+            map
+        })
+    }
+
+    fn arb_input_insensitive() -> impl Strategy<Value = InputInsensitive> {
+        proptest::sample::select(InputInsensitive::ALL.to_vec())
+    }
+
+    fn append_v2_global_fields(psbt: &mut Vec<u8>, n_inputs: u8, n_outputs: u8, extra: &[&[u8]]) {
+        psbt.extend(encoded_global(GlobalInsensitive::Version, vec![2, 0, 0, 0]));
+        psbt.extend(encoded_global(
+            GlobalInsensitive::TxVersion,
+            vec![2, 0, 0, 0],
+        ));
+        psbt.extend(encoded_global(
+            GlobalInsensitive::InputCount,
+            vec![n_inputs],
+        ));
+        psbt.extend(encoded_global(
+            GlobalInsensitive::OutputCount,
+            vec![n_outputs],
+        ));
+        for field in extra {
+            psbt.extend_from_slice(field);
+        }
+        psbt.push(0x00);
+    }
+
+    prop_compose! {
+        fn arb_v2_psbt()(
+            n_inputs in 0u8..=3,
+            n_outputs in 0u8..=3,
+        )(
+            extra_global in arb_map().prop_map(|m| m[..m.len()-1].to_vec()),
+            input_maps in proptest::collection::vec(arb_map(), n_inputs as usize),
+            output_maps in proptest::collection::vec(arb_map(), n_outputs as usize),
+            n_inputs in Just(n_inputs),
+            n_outputs in Just(n_outputs),
+        ) -> Vec<u8> {
+            let mut psbt = MAGIC.to_vec();
+            append_v2_global_fields(
+                &mut psbt,
+                n_inputs,
+                n_outputs,
+                &[&extra_global],
+            );
+            for map in input_maps { psbt.extend(map); }
+            for map in output_maps { psbt.extend(map); }
+            psbt
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn idempotent(psbt in arb_v2_psbt()) {
+            if let Ok(once) = scrub(&psbt) {
+                let twice = scrub(&once).expect("scrub of scrubbed output must succeed");
+                prop_assert_eq!(once, twice);
+            }
+        }
+
+        #[test]
+        fn output_is_valid_psbt(psbt in arb_v2_psbt()) {
+            if let Ok(scrubbed) = scrub(&psbt) {
+                prop_assert!(scrub(&scrubbed).is_ok());
+            }
+        }
+
+        #[test]
+        fn sensitive_fields_absent_from_output(
+            sensitive_type in proptest::sample::select(vec![
+                0x02u8, // PARTIAL_SIG
+                0x06,   // BIP32_DERIVATION
+                0x16,   // TAP_BIP32_DERIVATION
+                0x17,   // TAP_INTERNAL_KEY
+                0xFC,   // PROPRIETARY
+            ])
+        ) {
+            let sensitive_pair = encoded_pair(sensitive_type, vec![0xAA], vec![0xBB]);
+
+            let mut test_psbt = MAGIC.to_vec();
+            append_v2_global_fields(&mut test_psbt, 1, 0, &[]);
+            test_psbt.extend(&sensitive_pair);
+            test_psbt.push(0x00);
+
+            let result = scrub(&test_psbt).unwrap();
+            prop_assert!(!result.windows(sensitive_pair.len()).any(|w| w == sensitive_pair));
+        }
+
+        #[test]
+        fn insensitive_fields_preserved(
+            value in arb_value(),
+            field in arb_insensitive_field(),
+        ) {
+            let pair = encode_insensitive(field, value);
+            let test_psbt = build_psbt_with_insensitive(field, &pair);
+
+            let result = scrub(&test_psbt).unwrap();
+            prop_assert!(result.windows(pair.len()).any(|w| w == pair));
+        }
     }
 }
