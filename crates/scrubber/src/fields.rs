@@ -3,7 +3,7 @@ pub(crate) const PSBT_V2: u8 = 2;
 
 /// Global map key types retained when scrubbing (non-sensitive).
 #[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GlobalInsensitive {
     UnsignedTx = 0x00,
     TxVersion = 0x02,
@@ -39,7 +39,7 @@ impl GlobalInsensitive {
 
 /// Input map key types retained when scrubbing (non-sensitive).
 #[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InputInsensitive {
     NonWitnessUtxo = 0x00,
     WitnessUtxo = 0x01,
@@ -91,7 +91,7 @@ impl InputInsensitive {
 
 /// Output map key types retained when scrubbing (non-sensitive).
 #[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OutputInsensitive {
     Amount = 0x03,
     Script = 0x04,
