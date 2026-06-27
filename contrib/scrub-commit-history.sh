@@ -347,10 +347,6 @@ expect_fail_matches_checks() {
 # Appends to build_failed[] on failure.
 check_one_commit() {
   local hash=$1
-  if [ -n "${conflict_skip[$hash]:-}" ]; then
-    echo "  - $(fmt_commit "$hash") (skipped: conflict)"
-    return 0
-  fi
   if [ -n "${no_flake[$hash]:-}" ]; then
     if [ "$no_skip_missing" = true ]; then
       echo "  ✗ $(fmt_commit "$hash") (no flake.nix)"
@@ -441,9 +437,9 @@ echo "Checking for conflicts..."
 for idx in "${ordered[@]}"; do
   hash=${linear[$idx]}
   reason=""
-  if git ls-tree --name-only "$hash" 2>/dev/null | grep -qE '^\.jj(conflict-|-do-not-resolve)'; then
+  if git ls-tree --name-only "$hash" | grep -qE '^\.jj(conflict-|-do-not-resolve)'; then
     reason="jj conflict tree"
-  elif git grep -q -E '<{7}|>{7}|={7}' "$hash" -- 2>/dev/null; then
+  elif git grep -q -E '<{7}|>{7}|={7}' "$hash" --; then
     reason="conflict markers"
   fi
   if [ -n "$reason" ]; then
@@ -502,8 +498,8 @@ if git cat-file -e "$tip_hash:.gitignore" 2>/dev/null; then
   echo "Checking gitignore monotonicity..."
   for idx in "${ordered[@]}"; do
     hash=${linear[$idx]}
-    leaked=$(git ls-tree -r --name-only "$hash" 2>/dev/null |
-      git -C "$tmpdir/repo" check-ignore --stdin 2>/dev/null || true)
+    leaked=$(git ls-tree -r --name-only "$hash" |
+      git -C "$tmpdir/repo" check-ignore --stdin || true)
     if [ -n "$leaked" ]; then
       first=$(echo "$leaked" | head -1)
       count=$(echo "$leaked" | wc -l)
