@@ -20,7 +20,7 @@ fmt:
 
 # Run tests via cargo-nextest
 test:
-    cargo nextest run --no-tests=warn
+    cargo nextest run
 
 # Run clippy lints
 clippy:
@@ -30,7 +30,7 @@ clippy:
 coverage:
     {{ nix_cmd }} build --no-update-lock-file '.#checks.{{ system }}.coverage'
 
-# Scrub history: quick check + message hygiene for every commit
-scrub:
+# Validate repository invariants across commits
+validate-commits:
     jj git export
-    nix run --no-update-lock-file .#scrub-commit-history
+    nix run --no-update-lock-file .#validate-commits
