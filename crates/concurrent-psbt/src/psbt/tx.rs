@@ -1,5 +1,7 @@
 #![allow(clippy::result_large_err)]
 
+use std::fmt;
+
 use psbt_v2::v2::{Global, Output, Psbt};
 
 use crate::global::{GlobalExt, ResultGlobal};
@@ -31,17 +33,43 @@ pub struct ResultUnorderedPsbt {
     pub(crate) outputs: ResultOutputSet,
 }
 
+/// Error returned when a clean [`UnorderedPsbt`] cannot be built from a PSBT.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UnorderedPsbtError {
+    /// An output is missing the `PSBT_OUT_UNIQUE_ID` proprietary field.
+    MissingOutputUniqueId(Box<Output>),
+    /// The PSBT accumulated conflicts while being converted to unordered form.
+    Conflict(Box<ResultUnorderedPsbt>),
+}
+
+impl From<Output> for UnorderedPsbtError {
+    fn from(output: Output) -> Self {
+        Self::MissingOutputUniqueId(Box::new(output))
+    }
+}
+
+impl fmt::Display for UnorderedPsbtError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingOutputUniqueId(_) => write!(f, "output missing PSBT_OUT_UNIQUE_ID"),
+            Self::Conflict(_) => write!(f, "unordered PSBT contains conflicting fields"),
+        }
+    }
+}
+
+impl std::error::Error for UnorderedPsbtError {}
+
 impl UnorderedPsbt {
     /// Parse a v2 PSBT into unordered representation.
     ///
     /// # Errors
-    /// Returns the first output missing a `PSBT_OUT_UNIQUE_ID` field.
-    pub fn try_from_psbt(psbt: Psbt) -> Result<Self, Output> {
-        Ok(Self {
-            global: psbt.global,
-            inputs: psbt.inputs.into_iter().collect(),
-            outputs: OutputSet::try_from_outputs(psbt.outputs)?,
-        })
+    /// Returns an error if any output is missing `PSBT_OUT_UNIQUE_ID`, or if
+    /// duplicate input/output keys accumulate conflicting field values.
+    pub fn try_from_psbt(psbt: Psbt) -> Result<Self, UnorderedPsbtError> {
+        let result = ResultUnorderedPsbt::try_from_psbt(psbt)?;
+        result
+            .try_unwrap()
+            .map_err(|result| UnorderedPsbtError::Conflict(Box::new(result)))
     }
 
     /// Convert to a BIP 370 [`Psbt`].
@@ -132,13 +160,13 @@ impl Join for ResultUnorderedPsbt {
 impl ResultUnorderedPsbt {
     /// Parse a v2 PSBT directly into the result domain.
     ///
-    /// Duplicate output UIDs produce conflicts rather than panicking.
-    /// Inputs are keyed by outpoint (always present in v2).
+    /// Duplicate input outpoints and output UIDs produce conflicts rather than
+    /// being overwritten.
     ///
     /// # Errors
     /// Returns the first output missing a `PSBT_OUT_UNIQUE_ID` field.
-    pub fn try_from_psbt(psbt: Psbt) -> Result<Self, Output> {
-        let inputs = psbt.inputs.into_iter().collect::<InputSet>();
+    pub fn try_from_psbt(psbt: Psbt) -> Result<Self, UnorderedPsbtError> {
+        let inputs = ResultInputSet::from_inputs(psbt.inputs);
         let outputs = ResultOutputSet::try_from_outputs(psbt.outputs)?;
 
         let mut global = psbt.global.wrap();
@@ -159,7 +187,7 @@ impl ResultUnorderedPsbt {
 
         Ok(Self {
             global,
-            inputs: inputs.wrap(),
+            inputs,
             outputs,
         })
     }
@@ -268,6 +296,18 @@ mod tests {
         }
 
         #[test]
+        fn unordered_error_display_covers_both_variants() {
+            let missing = UnorderedPsbtError::MissingOutputUniqueId(Box::default());
+            assert_eq!(missing.to_string(), "output missing PSBT_OUT_UNIQUE_ID");
+
+            let conflict = UnorderedPsbtError::Conflict(Box::new(make_unordered_psbt().wrap()));
+            assert_eq!(
+                conflict.to_string(),
+                "unordered PSBT contains conflicting fields"
+            );
+        }
+
+        #[test]
         fn join_syncs_input_count() {
             let mut a = make_unordered_psbt();
             a.global.input_count = 0;
@@ -327,6 +367,96 @@ mod tests {
                 outputs: vec![Output::default()],
             };
             assert!(ResultUnorderedPsbt::try_from_psbt(psbt).is_err());
+        }
+
+        #[test]
+        fn result_try_from_psbt_duplicate_input_conflicts() {
+            use bitcoin::hashes::Hash;
+
+            let op = bitcoin::OutPoint {
+                txid: bitcoin::Txid::from_byte_array([1; 32]),
+                vout: 0,
+            };
+            let mut a = psbt_v2::v2::Input::new(&op);
+            let mut b = psbt_v2::v2::Input::new(&op);
+            a.sequence = Some(bitcoin::Sequence(1));
+            b.sequence = Some(bitcoin::Sequence(2));
+
+            let psbt = Psbt {
+                global: Global {
+                    input_count: 1,
+                    ..Global::default()
+                },
+                inputs: vec![a, b],
+                outputs: vec![],
+            };
+
+            let result = ResultUnorderedPsbt::try_from_psbt(psbt).unwrap();
+            assert_eq!(result.inputs.len(), 1);
+            assert!(!result.is_ok());
+            assert!(result.try_unwrap().is_err());
+        }
+
+        #[test]
+        fn try_from_psbt_duplicate_input_conflict_is_err() {
+            use bitcoin::hashes::Hash;
+
+            let op = bitcoin::OutPoint {
+                txid: bitcoin::Txid::from_byte_array([1; 32]),
+                vout: 0,
+            };
+            let mut a = psbt_v2::v2::Input::new(&op);
+            let mut b = psbt_v2::v2::Input::new(&op);
+            a.sequence = Some(bitcoin::Sequence(1));
+            b.sequence = Some(bitcoin::Sequence(2));
+
+            let psbt = Psbt {
+                global: Global {
+                    input_count: 1,
+                    ..Global::default()
+                },
+                inputs: vec![a, b],
+                outputs: vec![],
+            };
+
+            assert!(matches!(
+                UnorderedPsbt::try_from_psbt(psbt),
+                Err(UnorderedPsbtError::Conflict(_))
+            ));
+        }
+
+        #[test]
+        fn try_from_psbt_duplicate_output_conflict_is_err() {
+            use crate::output::PSBT_OUT_UNIQUE_ID_SUBTYPE;
+            use bitcoin::Amount;
+
+            fn output_with_uid(uid: &[u8], amount: u64) -> Output {
+                let mut output = Output {
+                    amount: Amount::from_sat(amount),
+                    ..Output::default()
+                };
+                let key = psbt_v2::raw::ProprietaryKey {
+                    prefix: b"concurrent-psbt".to_vec(),
+                    subtype: PSBT_OUT_UNIQUE_ID_SUBTYPE,
+                    key: vec![],
+                };
+                output.proprietaries.insert(key, uid.to_vec());
+                output
+            }
+
+            let psbt = Psbt {
+                global: Global {
+                    output_count: 1,
+                    ..Global::default()
+                },
+                inputs: vec![],
+                outputs: vec![output_with_uid(&[1], 1000), output_with_uid(&[1], 2000)],
+            };
+
+            assert!(matches!(
+                UnorderedPsbt::try_from_psbt(psbt),
+                Err(UnorderedPsbtError::Conflict(_))
+            ));
         }
 
         #[test]
@@ -734,6 +864,58 @@ mod tests {
                 let joined = a.wrap().join(b.wrap());
                 prop_assert!(!joined.is_ok());
                 prop_assert!(joined.try_unwrap().is_err());
+            }
+
+            #[test]
+            fn try_from_psbt_duplicate_input_conflict_is_err(
+                txid_byte in any::<u8>(),
+                first_sequence in 0u32..100,
+                second_sequence in 100u32..200,
+            ) {
+                use bitcoin::hashes::Hash;
+
+                let outpoint = bitcoin::OutPoint {
+                    txid: bitcoin::Txid::from_byte_array([txid_byte; 32]),
+                    vout: 0,
+                };
+                let first = psbt_v2::v2::Input {
+                    sequence: Some(bitcoin::Sequence(first_sequence)),
+                    ..psbt_v2::v2::Input::new(&outpoint)
+                };
+                let second = psbt_v2::v2::Input {
+                    sequence: Some(bitcoin::Sequence(second_sequence)),
+                    ..psbt_v2::v2::Input::new(&outpoint)
+                };
+                let psbt = Psbt {
+                    global: Global {
+                        input_count: 2,
+                        ..Global::default()
+                    },
+                    inputs: vec![first, second],
+                    outputs: vec![],
+                };
+
+                prop_assert!(matches!(
+                    UnorderedPsbt::try_from_psbt(psbt),
+                    Err(UnorderedPsbtError::Conflict(_))
+                ));
+            }
+
+            #[test]
+            fn unordered_error_display(use_conflict in proptest::bool::ANY) {
+                let error = if use_conflict {
+                    UnorderedPsbtError::Conflict(Box::new(UnorderedPsbt {
+                        global: Global::default(),
+                        inputs: InputSet::default(),
+                        outputs: OutputSet::default(),
+                    }.wrap()))
+                } else {
+                    UnorderedPsbtError::MissingOutputUniqueId(Box::default())
+                };
+
+                let rendered = error.to_string();
+                prop_assert!(rendered == "output missing PSBT_OUT_UNIQUE_ID"
+                    || rendered == "unordered PSBT contains conflicting fields");
             }
         }
     }

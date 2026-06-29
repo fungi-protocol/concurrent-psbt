@@ -10,25 +10,25 @@ use crate::lattice::join::Join;
 
 use super::input::{InputExt, ResultInput, out_point};
 
-/// Set of PSBT inputs keyed by the [`OutPoint`] they spend.
+/// Set of conflict-free PSBT inputs keyed by the [`OutPoint`] they spend.
 ///
-/// Uses [`HashMap`] internally so inputs with the same outpoint overwrite silently.
-/// Use [`InputSet::wrap`] to enter the result domain for conflict-safe joining.
+/// Use [`ResultInputSet`] while accumulating possibly duplicated inputs so
+/// disagreements are retained in the result domain instead of overwritten.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct InputSet(HashMap<OutPoint, Input>);
 
 /// Result-domain version of [`InputSet`]. Implements [`Join`] for concurrent merging.
 ///
 /// Inputs at matching outpoints are joined field-by-field; disjoint outpoints are preserved.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ResultInputSet(pub(crate) HashMap<OutPoint, ResultInput>);
 
 impl InputSet {
-    /// Insert an input, keyed by its outpoint.
+    /// Insert an input known to be fresh, keyed by its outpoint.
     ///
     /// # Note
-    /// Silently overwrites if an input with the same outpoint already exists.
-    /// For join-on-duplicate semantics, use [`InputSet::wrap`] and [`Join`].
+    /// This is for constructing already conflict-free sets. Use
+    /// [`ResultInputSet::add`] when duplicates should be joined.
     pub fn add(&mut self, input: Input) {
         let op = out_point(&input);
         self.0.insert(op, input);
@@ -77,6 +77,32 @@ impl Join for ResultInputSet {
 }
 
 impl ResultInputSet {
+    /// Add an input, joining with any existing value at the same outpoint.
+    pub fn add(&mut self, input: Input) {
+        let op = out_point(&input);
+        let value = input.wrap();
+        match self.0.remove(&op) {
+            Some(existing) => {
+                self.0.insert(op, existing.join(value));
+            }
+            None => {
+                self.0.insert(op, value);
+            }
+        }
+    }
+
+    /// Accumulate inputs into the result domain.
+    ///
+    /// Inputs with matching outpoints are joined field-by-field. Compatible
+    /// duplicates collapse to a clean value; disagreements remain as conflicts.
+    pub fn from_inputs(iter: impl IntoIterator<Item = Input>) -> Self {
+        let mut set = Self::default();
+        for input in iter {
+            set.add(input);
+        }
+        set
+    }
+
     /// Return the number of inputs in the joined set.
     pub fn len(&self) -> usize {
         self.0.len()
@@ -207,6 +233,46 @@ mod tests {
             let result = set.wrap();
             assert!(!result.is_empty());
             assert_eq!(result.len(), 1);
+        }
+
+        #[test]
+        fn result_input_set_add_duplicate_identical_is_ok() {
+            let input = make_input(1, 0);
+            let mut result = ResultInputSet::default();
+            result.add(input.clone());
+            result.add(input);
+            assert_eq!(result.len(), 1);
+            assert!(result.is_ok());
+            assert!(result.try_unwrap().is_ok());
+        }
+
+        #[test]
+        fn result_input_set_add_duplicate_conflicting_is_err() {
+            let mut a = make_input(1, 0);
+            let mut b = make_input(1, 0);
+            a.sequence = Some(Sequence(1));
+            b.sequence = Some(Sequence(2));
+
+            let mut result = ResultInputSet::default();
+            result.add(a);
+            result.add(b);
+
+            assert_eq!(result.len(), 1);
+            assert!(!result.is_ok());
+            assert!(result.try_unwrap().is_err());
+        }
+
+        #[test]
+        fn result_input_set_from_inputs_joins_duplicates() {
+            let mut a = make_input(1, 0);
+            let mut b = make_input(1, 0);
+            a.sequence = Some(Sequence(1));
+            b.sequence = Some(Sequence(2));
+
+            let result = ResultInputSet::from_inputs([a, b]);
+
+            assert_eq!(result.len(), 1);
+            assert!(!result.is_ok());
         }
     }
 
@@ -359,6 +425,27 @@ mod tests {
                 let joined = a.wrap().join(b.wrap());
                 prop_assert!(!joined.is_ok());
                 prop_assert!(joined.try_unwrap().is_err());
+            }
+
+            #[test]
+            fn result_from_inputs_joins_duplicate_outpoints(
+                op in arb_outpoint(),
+                first_sequence in 0u32..100,
+                second_sequence in 100u32..200,
+            ) {
+                let first = Input {
+                    sequence: Some(Sequence(first_sequence)),
+                    ..Input::new(&op)
+                };
+                let second = Input {
+                    sequence: Some(Sequence(second_sequence)),
+                    ..Input::new(&op)
+                };
+
+                let result = ResultInputSet::from_inputs([first, second]);
+
+                prop_assert_eq!(result.len(), 1);
+                prop_assert!(!result.is_ok());
             }
         }
     }
