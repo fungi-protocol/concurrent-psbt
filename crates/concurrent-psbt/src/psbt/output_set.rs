@@ -11,18 +11,18 @@ use super::output::{OutputExt, OutputUniqueIdExt, ResultOutput, UniqueId};
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct OutputSet(HashMap<UniqueId, Output>);
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ResultOutputSet(pub(crate) HashMap<UniqueId, ResultOutput>);
 
 impl OutputSet {
-    /// Insert an output, keyed by its unique ID.
+    /// Insert an output known to be fresh, keyed by its unique ID.
     ///
     /// # Panics
     /// Panics if the output has no `PSBT_OUT_UNIQUE_ID` proprietary field.
     ///
     /// # Note
-    /// Silently overwrites if an output with the same UID already exists.
-    /// For join-on-duplicate semantics, use [`ResultOutputSet::try_from_outputs`].
+    /// This is for constructing already conflict-free sets. Use
+    /// [`ResultOutputSet::try_add`] when duplicates should be joined.
     pub fn add(&mut self, output: Output) {
         let id = OutputUniqueIdExt::unique_id(&output)
             .expect("output must have PSBT_OUT_UNIQUE_ID to be added to an OutputSet");
@@ -82,6 +82,26 @@ impl Join for ResultOutputSet {
 }
 
 impl ResultOutputSet {
+    /// Add an output, joining with any existing value at the same unique ID.
+    ///
+    /// # Errors
+    /// Returns the output unchanged if it lacks `PSBT_OUT_UNIQUE_ID`.
+    // The large Err is deliberate: it hands the rejected Output back to the caller.
+    #[allow(clippy::result_large_err)]
+    pub fn try_add(&mut self, output: Output) -> Result<(), Output> {
+        let uid = OutputUniqueIdExt::unique_id(&output).ok_or_else(|| output.clone())?;
+        let value = output.wrap();
+        match self.0.remove(&uid) {
+            Some(existing) => {
+                self.0.insert(uid, existing.join(value));
+            }
+            None => {
+                self.0.insert(uid, value);
+            }
+        }
+        Ok(())
+    }
+
     /// Create a `ResultOutputSet` from an iterator of outputs.
     ///
     /// Outputs with the same `PSBT_OUT_UNIQUE_ID` are merged via `Join`,
@@ -93,20 +113,11 @@ impl ResultOutputSet {
     // The large Err is deliberate: it hands the rejected Output back to the caller.
     #[allow(clippy::result_large_err)]
     pub fn try_from_outputs(iter: impl IntoIterator<Item = Output>) -> Result<Self, Output> {
-        let mut map: HashMap<UniqueId, ResultOutput> = HashMap::new();
+        let mut set = Self::default();
         for output in iter {
-            let uid = OutputUniqueIdExt::unique_id(&output).ok_or_else(|| output.clone())?;
-            let wrapped = output.wrap();
-            match map.remove(&uid) {
-                Some(existing) => {
-                    map.insert(uid, existing.join(wrapped));
-                }
-                None => {
-                    map.insert(uid, wrapped);
-                }
-            }
+            set.try_add(output)?;
         }
-        Ok(Self(map))
+        Ok(set)
     }
 
     pub fn len(&self) -> usize {
@@ -262,6 +273,41 @@ mod tests {
             let result = ResultOutputSet::try_from_outputs(vec![a, b]).unwrap();
             // Different amounts on same UID → conflict
             assert!(!result.is_ok());
+        }
+
+        #[test]
+        fn result_try_add_duplicate_uid_identical_is_ok() {
+            let output = output_with_uid(&[1]);
+            let mut result = ResultOutputSet::default();
+            result.try_add(output.clone()).unwrap();
+            result.try_add(output).unwrap();
+            assert_eq!(result.len(), 1);
+            assert!(result.is_ok());
+            assert!(result.try_unwrap().is_ok());
+        }
+
+        #[test]
+        fn result_try_add_duplicate_uid_conflicting_is_err() {
+            use bitcoin::Amount;
+            let mut a = output_with_uid(&[1]);
+            let mut b = output_with_uid(&[1]);
+            a.amount = Amount::from_sat(1000);
+            b.amount = Amount::from_sat(2000);
+
+            let mut result = ResultOutputSet::default();
+            result.try_add(a).unwrap();
+            result.try_add(b).unwrap();
+
+            assert_eq!(result.len(), 1);
+            assert!(!result.is_ok());
+            assert!(result.try_unwrap().is_err());
+        }
+
+        #[test]
+        fn result_try_add_missing_uid_is_err() {
+            let mut result = ResultOutputSet::default();
+            assert!(result.try_add(Output::default()).is_err());
+            assert!(result.is_empty());
         }
 
         #[test]
