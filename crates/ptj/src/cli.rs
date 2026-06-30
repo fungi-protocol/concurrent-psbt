@@ -59,7 +59,9 @@ impl Command {
             Command::Join(config) => config.files.iter().any(|path| is_stdin_path(path)),
             Command::MakeUnordered(config) => is_stdin_path(&config.file),
             Command::Sort(config) => is_stdin_path(&config.file),
-            Command::Sync(config) => config.sources.iter().any(|path| is_stdin_path(path)),
+            Command::Sync(config) => {
+                !config.ongoing && config.sources.iter().any(|path| is_stdin_path(path))
+            }
             Command::Create(_) | Command::Webgui(_) => false,
         }
     }
@@ -173,6 +175,15 @@ pub struct SyncConfig {
     /// State PSBT file to update atomically with the converged result
     #[arg(long = "state")]
     pub state: Option<PathBuf>,
+    /// Keep polling local sources and updating the state PSBT
+    #[arg(long, alias = "continual")]
+    pub ongoing: bool,
+    /// Milliseconds to wait between ongoing sync polls
+    #[arg(long = "poll-interval-ms", default_value_t = 1000)]
+    pub poll_interval_ms: u64,
+    /// Stop ongoing sync after this many polls
+    #[arg(long = "max-iterations", hide = true)]
+    pub max_iterations: Option<usize>,
     /// PSBT files or directories of .psbt files to join
     pub sources: Vec<PathBuf>,
 }
