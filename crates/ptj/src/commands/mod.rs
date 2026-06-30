@@ -41,6 +41,22 @@ pub(crate) fn run_with_stdin(command: Command, stdin: Option<&[u8]>) -> Result<S
     }
 }
 
+pub(crate) fn run_sync_once(config: &crate::cli::SyncConfig, stdin: Option<&[u8]>) -> Result<String> {
+    validate_stdin_shape(&Command::Sync(config.clone()), stdin)?;
+    sync::run_once(config, stdin).map(|psbt| crate::io::encode_psbt(&psbt))
+}
+
+pub(crate) fn validate_ongoing_sync(
+    config: &crate::cli::SyncConfig,
+    stdin: Option<&[u8]>,
+) -> Result<()> {
+    sync::validate_ongoing(config, stdin)
+}
+
+pub(crate) fn sync_poll_interval(config: &crate::cli::SyncConfig) -> std::time::Duration {
+    sync::poll_interval(config)
+}
+
 fn validate_stdin_shape(command: &Command, stdin: Option<&[u8]>) -> Result<()> {
     let stdin_sources = command.stdin_source_count();
     if stdin_sources > 1 {
