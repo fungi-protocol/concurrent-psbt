@@ -27,6 +27,14 @@ pub fn run_or_write_with_stdin(cli: cli::Cli, stdin: Option<&[u8]>) -> Result<Op
     if let Some(path) = output_path.as_ref() {
         reject_destructive_output_alias(path, &cli.command)?;
     }
+    if let cli::Command::Sync(config) = cli.command.clone()
+        && config.ongoing
+    {
+        let path = output_path.ok_or_else(|| {
+            Error::new("ongoing sync requires --state or --output-file to update")
+        })?;
+        return run_ongoing_sync(config, stdin, &path, output_file_format);
+    }
     if let Some(path) = output_path {
         if matches!(&cli.command, cli::Command::Sync(_)) {
             io::with_file_lock(&path, || {
@@ -42,6 +50,29 @@ pub fn run_or_write_with_stdin(cli: cli::Cli, stdin: Option<&[u8]>) -> Result<Op
     } else {
         let output = commands::run_with_stdin(cli.command, stdin)?;
         Ok(Some(output))
+    }
+}
+
+fn run_ongoing_sync(
+    mut config: cli::SyncConfig,
+    stdin: Option<&[u8]>,
+    path: &std::path::Path,
+    output_file_format: OutputFileFormat,
+) -> Result<Option<String>> {
+    commands::validate_ongoing_sync(&config, stdin)?;
+    config.state = Some(path.to_path_buf());
+    let mut iterations = 0usize;
+    loop {
+        io::with_file_lock(path, || {
+            let output = commands::run_sync_once(&config, None)?;
+            write_output_file(path, &output, output_file_format)?;
+            Ok(())
+        })?;
+        iterations += 1;
+        if config.max_iterations.is_some_and(|max| iterations >= max) {
+            return Ok(None);
+        }
+        std::thread::sleep(commands::sync_poll_interval(&config));
     }
 }
 

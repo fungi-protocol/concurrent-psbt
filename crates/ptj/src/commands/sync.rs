@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use psbt_v2::v2::Psbt;
 
@@ -6,7 +7,33 @@ use crate::cli::SyncConfig;
 use crate::{Error, Result, io};
 
 pub(super) fn run(config: SyncConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
+    if config.ongoing {
+        return Err(Error::new(
+            "ongoing sync requires --state or --output-file so the runner can update the state file",
+        ));
+    }
+    run_once(&config, stdin)
+}
+
+pub(crate) fn run_once(config: &SyncConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
     sync_sources(&config.sources, config.state.as_deref(), stdin)
+}
+
+pub(crate) fn validate_ongoing(config: &SyncConfig, stdin: Option<&[u8]>) -> Result<()> {
+    if config.sources.iter().any(|source| io::is_stdin_path(source)) {
+        return Err(Error::new("ongoing sync cannot use '-' because stdin is a one-shot source"));
+    }
+    if stdin.is_some_and(|bytes| !bytes.is_empty()) {
+        return Err(Error::new("ongoing sync cannot consume runner stdin"));
+    }
+    if config.max_iterations == Some(0) {
+        return Err(Error::new("--max-iterations must be greater than zero"));
+    }
+    Ok(())
+}
+
+pub(crate) fn poll_interval(config: &SyncConfig) -> Duration {
+    Duration::from_millis(config.poll_interval_ms)
 }
 
 fn sync_sources(sources: &[PathBuf], state: Option<&Path>, stdin: Option<&[u8]>) -> Result<Psbt> {
