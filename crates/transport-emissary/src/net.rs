@@ -64,9 +64,9 @@ use emissary_util::runtime::tokio::Runtime as TokioRuntime;
 use rand::Rng as _;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{mpsc, oneshot};
-use yosemite::{style, DestinationKind, RouterApi, Session, SessionOptions};
+use yosemite::{DestinationKind, RouterApi, Session, SessionOptions, style};
 
-use transport_core::{deframe, frame, Error, Result};
+use transport_core::{Error, Result, deframe, frame};
 
 /// File under `state_dir` holding our persistent I2P destination private key
 /// (the base64 blob yosemite's `DestinationKind::Persistent` takes). Reusing it
@@ -122,8 +122,7 @@ async fn load_or_generate_destination(
         .map_err(|e| format!("generating destination: {e}"))?;
     std::fs::create_dir_all(state_dir)
         .map_err(|e| format!("creating state dir {state_dir}: {e}"))?;
-    std::fs::write(&path, &private_key)
-        .map_err(|e| format!("persisting destination key: {e}"))?;
+    std::fs::write(&path, &private_key).map_err(|e| format!("persisting destination key: {e}"))?;
     Ok(DestinationKind::Persistent { private_key })
 }
 
@@ -166,9 +165,10 @@ impl Actor {
             ..Default::default()
         };
 
-        let (router, _events, _router_info) = Router::<TokioRuntime>::new(router_config, None, None)
-            .await
-            .map_err(|e| format!("router build failed: {e}"))?;
+        let (router, _events, _router_info) =
+            Router::<TokioRuntime>::new(router_config, None, None)
+                .await
+                .map_err(|e| format!("router build failed: {e}"))?;
         let sam_tcp = router
             .protocol_address_info()
             .sam_tcp
@@ -304,7 +304,9 @@ impl I2pStream {
                 });
             })
             .map_err(|error| {
-                Error::new(format!("transport-emissary: spawning actor thread: {error}"))
+                Error::new(format!(
+                    "transport-emissary: spawning actor thread: {error}"
+                ))
             })?;
 
         // Wait for bootstrap to finish before returning a usable handle.

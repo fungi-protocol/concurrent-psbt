@@ -1,5 +1,5 @@
-use std::process;
 use std::io::Read as _;
+use std::process;
 
 use clap::Parser;
 use ptj::cli::Cli;

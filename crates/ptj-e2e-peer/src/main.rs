@@ -44,8 +44,8 @@ use transport_core::{Message, Transport};
 // `e2e-peer` feature, which turns on their own `str0m` / `ohttp` / `payjoin-dir`
 // features. (The signaling-ohttp component ships as crate `transport-payjoin-dir`.)
 use transport_payjoin_dir::{
-    mailbox::Role as MailboxRole, PayjoinDirChannel, PayjoinDirConfig, SignalingChannel,
-    SignalingMsg,
+    PayjoinDirChannel, PayjoinDirConfig, SignalingChannel, SignalingMsg,
+    mailbox::Role as MailboxRole,
 };
 use transport_str0m::{Role as WebRtcRole, Str0mConfig, Str0mTransport};
 
@@ -80,7 +80,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // -- 2) WebRTC peer: sans-IO str0m over an owned UdpSocket. tokio-free; its
     //       poll loop IS the publish/collect cadence.
-    let mut webrtc = Str0mTransport::new(Str0mConfig::new(args.webrtc_role, args.udp_bind.clone()))?;
+    let mut webrtc =
+        Str0mTransport::new(Str0mConfig::new(args.webrtc_role, args.udp_bind.clone()))?;
 
     // -- 3) SDP/ICE exchange over the signaling channel. The blobs str0m produces
     //       are opaque bytes to signaling; the mailbox HPKE-seals them.

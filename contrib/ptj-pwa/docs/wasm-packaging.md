@@ -47,12 +47,10 @@ positional — `sort(psbt, seedHex?)` — matching the canonical
 
 ## Cargo.toml essentials
 
-See `wasm-bindgen/Cargo.toml` (authoritative). Key points: `crate-type =
-["cdylib", "rlib"]`; deps `concurrent-psbt` + `psbt-v2/base64` + `bitcoin` +
+See `wasm-bindgen/Cargo.toml` (authoritative). Key points: `crate-type = ["cdylib", "rlib"]`; deps `concurrent-psbt` + `psbt-v2/base64` + `bitcoin` +
 `chacha20poly1305` + `serde`/`serde_json` + `wasm-bindgen` +
 `serde-wasm-bindgen`; feature `debug-panic-hook` (optional
-console_error_panic_hook); wasm-target-gated `getrandom = { version = "0.3",
-features = ["wasm_js"] }`.
+console_error_panic_hook); wasm-target-gated `getrandom = { version = "0.3", features = ["wasm_js"] }`.
 
 ## Build (owned by toolchain/crate components; recorded here for completeness)
 
@@ -64,15 +62,17 @@ The Feasibility agent verified these are the ONLY changes needed:
    rustlib). Verified: sysroot then contains `wasm32-unknown-unknown` and the
    build succeeds.
 
-2. **`concurrent-psbt/Cargo.toml`** — already has the wasm getrandom backend:
+1. **`concurrent-psbt/Cargo.toml`** — already has the wasm getrandom backend:
+
    ```toml
    [target.'cfg(target_arch = "wasm32")'.dependencies]
    getrandom = { version = "0.3", features = ["wasm_js"] }
    ```
+
    Belt-and-suspenders: `RUSTFLAGS='--cfg getrandom_backend="wasm_js"'` (both
    variants built in the probe).
 
-3. **Nix wasm C-build hygiene for secp256k1-sys** (the ONLY hard blocker, and it
+1. **Nix wasm C-build hygiene for secp256k1-sys** (the ONLY hard blocker, and it
    is purely build-env, not code): the wasm derivation must NOT apply host
    hardening to cc-rs's clang. Set
    `hardeningDisable = [ "zerocallusedregs" "stackprotector" "stackclashprotection" ]`
@@ -81,7 +81,7 @@ The Feasibility agent verified these are the ONLY changes needed:
    `-fzero-call-used-regs=used-gpr` for wasm32 and secp256k1-sys fails to compile
    its C.
 
-4. **PWA build tooling (nix/devshell.nix packages)** — add `wasm-bindgen-cli`
+1. **PWA build tooling (nix/devshell.nix packages)** — add `wasm-bindgen-cli`
    (or `wasm-pack`) + `binaryen` (`wasm-opt`) for the JS glue + size opt. NOT on
    the repo's default check path. `concurrent-psbt` needs no wasm-bindgen; only
    `concurrent-psbt-wasm` does.

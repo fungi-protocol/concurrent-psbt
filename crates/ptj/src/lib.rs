@@ -125,7 +125,10 @@ fn run_ongoing_sync(
                 ))
             })?;
     }
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         watcher
             .watch(parent, RecursiveMode::NonRecursive)
             .map_err(|error| {
@@ -152,12 +155,12 @@ fn run_ongoing_sync(
         // Either way we run another step; draining extra queued events coalesces a
         // burst of writes into a single convergence pass (the join is idempotent).
         match rx.recv_timeout(poll_interval) {
-            Ok(_event) => {
-                while rx.try_recv().is_ok() {}
-            }
+            Ok(_event) => while rx.try_recv().is_ok() {},
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
-                return Err(Error::new("ongoing sync: file watcher stopped unexpectedly"));
+                return Err(Error::new(
+                    "ongoing sync: file watcher stopped unexpectedly",
+                ));
             }
         }
     }

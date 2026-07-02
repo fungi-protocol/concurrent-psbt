@@ -214,7 +214,7 @@ mod tests {
     use super::*;
     // `AnonymousChannel` is already in scope via `super::*`; pull in the extra
     // transport-core items the tests need.
-    use transport_core::{deframe, frame, Message, Transport};
+    use transport_core::{Message, Transport, deframe, frame};
 
     // ----- channel-trait satisfaction (no network) -----
     //

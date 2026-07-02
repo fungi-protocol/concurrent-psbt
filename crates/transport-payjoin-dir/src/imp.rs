@@ -46,10 +46,10 @@ use std::sync::{Arc, Mutex};
 use ohttp::{ClientRequest, ClientResponse};
 use payjoin::v2::directory::DirectoryLinkedMailbox; // BIP-77 mailbox client
 
-use transport_core::{Error, Result, MAX_FRAME_LEN};
+use transport_core::{Error, MAX_FRAME_LEN, Result};
 
-use crate::mailbox::{self, Role, SlotId};
 use crate::PayjoinDirConfig;
+use crate::mailbox::{self, Role, SlotId};
 
 /// An abstract HTTP sender so ONE backend serves native and wasm. Native wires a
 /// reqwest-backed impl; the PWA wires a `web-sys`/`gloo-net` fetch-backed impl.
@@ -129,7 +129,11 @@ impl Inner {
 
         // Walk our own lane forward until the POST succeeds (409 => slot taken).
         loop {
-            let slot = mailbox::slot_id(&self.config.session_secret, self.config.role, self.write_index);
+            let slot = mailbox::slot_id(
+                &self.config.session_secret,
+                self.config.role,
+                self.write_index,
+            );
             match self.post_slot(&slot, &payload)? {
                 PostOutcome::Stored => {
                     self.write_index += 1;
@@ -221,9 +225,7 @@ impl Inner {
                 .map_err(|e| Error::new(format!("payjoin-dir: ohttp encapsulate: {e}")))?;
 
         // POST the opaque ciphertext to the SEPARATE relay host.
-        let response_ct = self
-            .http
-            .post(&self.config.ohttp_relay_url, encapsulated)?;
+        let response_ct = self.http.post(&self.config.ohttp_relay_url, encapsulated)?;
 
         // Decapsulate the gateway's OHTTP response.
         response_ctx

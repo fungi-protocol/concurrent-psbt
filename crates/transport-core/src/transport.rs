@@ -20,8 +20,8 @@
 
 use async_trait::async_trait;
 
-use crate::channel::{AnonymousChannel, AttributableChannel};
 use crate::Result;
+use crate::channel::{AnonymousChannel, AttributableChannel};
 
 /// A pluggable byte-mover between collaboration participants — the driver seam.
 ///
@@ -161,7 +161,10 @@ mod tests {
         futures::executor::block_on(async {
             let mut wrapped = Attributed::new(MemAttr::default());
             // collect() yields bare bytes; the SenderId has been dropped.
-            assert_eq!(drive(&mut wrapped).await, vec![b"x".to_vec(), b"y".to_vec()]);
+            assert_eq!(
+                drive(&mut wrapped).await,
+                vec![b"x".to_vec(), b"y".to_vec()]
+            );
         });
     }
 

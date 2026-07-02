@@ -102,11 +102,8 @@ impl Backend {
         let mut messages = Vec::new();
         // Ends on a closed stream (`Ok(None)`) or an empty poll window
         // (`Err(Elapsed)`) — either way, nothing more is ready right now.
-        while let Ok(Some(batch)) = tokio::time::timeout(
-            Duration::from_millis(50),
-            self.client.wait_for_messages(),
-        )
-        .await
+        while let Ok(Some(batch)) =
+            tokio::time::timeout(Duration::from_millis(50), self.client.wait_for_messages()).await
         {
             for reconstructed in batch {
                 if let Some(bytes) = unframe_one(&reconstructed.message) {

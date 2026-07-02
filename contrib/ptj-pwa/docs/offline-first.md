@@ -61,8 +61,7 @@ Mobile-first, installable, standalone:
 ```
 
 `index.html` adds `<link rel="manifest">`, `<meta name="theme-color">`,
-`<meta name="viewport" content="width=device-width, initial-scale=1,
-viewport-fit=cover">`, and Apple touch icons / `apple-mobile-web-app-capable` for
+`<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">`, and Apple touch icons / `apple-mobile-web-app-capable` for
 iOS home-screen install.
 
 ## Sneakernet — the always-offline transport
@@ -71,12 +70,12 @@ No network of any kind. Implemented in `src/transport/sneakernet.ts`. Modes:
 
 1. **Paste / type** — the existing dropzone accepts base64 PSBT (already in
    `app.ts` at the paste-dropzone). Pushes into the shared array.
-2. **File import / export** — `<input type=file>` + a download of the current
+1. **File import / export** — `<input type=file>` + a download of the current
    result (BIP-174 binary or base64), via the `import-bip174` / `export-bip174`
    ops (WASM, local). Works offline.
-3. **Clipboard** — copy the current PSBT / paste from clipboard (where the
+1. **Clipboard** — copy the current PSBT / paste from clipboard (where the
    Clipboard API is permitted); pure local.
-4. **Animated QR display + camera scan (UR format)** — the line-of-sight
+1. **Animated QR display + camera scan (UR format)** — the line-of-sight
    transport from `app-suite.md`: show the current PSBT as an animated UR QR;
    scan another device's QR with the camera. Requires only the camera permission,
    no network. (QR encode/decode + UR chunking is a browser JS concern; the PSBT

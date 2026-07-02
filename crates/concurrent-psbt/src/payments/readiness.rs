@@ -291,11 +291,9 @@ mod tests {
         #[test]
         fn linear_payment_needs_receiver_confirmation() {
             // Alice(0x0a) -> Bob(0x0b): Bob must confirm.
-            let g = PaymentGraph::from_payments(&[pay(0x0a, &[0x0b], 1000)], &resolve_by_first_byte);
-            assert_eq!(
-                required_confirmers(&g),
-                BTreeSet::from([[0x0b; 32]])
-            );
+            let g =
+                PaymentGraph::from_payments(&[pay(0x0a, &[0x0b], 1000)], &resolve_by_first_byte);
+            assert_eq!(required_confirmers(&g), BTreeSet::from([[0x0b; 32]]));
             // Without Bob's confirmation, not ready and Alice can't sign.
             assert!(!is_ready(&g, &[], &UID));
             assert!(!can_sign(&g, &[], &[0x0a; 32], &UID));
@@ -309,7 +307,8 @@ mod tests {
 
         #[test]
         fn stale_confirmation_does_not_count() {
-            let g = PaymentGraph::from_payments(&[pay(0x0a, &[0x0b], 1000)], &resolve_by_first_byte);
+            let g =
+                PaymentGraph::from_payments(&[pay(0x0a, &[0x0b], 1000)], &resolve_by_first_byte);
             // Bob confirmed an OLD unique id; against the current one he has not.
             let confs = [confirm(0x0b, STALE)];
             assert!(!is_ready(&g, &confs, &UID));
@@ -320,7 +319,8 @@ mod tests {
 
         #[test]
         fn confirmable_base_case_is_net_non_negative() {
-            let g = PaymentGraph::from_payments(&[pay(0x0a, &[0x0b], 1000)], &resolve_by_first_byte);
+            let g =
+                PaymentGraph::from_payments(&[pay(0x0a, &[0x0b], 1000)], &resolve_by_first_byte);
             let c = confirmable(&g);
             assert!(c[&[0x0b; 32]], "net-positive receiver is confirmable");
             // Alice is net-negative; her only receiver Bob is confirmable, so
@@ -347,7 +347,10 @@ mod tests {
             assert!(!can_sign(&g, &[], &[0x0b; 32], &UID));
             // C confirms first (net-positive, no receivers).
             let confs_c = [confirm(0x0c, UID)];
-            assert!(can_sign(&g, &confs_c, &[0x0b; 32], &UID), "B waits only on C");
+            assert!(
+                can_sign(&g, &confs_c, &[0x0b; 32], &UID),
+                "B waits only on C"
+            );
             assert!(!is_ready(&g, &confs_c, &UID), "B still owes a confirmation");
             // Then B confirms.
             let confs_bc = [confirm(0x0c, UID), confirm(0x0b, UID)];
@@ -367,7 +370,10 @@ mod tests {
             assert!(!g.is_net_non_negative(&[0x0b; 32]));
             let c = confirmable(&g);
             assert!(c[&[0x0c; 32]], "C is the net-positive base case");
-            assert!(c[&[0x0b; 32]], "B confirmable once C is (its only receiver)");
+            assert!(
+                c[&[0x0b; 32]],
+                "B confirmable once C is (its only receiver)"
+            );
             assert!(c[&[0x0a; 32]]);
         }
 
@@ -403,7 +409,8 @@ mod tests {
         #[test]
         fn non_sender_can_always_sign() {
             // Pure receiver Bob in A->B.
-            let g = PaymentGraph::from_payments(&[pay(0x0a, &[0x0b], 1000)], &resolve_by_first_byte);
+            let g =
+                PaymentGraph::from_payments(&[pay(0x0a, &[0x0b], 1000)], &resolve_by_first_byte);
             assert!(can_sign(&g, &[], &[0x0b; 32], &UID));
             // A non-participant not in the graph at all: also a non-sender.
             assert!(can_sign(&g, &[], &[0x0f; 32], &UID));
@@ -430,7 +437,8 @@ mod tests {
         fn resolved_recipient_still_required() {
             // Contrast: a resolved payee IS a required confirmer and gates
             // readiness normally; nothing is flagged unresolved.
-            let g = PaymentGraph::from_payments(&[pay(0x0a, &[0x0b], 1000)], &resolve_by_first_byte);
+            let g =
+                PaymentGraph::from_payments(&[pay(0x0a, &[0x0b], 1000)], &resolve_by_first_byte);
             assert_eq!(required_confirmers(&g), BTreeSet::from([[0x0b; 32]]));
             assert!(!is_ready(&g, &[], &UID));
             assert!(unresolved_recipients(&g).is_empty());
@@ -460,7 +468,8 @@ mod tests {
         #[test]
         fn readiness_reads_wire_confirmations() {
             use crate::payments::negotiation::GlobalNegotiationExt;
-            let g = PaymentGraph::from_payments(&[pay(0x0a, &[0x0b], 1000)], &resolve_by_first_byte);
+            let g =
+                PaymentGraph::from_payments(&[pay(0x0a, &[0x0b], 1000)], &resolve_by_first_byte);
             // Bob embeds his confirmation of the current uid into a Global via
             // the 0x21 wire field.
             let mut global = psbt_v2::v2::Global::default();
@@ -491,7 +500,12 @@ mod tests {
             global.add_confirmation([0xbb; 16], confirm(0x0b, UID).encode());
             // Wire has Bob; Alice's attestation supplied as session-local extra.
             assert!(!is_ready_from_global(&g, &global, &[], &UID));
-            assert!(is_ready_from_global(&g, &global, &[confirm(0x0a, UID)], &UID));
+            assert!(is_ready_from_global(
+                &g,
+                &global,
+                &[confirm(0x0a, UID)],
+                &UID
+            ));
         }
     }
 }

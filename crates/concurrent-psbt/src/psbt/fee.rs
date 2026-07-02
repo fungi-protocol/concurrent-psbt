@@ -185,13 +185,13 @@ mod tests {
     mod unit {
         use super::*;
         use crate::fee::PSBT_GLOBAL_EXPLICIT_FEE_CONTRIBUTION_SUBTYPE as FEE_SUBTYPE;
-        use crate::payments::negotiation::{FORMAT_ENCRYPTED, GlobalNegotiationExt, PSBT_GLOBAL_PAYMENT_SUBTYPE};
+        use crate::payments::negotiation::{
+            FORMAT_ENCRYPTED, GlobalNegotiationExt, PSBT_GLOBAL_PAYMENT_SUBTYPE,
+        };
 
         #[test]
         fn fee_roundtrip() {
-            let f = FeeContribution {
-                amount_sats: 4_200,
-            };
+            let f = FeeContribution { amount_sats: 4_200 };
             assert_eq!(FeeContribution::decode(&f.encode()).unwrap(), f);
         }
 
@@ -218,7 +218,10 @@ mod tests {
         #[test]
         fn decode_rejects_wrong_length() {
             // empty
-            assert_eq!(FeeContribution::decode(&[]), Err(NegotiationError::NotPlaintext));
+            assert_eq!(
+                FeeContribution::decode(&[]),
+                Err(NegotiationError::NotPlaintext)
+            );
             // format byte only
             assert_eq!(
                 FeeContribution::decode(&[FORMAT_PLAINTEXT]),
@@ -260,7 +263,13 @@ mod tests {
         #[test]
         fn total_skips_undecodable_and_saturates() {
             let mut g = Global::default();
-            g.add_fee_contribution([1u8; 16], FeeContribution { amount_sats: u64::MAX }.encode());
+            g.add_fee_contribution(
+                [1u8; 16],
+                FeeContribution {
+                    amount_sats: u64::MAX,
+                }
+                .encode(),
+            );
             g.add_fee_contribution([2u8; 16], FeeContribution { amount_sats: 10 }.encode());
             // undecodable (encrypted) entry is skipped, not an error
             let mut enc = FeeContribution { amount_sats: 5 }.encode();

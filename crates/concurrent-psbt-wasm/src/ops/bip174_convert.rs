@@ -196,7 +196,11 @@ pub fn import_bip174_psbt(psbt: bip174::Psbt, modifiable: bool) -> Result<Psbt, 
         .map(|(txout, output)| output_from_bip174(txout, output))
         .collect();
 
-    Ok(Psbt { global, inputs, outputs })
+    Ok(Psbt {
+        global,
+        inputs,
+        outputs,
+    })
 }
 
 fn input_from_bip174(txin: bitcoin::TxIn, input: bip174::Input) -> Input {

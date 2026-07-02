@@ -25,8 +25,7 @@ Feature gating does not help: **optional dependencies still resolve
 into the lockfile**. The workspace lock pins `libsqlite3-sys 0.37.0`
 today, which is why the in-workspace `transport-nym` crate's `nym`
 feature sits empty — the grounded nym backend exists (the
-transport-grounding lane wrote and verified it against `nym-sdk
-1.21.2`) and simply cannot land its dependency next to arti's.
+transport-grounding lane wrote and verified it against `nym-sdk 1.21.2`) and simply cannot land its dependency next to arti's.
 
 Waiting for upstreams to converge on one sqlite pin is not a strategy;
 this class of conflict will recur (any two heavyweight SDKs may pin
@@ -113,20 +112,20 @@ string on both sides of the wire.
 1. **Spawn.** The host starts the plugin binary with stdin/stdout
    piped (`kill_on_drop` set) and stderr inherited — stderr is the one
    stream not carrying RPC, so plugin diagnostics stay visible.
-2. **Handshake.** The host bootstraps the `Plugin` capability and
+1. **Handshake.** The host bootstraps the `Plugin` capability and
    calls `handshake` with its protocol version, preferred channel
    kind, and the config entries. The plugin answers with its own
    version and the kind it actually serves, or refuses (structured
    error). The host enforces an **exact protocol version match** —
    there is deliberately no compatibility window until a second
    protocol version exists to be compatible with.
-3. **Serve.** The host requests the transport capability matching the
+1. **Serve.** The host requests the transport capability matching the
    negotiated kind and forwards the sync driver's `publish`/`collect`
    as RPCs, one at a time (the driver is a single logical task —
    nothing to pipeline). Expensive setup (e.g. connecting to a mixnet
    gateway) belongs AFTER the handshake, lazily on first use, so
    spawn/handshake stay prompt.
-4. **Shutdown.** Dropping the host handle closes the request channel,
+1. **Shutdown.** Dropping the host handle closes the request channel,
    ends the vat, and closes the child's stdin; the plugin exits on
    EOF. `kill_on_drop` reaps a child that does not.
 
@@ -163,11 +162,11 @@ Deliberately NOT scaffolded yet (future work, in dependency order):
 1. restart-on-crash with fresh spawn + handshake (safe because the
    protocol is stateless between calls: the lattice join makes
    republish-after-restart idempotent);
-2. exponential backoff and a crash-loop budget, after which the
+1. exponential backoff and a crash-loop budget, after which the
    transport reports permanently failed;
-3. killing a wedged child at handshake timeout (today it is killed at
+1. killing a wedged child at handshake timeout (today it is killed at
    drop);
-4. a transport-metadata method on the wire contract (e.g. "our mixnet
+1. a transport-metadata method on the wire contract (e.g. "our mixnet
    address", which the nym plugin currently announces on stderr).
 
 ### Security posture

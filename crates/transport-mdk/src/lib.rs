@@ -192,12 +192,12 @@ mod real {
     use std::collections::HashSet;
     use std::time::Duration;
 
-    use mdk_core::prelude::{GroupId, MessageProcessingResult, MDK};
+    use mdk_core::prelude::{GroupId, MDK, MessageProcessingResult};
     use mdk_memory_storage::MdkMemoryStorage;
     use nostr::{Alphabet, EventBuilder, EventId, Filter, Keys, Kind, PublicKey, SingleLetterTag};
     use nostr_sdk::Client;
     use tokio::sync::{mpsc, oneshot};
-    use transport_core::{deframe, frame, Error, Result, SenderId};
+    use transport_core::{Error, Result, SenderId, deframe, frame};
 
     use super::MdkConfig;
 
@@ -242,8 +242,8 @@ mod real {
         /// Load our keys, bind to the MLS group, and open the relay client, on
         /// the actor's runtime.
         async fn bootstrap(config: MdkConfig) -> std::result::Result<Self, String> {
-            let keys = Keys::parse(&config.secret_key)
-                .map_err(|e| format!("parsing secret key: {e}"))?;
+            let keys =
+                Keys::parse(&config.secret_key).map_err(|e| format!("parsing secret key: {e}"))?;
             let pubkey = keys.public_key();
 
             // In-memory MLS storage: this transport is a byte-mover, not the
@@ -337,7 +337,10 @@ mod real {
             // timeout keeps `recv` close to the driver's poll cadence.
             let events = self
                 .client
-                .fetch_events(Self::group_filter(&self.group_tag), Duration::from_millis(200))
+                .fetch_events(
+                    Self::group_filter(&self.group_tag),
+                    Duration::from_millis(200),
+                )
                 .await
                 .map_err(|e| Error::new(format!("mdk recv: fetch_events: {e}")))?;
 
@@ -493,7 +496,7 @@ mod real {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use transport_core::{deframe, frame, Attributed, Message, Transport};
+    use transport_core::{Attributed, Message, Transport, deframe, frame};
 
     // ---- channel-trait satisfaction (no network, either feature state) ----
 
@@ -558,11 +561,19 @@ mod tests {
             futures::executor::block_on(async {
                 let sent = ch.send(b"payload".to_vec()).await;
                 assert!(sent.is_err());
-                assert!(sent.unwrap_err().message().contains("without the \"mdk\" feature"));
+                assert!(
+                    sent.unwrap_err()
+                        .message()
+                        .contains("without the \"mdk\" feature")
+                );
 
                 let got = ch.recv().await;
                 assert!(got.is_err());
-                assert!(got.unwrap_err().message().contains("without the \"mdk\" feature"));
+                assert!(
+                    got.unwrap_err()
+                        .message()
+                        .contains("without the \"mdk\" feature")
+                );
             });
         }
     }
@@ -579,7 +590,10 @@ mod tests {
             };
             ch.send(b"hello group".to_vec()).await.unwrap();
             let got = ch.recv().await.unwrap();
-            assert_eq!(got, vec![(SenderId(vec![0xEE; 32]), b"hello group".to_vec())]);
+            assert_eq!(
+                got,
+                vec![(SenderId(vec![0xEE; 32]), b"hello group".to_vec())]
+            );
 
             // The Attributed wrapper drops the SenderId for the plain Transport seam.
             let mut wrapped = Attributed::new(ch);

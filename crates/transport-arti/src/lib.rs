@@ -202,8 +202,8 @@ use skeleton::Inner;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use transport_core::{frame, read_frame, write_frame, Transport};
     use std::io::Cursor;
+    use transport_core::{Transport, frame, read_frame, write_frame};
 
     // ---- channel-trait-satisfaction test (no network) --------------------
 
@@ -241,7 +241,10 @@ mod tests {
         // send / recv (async) and onion_address (sync) all report the missing
         // feature.
         let (send_err, recv_err) = futures::executor::block_on(async {
-            (t.send(b"psbt-bytes".to_vec()).await.err(), t.recv().await.err())
+            (
+                t.send(b"psbt-bytes".to_vec()).await.err(),
+                t.recv().await.err(),
+            )
         });
         for msg in [send_err, recv_err, t.onion_address().err()] {
             let err = msg.expect("skeleton op must be an error");

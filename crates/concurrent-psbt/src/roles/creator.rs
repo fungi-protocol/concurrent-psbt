@@ -142,10 +142,7 @@ mod tests {
         assert_eq!(deterministic.global.sort_seed(), Some(seed.as_slice()));
         assert_eq!(deterministic.global.sort_deterministic(), Some(0x01));
 
-        let explicit = Creator::new()
-            .explicit_sort_keys()
-            .build()
-            .into_inner();
+        let explicit = Creator::new().explicit_sort_keys().build().into_inner();
         assert_eq!(explicit.global.sort_deterministic(), Some(0x00));
 
         let output = psbt_v2::v2::Output::default();

@@ -15,11 +15,11 @@ pub use roles::sorter as sort;
 
 pub use lattice::join::{Join, JoinMut};
 pub use lattice::partial::{Conflict, JoinResult, PartialJoin};
-pub use psbt::global;
 pub use psbt::fee;
-pub use psbt::removal;
+pub use psbt::global;
 pub use psbt::input;
 pub use psbt::output;
+pub use psbt::removal;
 pub use psbt::tx;
 
 pub mod payments;

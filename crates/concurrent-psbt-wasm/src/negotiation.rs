@@ -61,7 +61,13 @@ fn aad(subtype: u8, id: &[u8; 16]) -> Vec<u8> {
 fn encrypt(secret: &[u8], subtype: u8, id: &[u8; 16], plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let cipher = ChaCha20Poly1305::new(&derive_key(secret));
     let ct = cipher
-        .encrypt(&derive_nonce(subtype, id), Payload { msg: plaintext, aad: &aad(subtype, id) })
+        .encrypt(
+            &derive_nonce(subtype, id),
+            Payload {
+                msg: plaintext,
+                aad: &aad(subtype, id),
+            },
+        )
         .map_err(|_| "negotiation record encryption failed".to_string())?;
     let mut out = Vec::with_capacity(1 + ct.len());
     out.push(FORMAT_ENCRYPTED);
@@ -79,7 +85,13 @@ fn decrypt(
         Some(&FORMAT_ENCRYPTED) => {
             let cipher = ChaCha20Poly1305::new(&derive_key(secret));
             let pt = cipher
-                .decrypt(&derive_nonce(subtype, id), Payload { msg: &blob[1..], aad: &aad(subtype, id) })
+                .decrypt(
+                    &derive_nonce(subtype, id),
+                    Payload {
+                        msg: &blob[1..],
+                        aad: &aad(subtype, id),
+                    },
+                )
                 .map_err(|_| {
                     "negotiation record failed to decrypt (wrong secret or tampered)".to_string()
                 })?;

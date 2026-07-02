@@ -32,15 +32,14 @@ default = []
 # Pulls in the embedded I2P router and its async runtime, and lights up the real
 # network send/recv path.
 emissary = [
-    "dep:emissary-core",
-    "dep:emissary-util",
-    "dep:yosemite",
-    "dep:rand",
-    "dep:tokio",
+  "dep:emissary-core",
+  "dep:emissary-util",
+  "dep:yosemite",
+  "dep:rand",
+  "dep:tokio",
 ]
 
 [dependencies]
-transport-core = { path = "../transport-core" }
 # Desugars the async `AnonymousChannel` impl to boxed futures so the seam stays
 # dyn-compatible. Proc-macro only — no runtime, no network SDK.
 async-trait = "0.1"
@@ -48,13 +47,19 @@ async-trait = "0.1"
 emissary-core = { version = "0.4", optional = true }
 # The tokio `Runtime` impl emissary-core's `Router<R>` is instantiated over.
 emissary-util = { version = "0.4", optional = true }
-# SAMv3 client for the router's in-process listener — the same crate
-# emissary-core's own integration tests use to drive streaming.
-yosemite = { version = "0.7", optional = true }
 # Random NTCP2 iv/key material for the embedded router (emissary-core's rand pin).
 rand = { version = "0.10", optional = true }
 # The actor thread's runtime + the mpsc/oneshot seam to it.
-tokio = { version = "1", features = ["rt", "sync", "time", "io-util"], optional = true }
+tokio = { version = "1", features = [
+  "rt",
+  "sync",
+  "time",
+  "io-util",
+], optional = true }
+transport-core = { path = "../transport-core" }
+# SAMv3 client for the router's in-process listener — the same crate
+# emissary-core's own integration tests use to drive streaming.
+yosemite = { version = "0.7", optional = true }
 
 [lints]
 workspace = true

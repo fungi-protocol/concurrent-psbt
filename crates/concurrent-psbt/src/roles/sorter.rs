@@ -5,8 +5,8 @@ use psbt_v2::v2::Psbt;
 
 use crate::global::GlobalSortExt;
 use crate::input::{InputSortKeyExt, out_point};
-use crate::payments::negotiation::GlobalNegotiationExt;
 use crate::output::{OutputSortKeyExt, OutputUniqueIdExt};
+use crate::payments::negotiation::GlobalNegotiationExt;
 use crate::removal::{GlobalRemovalExt, retain_live_inputs, retain_live_outputs};
 use crate::tx::UnorderedPsbt;
 

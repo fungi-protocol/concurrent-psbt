@@ -118,9 +118,10 @@ struct Cursor<'a> {
 
 impl<'a> Cursor<'a> {
     fn take(&mut self, count: usize) -> Result<&'a [u8]> {
-        let end = self.position.checked_add(count).ok_or_else(|| {
-            Error::new("PSBT map length overflows")
-        })?;
+        let end = self
+            .position
+            .checked_add(count)
+            .ok_or_else(|| Error::new("PSBT map length overflows"))?;
         if end > self.bytes.len() {
             return Err(Error::new(format!(
                 "PSBT map is truncated: wanted {count} bytes at offset {}, only {} remain",
@@ -170,7 +171,9 @@ fn read_map(cursor: &mut Cursor) -> Result<Vec<RawPair>> {
         if key_len == 0 {
             return Ok(pairs);
         }
-        let key = cursor.take(usize::try_from(key_len).map_err(length_error)?)?.to_vec();
+        let key = cursor
+            .take(usize::try_from(key_len).map_err(length_error)?)?
+            .to_vec();
         let value_len = read_compact_size(cursor)?;
         let value = cursor
             .take(usize::try_from(value_len).map_err(length_error)?)?
@@ -282,5 +285,4 @@ mod tests {
         // A truncated envelope is tolerated as opaque (None), not an error.
         assert_eq!(split_proprietary(&[0x09, 0x61]), None);
     }
-
 }

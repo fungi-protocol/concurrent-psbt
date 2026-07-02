@@ -335,7 +335,8 @@ fn size_totals(
     } else {
         0
     };
-    let overhead_weight = (4 + 4
+    let overhead_weight = (4
+        + 4
         + compact_size_len(psbt.inputs.len() as u64)
         + compact_size_len(psbt.outputs.len() as u64))
         * 4

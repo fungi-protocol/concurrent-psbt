@@ -19,7 +19,6 @@ unattributed.
 
 ## Relation to confirmations
 
-The confirmation protocol (ptj-net.md, Layer 4) carries `(peer_id,
-unique_id)` pairs. In the honest setting these feed pseudo-descriptors
+The confirmation protocol (ptj-net.md, Layer 4) carries `(peer_id, unique_id)` pairs. In the honest setting these feed pseudo-descriptors
 directly. In the anonymous setting `peer_id` is a session-scoped
 pseudonym at most; it must not be linked to transport-level identities.

@@ -28,10 +28,10 @@ default = ["webgui"]
 # concurrent-psbt-wasm export for the PWA; the digest->image mapping must
 # stay identical across both surfaces.)
 webgui = [
-    "dep:bitcoin-payment-instructions",
-    "dep:lifehash",
-    "dep:miniscript",
-    "dep:png",
+  "dep:bitcoin-payment-instructions",
+  "dep:lifehash",
+  "dep:miniscript",
+  "dep:png",
 ]
 # WIP: interactive terminal UI (`ptj tui`). NOT in the default set — the TUI
 # pulls a terminal stack (ratatui + crossterm) the plain CLI doesn't need.
@@ -63,34 +63,40 @@ all-transports = ["iroh-sync", "arti", "nym", "emissary", "mdk"]
 # stack via transport-plugin-api's re-exports, plus tokio's process/io/sync
 # bits and the tokio<->futures compat shims the vat needs.
 plugin-transports = [
-    "dep:transport-plugin-api",
-    "dep:futures",
-    "dep:tokio-util",
-    "tokio/process",
-    "tokio/io-util",
-    # io-std is for the ptj-fake-plugin test binary, which serves the plugin
-    # side of the protocol over its OWN stdio; the host side only uses child
-    # pipes (tokio/process).
-    "tokio/io-std",
-    "tokio/sync",
+  "dep:transport-plugin-api",
+  "dep:futures",
+  "dep:tokio-util",
+  "tokio/process",
+  "tokio/io-util",
+  # io-std is for the ptj-fake-plugin test binary, which serves the plugin
+  # side of the protocol over its OWN stdio; the host side only uses child
+  # pipes (tokio/process).
+  "tokio/io-std",
+  "tokio/sync",
 ]
 
 [dependencies]
 # Desugars the async `Transport` impl for `LocalTransport` to boxed futures.
 async-trait = "0.1"
 bitcoin = "0.32"
+bitcoin-payment-instructions = { version = "0.7.0", optional = true }
 chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive"] }
 concurrent-psbt = { path = "../concurrent-psbt" }
 # Terminal backend + input events for the `tui` feature only (ratatui's
 # conventional pairing). Version grounded via `cargo add --dry-run` (2026-07).
 crossterm = { version = "0.29.0", optional = true }
+# futures::io::{BufReader, BufWriter} wrap the child's stdio for the capnp
+# twoparty vat (which speaks the futures IO traits). Version grounded via
+# `cargo add` (2026-07). `plugin-transports` only.
+futures = { version = "0.3.32", optional = true }
+lifehash = { version = "0.1.0", optional = true }
+miniscript = { version = "13.1.0", optional = true }
 # Event-driven `--ongoing` sync: react to source/state file-change events
 # instead of a busy poll-sleep loop (a poll-interval fallback is retained).
 notify = "8"
-psbt-v2 = { version = "0.3.0", features = [
-    "base64",
-] }
+png = { version = "0.17.16", optional = true }
+psbt-v2 = { version = "0.3.0", features = ["base64"] }
 rand = "0.9"
 # Terminal UI framework for the `tui` feature only. Version grounded via
 # `cargo add --dry-run` (2026-07).
@@ -101,31 +107,23 @@ serde_json = "1"
 # `time` = the peer-wait sleep. `main`/non-sync commands stay sync and never
 # touch it; no transport crate carries a runtime except iroh's own actor thread.
 tokio = { version = "1", features = ["rt", "time"] }
-transport-core = { path = "../transport-core" }
-transport-iroh = { path = "../transport-iroh", optional = true }
-transport-arti = { path = "../transport-arti", optional = true }
-transport-nym = { path = "../transport-nym", optional = true }
-transport-emissary = { path = "../transport-emissary", optional = true }
-transport-mdk = { path = "../transport-mdk", optional = true }
-transport-str0m = { path = "../transport-str0m", optional = true }
-transport-webrtc-rs = { path = "../transport-webrtc-rs", optional = true }
-transport-payjoin-dir = { path = "../transport-payjoin-dir", optional = true }
-miniscript = { version = "13.1.0", optional = true }
-bitcoin-payment-instructions = { version = "0.7.0", optional = true }
-lifehash = { version = "0.1.0", optional = true }
-png = { version = "0.17.16", optional = true }
-# The host<->plugin wire contract (schema bindings + re-exported
-# capnp/capnp-rpc, so host and plugin binaries share one grounded RPC stack).
-# `plugin-transports` only.
-transport-plugin-api = { path = "../transport-plugin-api", optional = true }
-# futures::io::{BufReader, BufWriter} wrap the child's stdio for the capnp
-# twoparty vat (which speaks the futures IO traits). Version grounded via
-# `cargo add` (2026-07). `plugin-transports` only.
-futures = { version = "0.3.32", optional = true }
 # tokio<->futures IO compat: tokio::process pipes -> the futures traits the
 # vat consumes. Version grounded via `cargo add` (2026-07). `plugin-transports`
 # only.
 tokio-util = { version = "0.7.18", features = ["compat"], optional = true }
+transport-arti = { path = "../transport-arti", optional = true }
+transport-core = { path = "../transport-core" }
+transport-emissary = { path = "../transport-emissary", optional = true }
+transport-iroh = { path = "../transport-iroh", optional = true }
+transport-mdk = { path = "../transport-mdk", optional = true }
+transport-nym = { path = "../transport-nym", optional = true }
+transport-payjoin-dir = { path = "../transport-payjoin-dir", optional = true }
+# The host<->plugin wire contract (schema bindings + re-exported
+# capnp/capnp-rpc, so host and plugin binaries share one grounded RPC stack).
+# `plugin-transports` only.
+transport-plugin-api = { path = "../transport-plugin-api", optional = true }
+transport-str0m = { path = "../transport-str0m", optional = true }
+transport-webrtc-rs = { path = "../transport-webrtc-rs", optional = true }
 # TODO(transport-nostr): unauthored — no such crate exists yet.
 # transport-nostr = { path = "../transport-nostr", optional = true }
 

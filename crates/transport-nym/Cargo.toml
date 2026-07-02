@@ -14,14 +14,14 @@ edition = "2024"
 nym = []
 
 [dependencies]
+# Desugars the async `AnonymousChannel` impl to boxed futures so the seam stays
+# dyn-compatible. Proc-macro only — no runtime, no network SDK.
+async-trait = "0.1"
 # TODO(ground-deps): defer the network SDK until pinned to a resolvable
 # crate/version (nym-sdk). The `nym` feature is declared but empty so the
 # default skeleton (channel trait + framing) compiles; the feature-on network
 # path in the crate source stays authored-but-unverified until then.
 transport-core = { path = "../transport-core" }
-# Desugars the async `AnonymousChannel` impl to boxed futures so the seam stays
-# dyn-compatible. Proc-macro only — no runtime, no network SDK.
-async-trait = "0.1"
 
 [dev-dependencies]
 # `futures::executor::block_on` drives the async skeleton/channel tests (which

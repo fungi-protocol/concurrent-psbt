@@ -254,7 +254,7 @@ use imp::Inner;
 // ===========================================================================
 #[cfg(not(feature = "str0m"))]
 mod skeleton {
-    use super::{Str0mConfig, Error, Result};
+    use super::{Error, Result, Str0mConfig};
 
     /// The clear, uniform error every skeleton operation returns.
     fn not_built() -> Error {
@@ -315,7 +315,7 @@ use skeleton::Inner;
 mod tests {
     use super::*;
     use std::io::Cursor;
-    use transport_core::{deframe, frame, read_frame, write_frame, Message, Transport};
+    use transport_core::{Message, Transport, deframe, frame, read_frame, write_frame};
 
     // ---- channel-trait-satisfaction test (no network) --------------------
 

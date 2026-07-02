@@ -36,7 +36,7 @@ use transport_core::{AnonymousChannel, Error, Result};
 
 use nym_sdk::mixnet::{self, MixnetClient, Recipient};
 
-use crate::{unwrap_incoming, wrap_outgoing, NymAddress};
+use crate::{NymAddress, unwrap_incoming, wrap_outgoing};
 
 /// The feature-on guts of [`crate::NymTransport`].
 pub(crate) struct Inner {

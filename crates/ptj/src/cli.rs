@@ -648,4 +648,3 @@ impl FromStr for OutputArg {
         })
     }
 }
-

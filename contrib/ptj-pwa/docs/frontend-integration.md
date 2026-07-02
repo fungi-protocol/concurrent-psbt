@@ -26,8 +26,7 @@ type FetchLike = (
 Every backend op (`inspectPsbt`, `createPsbt`, `joinPsbts`, `sortPsbt`,
 `makeUnordered`, `atomizePsbt`, `concatenatePsbts`, `exportBip174`,
 `importBip174`, `syncPsbts`) takes `fetchImpl: FetchLike` as arg 1 and calls
-`postJson(fetchImpl, "/api/<op>", body)`. `postJson` does `JSON.stringify → fetch
-→ .json()` and throws `PtjBackendError(status, msg)` on `!ok`.
+`postJson(fetchImpl, "/api/<op>", body)`. `postJson` does `JSON.stringify → fetch → .json()` and throws `PtjBackendError(status, msg)` on `!ok`.
 
 The routes and DTOs are FIXED and shared with webgui:
 

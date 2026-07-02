@@ -23,8 +23,7 @@ alternative rejected.
 **Decision.** The PWA implements the EXISTING `FetchLike` seam from
 `contrib/demo-gui/src/backend.ts` with a `WasmBackend`. `WasmBackend` accepts the
 same `(path, {method,headers,body})` shape, dispatches on `path`, and calls a
-wasm-bindgen export that runs the identical ptj `*_response_result(&[u8]) ->
-Result<Vec<u8>>` logic. It resolves a `FetchResponse` (`ok/status/json()`).
+wasm-bindgen export that runs the identical ptj `*_response_result(&[u8]) -> Result<Vec<u8>>` logic. It resolves a `FetchResponse` (`ok/status/json()`).
 
 **Why.** `backend.ts` is already fetch-agnostic; only `app.ts` hard-binds
 `window.fetch`. Matching `FetchLike` means the `backend.ts` free functions
@@ -128,6 +127,7 @@ out of scope for the PWA to host or embed such a server.
 ## D7. Prefer browser-native web-sys paths; defer heavy Rust SDKs
 
 **Decision.**
+
 - **WebRTC:** prefer the browser's native `RTCPeerConnection`/`RTCDataChannel`
   driven from TS/wasm (grounded: `web-sys` has these; the TS side can use them
   directly). `str0m`-in-wasm is a viable-but-heavier ALTERNATE, deferred.
@@ -147,8 +147,7 @@ so compiling a Rust WebRTC stack to wasm is redundant for the primary path.
 ## D8. Every transport presents the transport-core channel seam shape
 
 **Decision.** Each PWA transport is modeled as the same channel abstraction the
-Rust `transport-core` defines: `send(bytes)` broadcast + `recv() -> snapshot of
-all messages` (pull). WebRTC and the signaling mailbox are `AnonymousChannel`
+Rust `transport-core` defines: `send(bytes)` broadcast + `recv() -> snapshot of all messages` (pull). WebRTC and the signaling mailbox are `AnonymousChannel`
 (bare bytes, no verifiable sender). Nostr is `AttributableChannel` (sender pubkey
 as `SenderId`).
 

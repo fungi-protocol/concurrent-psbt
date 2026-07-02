@@ -227,10 +227,7 @@ fn actor_main(
 
 /// Spawn the child, wire the vat over its stdio, run the handshake, and
 /// return the negotiated transport capability.
-async fn connect_and_handshake(
-    binary: &Path,
-    config: Vec<(String, String)>,
-) -> Result<WireClient> {
+async fn connect_and_handshake(binary: &Path, config: Vec<(String, String)>) -> Result<WireClient> {
     let mut child = tokio::process::Command::new(binary)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -273,9 +270,10 @@ async fn connect_and_handshake(
         // The kind the host PREFERS; the plugin's answer states what it
         // actually serves, and the host follows the answer.
         hello.set_channel_kind(handshake::ChannelKind::Anonymous);
-        let mut entries = hello.init_config(u32::try_from(config.len()).map_err(|_| {
-            Error::new("plugin config passthrough has more than u32::MAX entries")
-        })?);
+        let mut entries =
+            hello.init_config(u32::try_from(config.len()).map_err(|_| {
+                Error::new("plugin config passthrough has more than u32::MAX entries")
+            })?);
         for (index, (key, value)) in config.iter().enumerate() {
             let mut entry = entries.reborrow().get(index as u32);
             entry.set_key(key.as_str());
@@ -296,9 +294,8 @@ async fn connect_and_handshake(
         .which()
         .map_err(|error| Error::new(format!("plugin handshake with {display}: {error}")))?
     {
-        handshake_result::Ok(answer) => {
-            answer.map_err(|error| Error::new(format!("plugin handshake with {display}: {error}")))?
-        }
+        handshake_result::Ok(answer) => answer
+            .map_err(|error| Error::new(format!("plugin handshake with {display}: {error}")))?,
         handshake_result::Err(refusal) => {
             let message = refusal
                 .and_then(|refusal| refusal.get_message())
@@ -332,13 +329,17 @@ async fn connect_and_handshake(
                 .promise
                 .await
                 .map_err(|error| {
-                    Error::new(format!("requesting {display}'s anonymous transport: {error}"))
+                    Error::new(format!(
+                        "requesting {display}'s anonymous transport: {error}"
+                    ))
                 })?;
             let transport = response
                 .get()
                 .and_then(|results| results.get_transport())
                 .map_err(|error| {
-                    Error::new(format!("requesting {display}'s anonymous transport: {error}"))
+                    Error::new(format!(
+                        "requesting {display}'s anonymous transport: {error}"
+                    ))
                 })?;
             Ok(WireClient::Anonymous(transport))
         }

@@ -67,9 +67,9 @@ fn inspect_output(output: &psbt_v2::v2::Output) -> Value {
 }
 
 fn known_input_total_sats(inputs: &[psbt_v2::v2::Input]) -> Option<u64> {
-    inputs
-        .iter()
-        .try_fold(0_u64, |sum, input| sum.checked_add(input_amount_sats(input)?))
+    inputs.iter().try_fold(0_u64, |sum, input| {
+        sum.checked_add(input_amount_sats(input)?)
+    })
 }
 
 fn input_amount_sats(input: &psbt_v2::v2::Input) -> Option<u64> {

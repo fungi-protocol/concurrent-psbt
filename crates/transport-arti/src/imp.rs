@@ -65,7 +65,7 @@ use tor_hsservice::{RendRequest, RunningOnionService, StreamRequest};
 use tor_proto::stream::IncomingStreamRequest;
 use tor_rtcompat::PreferredRuntime;
 
-use transport_core::{Error, Result, MAX_FRAME_LEN};
+use transport_core::{Error, MAX_FRAME_LEN, Result};
 
 use super::ArtiConfig;
 
@@ -355,15 +355,22 @@ where
         };
         let inbound = Arc::clone(&inbound);
         // Box the inner stream so the spawned future has a concrete Unpin type.
-        tokio::spawn(serve_circuit(Box::pin(stream_requests), listen_port, inbound));
+        tokio::spawn(serve_circuit(
+            Box::pin(stream_requests),
+            listen_port,
+            inbound,
+        ));
     }
 }
 
 /// Serve one client circuit: accept each `BEGIN` targeting our `listen_port`,
 /// read one framed opaque record off the resulting data stream, and stash the
 /// bare bytes (no sender identity — a Tor stream carries no peer identity).
-async fn serve_circuit<S>(mut stream_requests: S, listen_port: u16, inbound: Arc<Mutex<Vec<Vec<u8>>>>)
-where
+async fn serve_circuit<S>(
+    mut stream_requests: S,
+    listen_port: u16,
+    inbound: Arc<Mutex<Vec<Vec<u8>>>>,
+) where
     S: Stream<Item = StreamRequest> + Unpin + Send + 'static,
 {
     while let Some(stream_request) = stream_requests.next().await {

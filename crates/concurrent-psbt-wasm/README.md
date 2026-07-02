@@ -45,23 +45,23 @@ crate's exports, via its `PtjWasmModule` glue-surface type.
 
 ## Exported operations (JS names — camelCase js_name, the naming rule)
 
-| Export          | Backend method     | webgui route          | Request (positional args / snake_case object)  | Response                        |
+| Export | Backend method | webgui route | Request (positional args / snake_case object) | Response |
 |-----------------|--------------------|-----------------------|--------------------------------------------------|---------------------------------|
-| `inspect`       | `inspectPsbt`      | `/api/inspect`        | `psbt: string`                                   | inspect object (unwrapped)      |
-| `create`        | `createPsbt`       | `/api/create`         | `{network,ordering?,seed_hex?,inputs,outputs}`   | `{psbt,inspect}`                |
-| `join`          | `joinPsbts`        | `/api/join`           | `string[]`                                       | `{psbt,inspect}`                |
-| `sort`          | `sortPsbt`         | `/api/sort`           | `(psbt: string, seedHex?: string)` — positional  | `{psbt,inspect}`                |
-| `makeUnordered` | `makeUnordered`    | `/api/make-unordered` | `psbt: string`                                   | `{psbt,inspect}`                |
-| `atomize`       | `atomizePsbt`      | `/api/atomize`        | `psbt: string`                                   | `{fragments:[{psbt,inspect}]}`  |
-| `concatenate`   | `concatenatePsbts` | `/api/concatenate`    | `string[]`                                       | `{psbt,inspect}`                |
-| `exportBip174`  | `exportBip174`     | `/api/export-bip174`  | `psbt: string`                                   | `{format:"bip174",psbt}`        |
-| `importBip174`  | `importBip174`     | `/api/import-bip174`  | `psbt: string`                                   | `{psbt,inspect}`                |
-| `pay`           | `pay`              | (new)                 | `{psbt,payment_hex,secret_hex?,dummy?}`          | `{psbt,inspect}`                |
-| `confirm`       | `confirm`          | (new)                 | `{psbt,confirmation_hex,secret_hex?}`            | `{psbt,inspect}`                |
-| `payments`      | `payments`         | (new)                 | `{psbt,secret_hex?}`                             | `{payments:[hex],confirmations:[hex]}` |
-| `localSync`     | `syncPsbts` (local leg) | `/api/sync` (local branch) | `string[]` (non-empty)                 | `{psbt,inspect,payments:[],confirmations:[]}` |
-| `initPanicHook` | —                  | —                     | —                                                | wires panics to console (debug) |
-| `version`       | —                  | —                     | —                                                | crate semver string             |
+| `inspect` | `inspectPsbt` | `/api/inspect` | `psbt: string` | inspect object (unwrapped) |
+| `create` | `createPsbt` | `/api/create` | `{network,ordering?,seed_hex?,inputs,outputs}` | `{psbt,inspect}` |
+| `join` | `joinPsbts` | `/api/join` | `string[]` | `{psbt,inspect}` |
+| `sort` | `sortPsbt` | `/api/sort` | `(psbt: string, seedHex?: string)` — positional | `{psbt,inspect}` |
+| `makeUnordered` | `makeUnordered` | `/api/make-unordered` | `psbt: string` | `{psbt,inspect}` |
+| `atomize` | `atomizePsbt` | `/api/atomize` | `psbt: string` | `{fragments:[{psbt,inspect}]}` |
+| `concatenate` | `concatenatePsbts` | `/api/concatenate` | `string[]` | `{psbt,inspect}` |
+| `exportBip174` | `exportBip174` | `/api/export-bip174` | `psbt: string` | `{format:"bip174",psbt}` |
+| `importBip174` | `importBip174` | `/api/import-bip174` | `psbt: string` | `{psbt,inspect}` |
+| `pay` | `pay` | (new) | `{psbt,payment_hex,secret_hex?,dummy?}` | `{psbt,inspect}` |
+| `confirm` | `confirm` | (new) | `{psbt,confirmation_hex,secret_hex?}` | `{psbt,inspect}` |
+| `payments` | `payments` | (new) | `{psbt,secret_hex?}` | `{payments:[hex],confirmations:[hex]}` |
+| `localSync` | `syncPsbts` (local leg) | `/api/sync` (local branch) | `string[]` (non-empty) | `{psbt,inspect,payments:[],confirmations:[]}` |
+| `initPanicHook` | — | — | — | wires panics to console (debug) |
+| `version` | — | — | — | crate semver string |
 
 `localSync` is the LOCAL-FIRST sync core: `syncPsbts` works fully in-browser
 with no server; a networked transport (payjoin-dir/OHTTP, webrtc, nostr) is
@@ -119,12 +119,11 @@ Two build-ENV facts (neither is a code change to concurrent-psbt):
    `aarch64-apple-darwin`; add `targets = [ "wasm32-unknown-unknown" ];` to the
    rust-overlay override, else a bare wasm build fails "can't find crate for
    std".
-2. **Nix cc-wrapper hardening breaks secp256k1-sys' C build.** cc-rs compiles
+1. **Nix cc-wrapper hardening breaks secp256k1-sys' C build.** cc-rs compiles
    secp256k1's C via the nix-wrapped clang, which injects the host-only flag
    `-fzero-call-used-regs=used-gpr` from `NIX_HARDENING_ENABLE`; clang rejects it
    for wasm32. Fix: strip host-only hardening for the wasm build —
-   `NIX_HARDENING_ENABLE="fortify pic"` (or `hardeningDisable =
-   ["zerocallusedregs" "stackprotector" "stackclashprotection"]`). This is the
+   `NIX_HARDENING_ENABLE="fortify pic"` (or `hardeningDisable = ["zerocallusedregs" "stackprotector" "stackclashprotection"]`). This is the
    ONLY hard blocker and it is entirely in the nix env.
 
 Downstream tooling (not a code blocker): producing the browser-loadable module

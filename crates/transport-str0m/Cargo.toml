@@ -50,8 +50,8 @@ str0m = { version = "0.21.0", optional = true }
 # this crate drives it over a blocking std::net::UdpSocket.
 transport-core = { path = "../transport-core" }
 
-[lints]
-workspace = true
-
 [dev-dependencies]
 futures = "0.3.32"
+
+[lints]
+workspace = true

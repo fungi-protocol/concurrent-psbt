@@ -176,10 +176,11 @@ mod tests {
     }
 
     fn exercise_modifiability_transitions(version: i32) {
-        let both = Constructor::<BothModifiable, Unset>::try_from_psbt(psbt_with_flags(0x03, version))
-            .expect("both-modifiable flags are valid")
-            .input(test_input(1))
-            .output(test_output(1));
+        let both =
+            Constructor::<BothModifiable, Unset>::try_from_psbt(psbt_with_flags(0x03, version))
+                .expect("both-modifiable flags are valid")
+                .input(test_input(1))
+                .output(test_output(1));
         assert_eq!(both.0.inputs.len(), 1);
         assert_eq!(both.0.outputs.len(), 1);
 
@@ -187,21 +188,24 @@ mod tests {
         assert_eq!(outputs.0.global.tx_modifiable_flags & 0x03, 0x02);
         assert_eq!(outputs.no_more_outputs().into_inner().outputs.len(), 2);
 
-        let inputs = Constructor::<BothModifiable, Unset>::try_from_psbt(psbt_with_flags(0x03, version))
-            .expect("both-modifiable flags are valid")
-            .no_more_outputs()
-            .input(test_input(2));
+        let inputs =
+            Constructor::<BothModifiable, Unset>::try_from_psbt(psbt_with_flags(0x03, version))
+                .expect("both-modifiable flags are valid")
+                .no_more_outputs()
+                .input(test_input(2));
         assert_eq!(inputs.0.global.tx_modifiable_flags & 0x03, 0x01);
         assert_eq!(inputs.no_more_inputs().into_inner().inputs.len(), 1);
 
-        let inputs = Constructor::<InputsModifiable, Unset>::try_from_psbt(psbt_with_flags(0x01, version))
-            .expect("inputs-modifiable flags are valid")
-            .input(test_input(3));
+        let inputs =
+            Constructor::<InputsModifiable, Unset>::try_from_psbt(psbt_with_flags(0x01, version))
+                .expect("inputs-modifiable flags are valid")
+                .input(test_input(3));
         assert_eq!(inputs.no_more_inputs().into_inner().inputs.len(), 1);
 
-        let outputs = Constructor::<OutputsModifiable, Unset>::try_from_psbt(psbt_with_flags(0x02, version))
-            .expect("outputs-modifiable flags are valid")
-            .output(test_output(3));
+        let outputs =
+            Constructor::<OutputsModifiable, Unset>::try_from_psbt(psbt_with_flags(0x02, version))
+                .expect("outputs-modifiable flags are valid")
+                .output(test_output(3));
         assert_eq!(outputs.no_more_outputs().into_inner().outputs.len(), 1);
     }
 
@@ -214,21 +218,31 @@ mod tests {
         .expect("the result domain accepts flags before typestate validation");
         assert!(wrong_typestate.try_unwrap().is_err());
 
-        let both_error = Constructor::<BothModifiable, Unset>::try_from_psbt(psbt_with_flags(0x01, version))
-            .expect_err("both-modifiable rejects inputs-only flags");
+        let both_error =
+            Constructor::<BothModifiable, Unset>::try_from_psbt(psbt_with_flags(0x01, version))
+                .expect_err("both-modifiable rejects inputs-only flags");
         assert!(matches!(
             both_error,
-            ConstructorError::FlagsMismatch { expected: 0x03, actual: 0x01 }
+            ConstructorError::FlagsMismatch {
+                expected: 0x03,
+                actual: 0x01
+            }
         ));
         assert!(both_error.to_string().contains("expected 0x03"));
 
         assert!(matches!(
             Constructor::<InputsModifiable, Unset>::try_from_psbt(psbt_with_flags(0x02, version)),
-            Err(ConstructorError::FlagsMismatch { expected: 0x01, actual: 0x02 })
+            Err(ConstructorError::FlagsMismatch {
+                expected: 0x01,
+                actual: 0x02
+            })
         ));
         assert!(matches!(
             Constructor::<OutputsModifiable, Unset>::try_from_psbt(psbt_with_flags(0x03, version)),
-            Err(ConstructorError::FlagsMismatch { expected: 0x02, actual: 0x03 })
+            Err(ConstructorError::FlagsMismatch {
+                expected: 0x02,
+                actual: 0x03
+            })
         ));
 
         for error in [

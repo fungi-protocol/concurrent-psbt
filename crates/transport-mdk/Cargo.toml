@@ -3,6 +3,20 @@ name = "transport-mdk"
 version.workspace = true
 edition = "2024"
 
+[features]
+default = []
+# Turning on `mdk` pulls in the MLS SDK, the Nostr event/keys types, the relay
+# client, and the runtime the backend uses, and switches the channel from the
+# skeleton stub to the real send/recv path over Nostr relays.
+mdk = [
+  "dep:hex",
+  "dep:mdk-core",
+  "dep:mdk-memory-storage",
+  "dep:nostr",
+  "dep:nostr-sdk",
+  "dep:tokio",
+]
+
 # transport-mdk — an ATTRIBUTABLE transport over MDK (the Nostr Messaging
 # Development Kit: MLS group messaging carried on Nostr events). A received
 # application message carries the sending group member's public key, which we
@@ -19,10 +33,13 @@ edition = "2024"
 # compiled and tested WITHOUT the feature (no network required).
 
 [dependencies]
-transport-core = { path = "../transport-core" }
 # Desugars the async `AttributableChannel` impl to boxed futures so `MdkChannel`
 # stays dyn-compatible. Proc-macro only — no runtime, no network SDK.
 async-trait = "0.1"
+# Hex-encodes the framed payload into the rumor's string content (and the
+# group id into the `h` tag filter) — the same encoding util mdk-core itself
+# uses. A rumor's content is a String; opaque bytes have to ride an encoding.
+hex = { version = "0.4", optional = true }
 
 # MLS/Nostr stack — optional, gated behind `mdk`. mdk-core is the Marmot
 # Development Kit messaging API (`MDK<Storage>`, create_message /
@@ -31,33 +48,19 @@ async-trait = "0.1"
 # marmot-*); nostr/nostr-sdk 0.44 match mdk-core 0.8's own nostr pin.
 mdk-core = { version = "0.8", optional = true }
 mdk-memory-storage = { version = "0.8", optional = true }
-nostr = { version = "0.44", default-features = false, features = ["std", "nip59"], optional = true }
+nostr = { version = "0.44", default-features = false, features = [
+  "std",
+  "nip59",
+], optional = true }
 nostr-sdk = { version = "0.44", features = ["nip59"], optional = true }
 # The actor thread's single-threaded runtime + the mpsc/oneshot request seam.
 tokio = { version = "1", features = ["rt", "sync"], optional = true }
-# Hex-encodes the framed payload into the rumor's string content (and the
-# group id into the `h` tag filter) — the same encoding util mdk-core itself
-# uses. A rumor's content is a String; opaque bytes have to ride an encoding.
-hex = { version = "0.4", optional = true }
+transport-core = { path = "../transport-core" }
 
 [dev-dependencies]
 # `futures::executor::block_on` drives the async skeleton/channel tests (which
 # have no tokio) to completion. Dev-only, runtime-free.
 futures = "0.3"
-
-[features]
-default = []
-# Turning on `mdk` pulls in the MLS SDK, the Nostr event/keys types, the relay
-# client, and the runtime the backend uses, and switches the channel from the
-# skeleton stub to the real send/recv path over Nostr relays.
-mdk = [
-    "dep:hex",
-    "dep:mdk-core",
-    "dep:mdk-memory-storage",
-    "dep:nostr",
-    "dep:nostr-sdk",
-    "dep:tokio",
-]
 
 [lints]
 workspace = true

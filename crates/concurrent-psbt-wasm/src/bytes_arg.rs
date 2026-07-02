@@ -106,7 +106,10 @@ mod tests {
 
     #[test]
     fn hex_wins_for_hex_charset() {
-        assert_eq!(parse_bytes_arg("deadbeef").unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(
+            parse_bytes_arg("deadbeef").unwrap(),
+            vec![0xde, 0xad, 0xbe, 0xef]
+        );
         assert_eq!(parse_bytes_arg("ABCD").unwrap(), vec![0xab, 0xcd]);
     }
 
@@ -148,7 +151,10 @@ mod tests {
             &[0xde, 0xad, 0xbe, 0xef],
         )
         .unwrap();
-        assert_eq!(parse_bytes_arg(&encoded).unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(
+            parse_bytes_arg(&encoded).unwrap(),
+            vec![0xde, 0xad, 0xbe, 0xef]
+        );
     }
 
     #[test]

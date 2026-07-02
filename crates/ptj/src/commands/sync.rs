@@ -835,10 +835,8 @@ mod tests {
         }
 
         let mut transport = Empty { published: 0 };
-        let (joined, messages) = drive_async(async {
-            sync_step_allow_empty(&mut transport).await
-        })
-        .unwrap();
+        let (joined, messages) =
+            drive_async(async { sync_step_allow_empty(&mut transport).await }).unwrap();
         assert!(joined.is_none());
         assert!(messages.is_empty());
         assert_eq!(transport.published, 0);

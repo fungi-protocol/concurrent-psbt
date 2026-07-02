@@ -13,8 +13,7 @@ use crate::{Error, Result};
 // explicit "/demo" route — WIP-retained, still the playwright surface.
 const SESSION_HTML: &[u8] = include_bytes!("../../../contrib/demo-gui/session.html");
 const SESSION_APP_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/session/app.js");
-const SESSION_STATE_JS: &[u8] =
-    include_bytes!("../../../contrib/demo-gui/dist/session/state.js");
+const SESSION_STATE_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/session/state.js");
 // The session presenter modules app.js imports at runtime: display/card
 // projections, wiring (object graph + join admissibility + enablement),
 // universal paste ingestion, the field editor, and liberal encoding
@@ -22,12 +21,9 @@ const SESSION_STATE_JS: &[u8] =
 // the concurrent-psbt-wasm `lifehash` export, lazily loaded by the page.)
 const SESSION_DISPLAY_JS: &[u8] =
     include_bytes!("../../../contrib/demo-gui/dist/session/display.js");
-const SESSION_WIRING_JS: &[u8] =
-    include_bytes!("../../../contrib/demo-gui/dist/session/wiring.js");
-const SESSION_INGEST_JS: &[u8] =
-    include_bytes!("../../../contrib/demo-gui/dist/session/ingest.js");
-const SESSION_EDITOR_JS: &[u8] =
-    include_bytes!("../../../contrib/demo-gui/dist/session/editor.js");
+const SESSION_WIRING_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/session/wiring.js");
+const SESSION_INGEST_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/session/ingest.js");
+const SESSION_EDITOR_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/session/editor.js");
 const SESSION_ENCODING_JS: &[u8] =
     include_bytes!("../../../contrib/demo-gui/dist/session/encoding.js");
 const SESSION_PALETTE_JS: &[u8] =
@@ -503,13 +499,14 @@ fn sync_config_from_request(request: &serde_json::Value) -> Result<crate::cli::S
     use clap::ValueEnum as _;
 
     let transport = match request.get("transport").and_then(serde_json::Value::as_str) {
-        Some(name) => crate::cli::TransportKind::from_str(name, /* ignore_case */ true)
-            .map_err(|_| {
+        Some(name) => {
+            crate::cli::TransportKind::from_str(name, /* ignore_case */ true).map_err(|_| {
                 Error::new(format!(
                     "unknown transport '{name}' (expected one of: local, iroh, arti, nym, \
                      emissary, mdk, str0m, webrtc-rs, payjoin-dir)"
                 ))
-            })?,
+            })?
+        }
         // Back-compat inference: a pasted iroh doc-ticket selects Iroh; no
         // ticket + no transport means a pure local Layer-2 fold.
         None => {
@@ -559,7 +556,9 @@ fn sync_config_from_request(request: &serde_json::Value) -> Result<crate::cli::S
     // would let the webgui skip the filesystem.)
     let iroh_ticket = match (
         transport,
-        request.get("iroh_ticket").and_then(serde_json::Value::as_str),
+        request
+            .get("iroh_ticket")
+            .and_then(serde_json::Value::as_str),
     ) {
         (crate::cli::TransportKind::Iroh, Some(ticket)) => Some(write_ticket_tempfile(ticket)?),
         (crate::cli::TransportKind::Iroh, None) => {
@@ -588,9 +587,7 @@ fn sync_config_from_request(request: &serde_json::Value) -> Result<crate::cli::S
                 value
                     .as_str()
                     .map(std::path::PathBuf::from)
-                    .ok_or_else(|| {
-                        Error::new(format!("request sources[{index}] must be a string"))
-                    })
+                    .ok_or_else(|| Error::new(format!("request sources[{index}] must be a string")))
             })
             .collect::<Result<Vec<_>>>()?,
     };
@@ -602,7 +599,10 @@ fn sync_config_from_request(request: &serde_json::Value) -> Result<crate::cli::S
     // the machine running `ptj webgui` (an offline localhost GUI: the server
     // IS the user's machine), exactly as the iroh ticket is a server-side
     // temp file above.
-    let webrtc_role = match request.get("webrtc_role").and_then(serde_json::Value::as_str) {
+    let webrtc_role = match request
+        .get("webrtc_role")
+        .and_then(serde_json::Value::as_str)
+    {
         Some(name) => Some(
             crate::cli::WebrtcRoleArg::from_str(name, /* ignore_case */ true).map_err(|_| {
                 Error::new(format!(
@@ -618,7 +618,9 @@ fn sync_config_from_request(request: &serde_json::Value) -> Result<crate::cli::S
             Some(value) => value
                 .as_str()
                 .map(|path| Some(std::path::PathBuf::from(path)))
-                .ok_or_else(|| Error::new(format!("request JSON field `{field}` must be a string"))),
+                .ok_or_else(|| {
+                    Error::new(format!("request JSON field `{field}` must be a string"))
+                }),
         }
     };
     let signal_out = signal_path("signal_out")?;
@@ -1381,7 +1383,8 @@ fn sort_response_result(body: &[u8]) -> Result<Vec<u8>> {
     let constructor =
         concurrent_psbt::roles::constructor::dynamic::Constructor::try_from_psbt(psbt)
             .map_err(|error| Error::new(format!("request psbt: {error}")))?;
-    let sorted = crate::commands::sort::sort_psbt(constructor.into_inner(), seed, allow_short_seed)?;
+    let sorted =
+        crate::commands::sort::sort_psbt(constructor.into_inner(), seed, allow_short_seed)?;
     Ok(serde_json::json!({
         "psbt": crate::io::encode_psbt(&sorted),
         "inspect": crate::commands::inspect::inspect_psbt(&sorted),
@@ -1646,10 +1649,10 @@ fn payment_record_from_request(request: &serde_json::Value) -> Result<Vec<u8>> {
         ),
     };
     let payer = optional_hex32_field(request, "payer_hex")?;
-    Ok(
-        crate::commands::negotiation::payment_from_parts(address, amount_btc, network, label, payer)?
-            .encode(),
-    )
+    Ok(crate::commands::negotiation::payment_from_parts(
+        address, amount_btc, network, label, payer,
+    )?
+    .encode())
 }
 
 /// Read a required string field from a request object.
@@ -1665,9 +1668,9 @@ fn request_string<'a>(request: &'a serde_json::Value, field: &str) -> Result<&'a
 fn optional_bool(request: &serde_json::Value, field: &str) -> Result<bool> {
     match request.get(field) {
         None | Some(serde_json::Value::Null) => Ok(false),
-        Some(value) => value.as_bool().ok_or_else(|| {
-            Error::new(format!("request JSON field `{field}` must be a boolean"))
-        }),
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| Error::new(format!("request JSON field `{field}` must be a boolean"))),
     }
 }
 
@@ -1902,7 +1905,9 @@ mod tests {
             assert_eq!(demo.status, 200, "{path}");
             assert_eq!(demo.content_type, "text/html; charset=utf-8", "{path}");
             assert!(
-                String::from_utf8(demo.body).unwrap().contains("dist/app.js"),
+                String::from_utf8(demo.body)
+                    .unwrap()
+                    .contains("dist/app.js"),
                 "{path} must serve the demo shell"
             );
         }
@@ -1944,8 +1949,11 @@ mod tests {
         );
 
         // The shared-frontend seam modules app.js loads at runtime.
-        let http_backend =
-            response_for("GET", "/dist/shared-frontend/backends/http.js?v=cache-busted", b"");
+        let http_backend = response_for(
+            "GET",
+            "/dist/shared-frontend/backends/http.js?v=cache-busted",
+            b"",
+        );
         assert_eq!(http_backend.status, 200);
         assert_eq!(http_backend.content_type, "text/javascript; charset=utf-8");
         assert!(
@@ -1954,7 +1962,11 @@ mod tests {
                 .contains("class HttpBackend")
         );
 
-        let types = response_for("GET", "/dist/shared-frontend/core/types.js?v=cache-busted", b"");
+        let types = response_for(
+            "GET",
+            "/dist/shared-frontend/core/types.js?v=cache-busted",
+            b"",
+        );
         assert_eq!(types.status, 200);
         assert_eq!(types.content_type, "text/javascript; charset=utf-8");
         assert!(
@@ -1993,7 +2005,10 @@ mod tests {
         assert!(head.body.is_empty());
 
         // POST is not an API the fingerprint route serves.
-        assert_eq!(response_for("POST", "/api/lifehash/deadbeef", b"").status, 405);
+        assert_eq!(
+            response_for("POST", "/api/lifehash/deadbeef", b"").status,
+            405
+        );
     }
 
     #[test]
@@ -2033,7 +2048,10 @@ mod tests {
 
         // Everything else stays no-store.
         let response = round_trip_http("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
-        assert!(response.contains("Cache-Control: no-store\r\n"), "{response}");
+        assert!(
+            response.contains("Cache-Control: no-store\r\n"),
+            "{response}"
+        );
     }
 
     /// Like `round_trip_http`, but tolerating a binary response body.
@@ -2526,7 +2544,11 @@ mod tests {
         let no_edits = serde_json::json!({ "psbt": encoded_psbt() }).to_string();
         let response = response_for("POST", "/api/edit", no_edits.as_bytes());
         assert_eq!(response.status, 400);
-        assert!(String::from_utf8(response.body).unwrap().contains("`edits`"));
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("`edits`")
+        );
 
         let bad_map = serde_json::json!({
             "psbt": encoded_psbt(),
@@ -2535,7 +2557,11 @@ mod tests {
         .to_string();
         let response = response_for("POST", "/api/edit", bad_map.as_bytes());
         assert_eq!(response.status, 400);
-        assert!(String::from_utf8(response.body).unwrap().contains("sideways"));
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("sideways")
+        );
 
         let bad_key = serde_json::json!({
             "psbt": encoded_psbt(),
@@ -3059,13 +3085,19 @@ mod tests {
         let inspect = response_for("POST", "/api/inspect", br#"{"psbt":"notapsbt"}"#);
         assert_eq!(inspect.status, 400);
         let body = String::from_utf8(inspect.body).unwrap();
-        assert!(body.contains("invalid PSBT (deserialization failed)"), "{body}");
+        assert!(
+            body.contains("invalid PSBT (deserialization failed)"),
+            "{body}"
+        );
 
         // A mutating route funnels through the same parse boundary.
         let edit = response_for("POST", "/api/edit", br#"{"psbt":"notapsbt","edits":[]}"#);
         assert_eq!(edit.status, 400);
         let body = String::from_utf8(edit.body).unwrap();
-        assert!(body.contains("invalid PSBT (deserialization failed)"), "{body}");
+        assert!(
+            body.contains("invalid PSBT (deserialization failed)"),
+            "{body}"
+        );
     }
 
     /// The aliveness property: poison payloads get 400s AND the same server
@@ -3074,15 +3106,27 @@ mod tests {
     fn poison_psbt_then_valid_request_on_same_server_instance() {
         let (addr, server) = serve_like(3);
 
-        let response = send_request(addr, &post_request("/api/inspect", r#"{"psbt":"notapsbt"}"#));
-        assert!(response.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{response}");
-        assert!(response.contains("invalid PSBT (deserialization failed)"), "{response}");
+        let response = send_request(
+            addr,
+            &post_request("/api/inspect", r#"{"psbt":"notapsbt"}"#),
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+            "{response}"
+        );
+        assert!(
+            response.contains("invalid PSBT (deserialization failed)"),
+            "{response}"
+        );
 
         let response = send_request(
             addr,
             &post_request("/api/edit", r#"{"psbt":"notapsbt","edits":[]}"#),
         );
-        assert!(response.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{response}");
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+            "{response}"
+        );
 
         let valid_body = serde_json::json!({ "psbt": encoded_psbt() }).to_string();
         let response = send_request(addr, &post_request("/api/inspect", &valid_body));
@@ -3308,7 +3352,10 @@ mod tests {
         let response = response_for("POST", "/api/sync", request.as_bytes());
         assert_eq!(response.status, 400);
         let body = String::from_utf8_lossy(&response.body);
-        assert!(body.contains("arti"), "expected arti rebuild hint, got: {body}");
+        assert!(
+            body.contains("arti"),
+            "expected arti rebuild hint, got: {body}"
+        );
     }
 
     /// `/api/capabilities` reports the compile-time transport surface: the
@@ -3346,10 +3393,7 @@ mod tests {
         // This test only builds with the webgui feature on (webgui.rs is
         // gated behind it), so the list must name it.
         assert!(features.contains(&"webgui"), "got: {features:?}");
-        assert_eq!(
-            features.contains(&"iroh-sync"),
-            cfg!(feature = "iroh-sync")
-        );
+        assert_eq!(features.contains(&"iroh-sync"), cfg!(feature = "iroh-sync"));
 
         // HEAD mirrors GET minus the body; POST is not a capability query.
         let head = response_for("HEAD", "/api/capabilities", b"");
@@ -3421,7 +3465,10 @@ mod tests {
                 !body.contains("unknown transport"),
                 "{name} must parse as a TransportKind, got: {body}"
             );
-            assert!(body.contains(hint), "expected {hint} rebuild hint, got: {body}");
+            assert!(
+                body.contains(hint),
+                "expected {hint} rebuild hint, got: {body}"
+            );
         }
     }
 
@@ -3558,7 +3605,10 @@ mod tests {
                 std::path::PathBuf::from("/tmp/one.psbt"),
             ]
         );
-        assert_eq!(config.state, Some(std::path::PathBuf::from("/tmp/state.psbt")));
+        assert_eq!(
+            config.state,
+            Some(std::path::PathBuf::from("/tmp/state.psbt"))
+        );
     }
 
     /// Selecting iroh with neither a ticket nor `iroh_ticket_out: true` names
@@ -3793,8 +3843,10 @@ mod tests {
         );
         let confirmed_psbt = confirmed["psbt"].as_str().unwrap();
 
-        let decoded =
-            negotiation_ok("/api/payments", &serde_json::json!({ "psbt": confirmed_psbt }));
+        let decoded = negotiation_ok(
+            "/api/payments",
+            &serde_json::json!({ "psbt": confirmed_psbt }),
+        );
         let confirmations = decoded["confirmations"].as_array().unwrap();
         assert_eq!(confirmations.len(), 1);
         let record_hex = confirmations[0].as_str().unwrap();

@@ -16,6 +16,16 @@ version.workspace = true
 edition = "2024"
 publish = false
 
+[[bin]]
+name = "ptj-e2e-peer"
+path = "src/main.rs"
+# Drop the bin from the default target set entirely until `e2e-peer` is on. With
+# the feature off, `cargo build`/`cargo build --all-targets` skip this bin, so no
+# ungrounded dep is ever pulled on the mainline. (Contrast the transport crates,
+# which keep a compiling *skeleton*; a bin that USES those crates' feature-on
+# backends has nothing to skeletonize, so required-features is the right gate.)
+required-features = ["e2e-peer"]
+
 [features]
 # Default OFF and, because the [[bin]] below sets `required-features`, the binary
 # is simply NOT BUILT in the default target set (rather than compiled as a
@@ -28,32 +38,19 @@ default = []
 # un-wired — see that crate's TODO(ground-deps)), so `--features e2e-peer`
 # does not build yet. The bin below is required-features-gated, so nothing on
 # the default target set ever reaches this.
-e2e-peer = [
-  "transport-str0m/str0m",
-  "transport-payjoin-dir/payjoin-dir",
-]
-
-[[bin]]
-name = "ptj-e2e-peer"
-path = "src/main.rs"
-# Drop the bin from the default target set entirely until `e2e-peer` is on. With
-# the feature off, `cargo build`/`cargo build --all-targets` skip this bin, so no
-# ungrounded dep is ever pulled on the mainline. (Contrast the transport crates,
-# which keep a compiling *skeleton*; a bin that USES those crates' feature-on
-# backends has nothing to skeletonize, so required-features is the right gate.)
-required-features = ["e2e-peer"]
+e2e-peer = ["transport-str0m/str0m", "transport-payjoin-dir/payjoin-dir"]
 
 [dependencies]
-# The frozen seam + the two sibling transports. The sibling crates compile as
-# network-free skeletons by default; this bin only ever builds them feature-ON
-# (via `e2e-peer`), so it is never part of a default build.
-transport-core        = { path = "../transport-core" }
-transport-str0m       = { path = "../transport-str0m" }
-# The signaling-ohttp component ships as crate `transport-payjoin-dir`.
-transport-payjoin-dir = { path = "../transport-payjoin-dir" }
 
 # The PSBT type + the EXISTING join engine, reused verbatim (no reimplementation).
 psbt-v2 = { version = "0.3.0", features = ["base64"] }
+# The frozen seam + the two sibling transports. The sibling crates compile as
+# network-free skeletons by default; this bin only ever builds them feature-ON
+# (via `e2e-peer`), so it is never part of a default build.
+transport-core = { path = "../transport-core" }
+# The signaling-ohttp component ships as crate `transport-payjoin-dir`.
+transport-payjoin-dir = { path = "../transport-payjoin-dir" }
+transport-str0m = { path = "../transport-str0m" }
 # ptj exposes its lib target (join_psbts + io encode/parse) so this bin shares the
 # CLI's exact convergence. TODO(share-join): if ptj has no lib target yet, add a
 # thin `[lib]` re-exporting `commands::join::join_psbts` + `io::{encode_psbt,

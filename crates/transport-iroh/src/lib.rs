@@ -82,8 +82,7 @@ use transport_core::Error;
 /// Error text returned by every constructor when the crate was built WITHOUT
 /// the `iroh` feature. Mirrors the ptj skeleton behavior: the type still exists
 /// and satisfies the channel traits, but you cannot bring a real node up.
-pub const SETUP_WITHOUT_IROH: &str =
-    "transport-iroh: built without the `iroh` feature; rebuild with \
+pub const SETUP_WITHOUT_IROH: &str = "transport-iroh: built without the `iroh` feature; rebuild with \
      --features iroh to use the iroh-docs transport";
 
 /// Key prefix under which every node publishes its maximal tip.
@@ -199,7 +198,7 @@ impl AttributableChannel for IrohChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use transport_core::{deframe, frame, Attributed, Message, Transport};
+    use transport_core::{Attributed, Message, Transport, deframe, frame};
 
     // ---- Channel-trait-satisfaction test (no network) -------------------------
     //
@@ -268,7 +267,10 @@ mod tests {
         let mut partial = framed[..framed.len() - 1].to_vec();
         let before = partial.clone();
         assert!(deframe(&mut partial).unwrap().is_none());
-        assert_eq!(partial, before, "incomplete deframe leaves the buffer intact");
+        assert_eq!(
+            partial, before,
+            "incomplete deframe leaves the buffer intact"
+        );
     }
 
     // Two framed records on one buffer deframe in order, exercising the record
@@ -280,7 +282,10 @@ mod tests {
         buf.extend_from_slice(&frame(&Message::Confirmation(vec![3, 4, 5]).encode()));
 
         let first = deframe(&mut buf).unwrap().expect("first record");
-        assert_eq!(Message::decode(&first).unwrap(), Message::Payment(vec![1, 2]));
+        assert_eq!(
+            Message::decode(&first).unwrap(),
+            Message::Payment(vec![1, 2])
+        );
         let second = deframe(&mut buf).unwrap().expect("second record");
         assert_eq!(
             Message::decode(&second).unwrap(),

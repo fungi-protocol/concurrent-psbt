@@ -102,7 +102,10 @@ impl ResultOrderedPsbt {
             return Err(self);
         }
         Ok(Psbt {
-            global: self.global.try_unwrap().expect("verified all fields are Ok"),
+            global: self
+                .global
+                .try_unwrap()
+                .expect("verified all fields are Ok"),
             inputs: self
                 .inputs
                 .into_iter()

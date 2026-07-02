@@ -84,7 +84,7 @@
 pub mod mailbox;
 pub mod signaling;
 
-pub use mailbox::{slot_id, Role, SlotId, MIN_SESSION_SECRET_LEN};
+pub use mailbox::{MIN_SESSION_SECRET_LEN, Role, SlotId, slot_id};
 pub use signaling::{SignalingChannel, SignalingMsg};
 
 use async_trait::async_trait;
@@ -412,7 +412,8 @@ mod tests {
         ] {
             let err = err.expect("skeleton op must be an error");
             assert!(
-                err.message().contains("built without the 'payjoin-dir' feature"),
+                err.message()
+                    .contains("built without the 'payjoin-dir' feature"),
                 "unexpected skeleton error text: {}",
                 err.message()
             );

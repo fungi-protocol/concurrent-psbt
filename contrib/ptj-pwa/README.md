@@ -50,13 +50,14 @@ ______________________________________________________________________
 The PWA backend is NOT a new API. It is the shared-frontend `WasmBackend`
 (`shared-frontend/backends/wasm.ts`) instantiated over the
 `concurrent-psbt-wasm` module loaded in this page (`src/backend/wasm-loader.ts`
-+ `src/backend/wasm-backend.ts`). Each `Backend` method calls the matching
-wasm-bindgen export (camelCase js_name; the same ptj op logic compiled to
-wasm). The DTOs (`CreatePsbtRequest`, `PsbtResponse{psbt,inspect}`,
-`AtomizeResponse`, `SyncResponse`, `PtjBackendError{status,message}`) are
-identical across shells. This is why the three shells (webgui / PWA / tauri) do
-NOT fork the frontend: they differ only in which `Backend` instance `app.ts` is
-given at init (see `shared-frontend/app-wiring.md`).
+
+- `src/backend/wasm-backend.ts`). Each `Backend` method calls the matching
+  wasm-bindgen export (camelCase js_name; the same ptj op logic compiled to
+  wasm). The DTOs (`CreatePsbtRequest`, `PsbtResponse{psbt,inspect}`,
+  `AtomizeResponse`, `SyncResponse`, `PtjBackendError{status,message}`) are
+  identical across shells. This is why the three shells (webgui / PWA / tauri) do
+  NOT fork the frontend: they differ only in which `Backend` instance `app.ts` is
+  given at init (see `shared-frontend/app-wiring.md`).
 
 ______________________________________________________________________
 
@@ -96,27 +97,26 @@ See `file-list.md` for the authoritative list with one-line purposes. Highlights
   offline shell.
 - `crate/` — breadcrumb only: the `ptj-wasm` wrapper authored here was MERGED
   into `concurrent-psbt-wasm` (the wasm-bindgen component), which carries the
-  real ports of ptj's op logic + the `localSync` local fold + native `cargo
-  test` coverage.
+  real ports of ptj's op logic + the `localSync` local fold + native `cargo test` coverage.
 - `src/backend/wasm-backend.ts` — `makeWasmBackend()`: loads the wasm module
   and news up the shared-frontend `WasmBackend` (the canonical `Backend`).
 - `src/transport/` — TypeScript transport adaptors: sneakernet (grounded, no
   network), nostr-ws and webrtc (opt-in; nostr/str0m deferred exactly like the
-  Rust transport-* skeletons, browser-native web-sys paths grounded).
+  Rust transport-\* skeletons, browser-native web-sys paths grounded).
 - `*.md` — the design decisions, feature flags, packaging, offline strategy,
   transport plans, and the frontend integration contract.
 
 ## Read next
 
 1. `decisions.md` — the load-bearing choices and why.
-2. `feature-flags.md` — every flag / build-mode toggle across crate + JS + SW.
-3. `frontend-integration.md` — the wire contract + how the PWA consumes the
+1. `feature-flags.md` — every flag / build-mode toggle across crate + JS + SW.
+1. `frontend-integration.md` — the wire contract + how the PWA consumes the
    shared `Backend` seam (historical FetchLike framing annotated).
-4. `wasm-packaging.md` — how `concurrent-psbt-wasm` is built and loaded
+1. `wasm-packaging.md` — how `concurrent-psbt-wasm` is built and loaded
    (grounded by the Feasibility probe).
-5. `offline-first.md` — service worker + manifest + install + sneakernet.
-6. `transports.md` — the opt-in browser transports and the signaling handoff.
-7. `file-list.md` — the full manifest.
+1. `offline-first.md` — service worker + manifest + install + sneakernet.
+1. `transports.md` — the opt-in browser transports and the signaling handoff.
+1. `file-list.md` — the full manifest.
 
 ## Grounding & constraints honored
 

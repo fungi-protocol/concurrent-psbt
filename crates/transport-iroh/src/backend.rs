@@ -49,18 +49,18 @@
 
 use std::time::Duration;
 
+use iroh::Endpoint;
 use iroh::endpoint::presets;
 use iroh::protocol::Router;
-use iroh::Endpoint;
 use iroh_blobs::store::mem::MemStore;
-use iroh_blobs::{BlobsProtocol, ALPN as BLOBS_ALPN};
-use iroh_docs::api::protocol::{AddrInfoOptions, ShareMode};
+use iroh_blobs::{ALPN as BLOBS_ALPN, BlobsProtocol};
 use iroh_docs::api::Doc;
+use iroh_docs::api::protocol::{AddrInfoOptions, ShareMode};
 use iroh_docs::protocol::Docs;
 use iroh_docs::store::Query;
-use iroh_docs::{AuthorId, DocTicket, ALPN as DOCS_ALPN};
-use iroh_gossip::net::Gossip;
+use iroh_docs::{ALPN as DOCS_ALPN, AuthorId, DocTicket};
 use iroh_gossip::ALPN as GOSSIP_ALPN;
+use iroh_gossip::net::Gossip;
 use n0_future::StreamExt as _;
 use tokio::sync::{mpsc, oneshot};
 

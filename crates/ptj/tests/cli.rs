@@ -733,7 +733,11 @@ fn inspect_reports_size_estimates_by_script_kind() {
     // p2wpkh output is exact (its bytes are fully known); totals add the
     // fixed transaction bytes (version + locktime + count compact sizes,
     // ×4 WU) plus the 2 WU segwit marker the assumed witness implies.
-    let unknown = write_psbt(temp.path(), "unknown.psbt", create_psbt(TXID, 7, 1, 123_456));
+    let unknown = write_psbt(
+        temp.path(),
+        "unknown.psbt",
+        create_psbt(TXID, 7, 1, 123_456),
+    );
     let inspected = inspect_json(&unknown);
     let input_size = &inspected["inputs"][0]["size"];
     assert_eq!(input_size["weight"], 272);
@@ -1406,7 +1410,6 @@ fn make_unordered_rejects_psbts_without_constructor_metadata() {
     assert!(error.to_string().contains("not modifiable"));
 }
 
-
 #[test]
 fn assign_ids_completes_the_bip174_import_round_trip() {
     let temp = tempfile::tempdir().unwrap();
@@ -1421,12 +1424,7 @@ fn assign_ids_completes_the_bip174_import_round_trip() {
     let core_path = temp.path().join("core.psbt");
     std::fs::write(&core_path, core_psbt).unwrap();
 
-    let imported = run_to_psbt([
-        "ptj",
-        "import-bip174",
-        "--modifiable",
-        path_str(&core_path),
-    ]);
+    let imported = run_to_psbt(["ptj", "import-bip174", "--modifiable", path_str(&core_path)]);
     assert!(!imported.outputs[0].has_unique_id());
     let imported_path = write_psbt(temp.path(), "imported.psbt", imported);
 
@@ -1486,7 +1484,13 @@ fn assign_ids_manual_directives_set_chosen_ids() {
 
     // Re-asserting the same id is idempotent; a different one needs --overwrite.
     let assigned_path = write_psbt(temp.path(), "assigned.psbt", assigned);
-    let error = run_error(["ptj", "assign-ids", "--id", "out:0=ffff", path_str(&assigned_path)]);
+    let error = run_error([
+        "ptj",
+        "assign-ids",
+        "--id",
+        "out:0=ffff",
+        path_str(&assigned_path),
+    ]);
     assert!(error.to_string().contains("--overwrite"), "{error}");
     let overwritten = run_to_psbt([
         "ptj",
@@ -1554,13 +1558,7 @@ fn assign_ids_rejects_colliding_manual_output_ids() {
     assert!(assigned.outputs[1].has_unique_id());
 
     // Without --auto, manual-only leaves the other output untouched.
-    let manual_only = run_to_psbt([
-        "ptj",
-        "assign-ids",
-        "--id",
-        "out:0=abcd",
-        path_str(&path),
-    ]);
+    let manual_only = run_to_psbt(["ptj", "assign-ids", "--id", "out:0=abcd", path_str(&path)]);
     assert!(!manual_only.outputs[1].has_unique_id());
 }
 
@@ -1781,12 +1779,7 @@ fn import_bip174_modifiable_flag_marks_the_import_constructor_ready() {
     // Strict default: BIP 174 carries no TX_MODIFIABLE, so the import is not
     // modifiable (asserted in the sibling test). --modifiable is the explicit
     // user assertion that inputs and outputs may still be added.
-    let modifiable = run_to_psbt([
-        "ptj",
-        "import-bip174",
-        "--modifiable",
-        path_str(&core_path),
-    ]);
+    let modifiable = run_to_psbt(["ptj", "import-bip174", "--modifiable", path_str(&core_path)]);
     assert_eq!(modifiable.global.tx_modifiable_flags, 0x03);
 }
 
@@ -2123,7 +2116,11 @@ fn webgui_embeds_static_offline_assets() {
 
     let demo = ptj::webgui::asset("/demo").unwrap();
     assert_eq!(demo.content_type, "text/html; charset=utf-8");
-    assert!(std::str::from_utf8(demo.body).unwrap().contains("dist/app.js"));
+    assert!(
+        std::str::from_utf8(demo.body)
+            .unwrap()
+            .contains("dist/app.js")
+    );
 
     let session_app = ptj::webgui::asset("/dist/session/app.js?v=cache-busted").unwrap();
     assert_eq!(session_app.content_type, "text/javascript; charset=utf-8");
@@ -2309,7 +2306,10 @@ fn pay_attaches_plaintext_payment() {
     let temp = tempfile::tempdir().unwrap();
     let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
     let out = run_to_string([
-        "ptj", "payments", "--json", path_str(&run_pay_to(&base, temp.path())),
+        "ptj",
+        "payments",
+        "--json",
+        path_str(&run_pay_to(&base, temp.path())),
     ]);
     let report: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(report["payments"].as_array().unwrap().len(), 1);
@@ -2319,8 +2319,13 @@ fn pay_attaches_plaintext_payment() {
 
 fn run_pay_to(base: &std::path::Path, dir: &std::path::Path) -> PathBuf {
     let psbt = run_to_psbt([
-        "ptj", "pay", "--to", &format!("{}:0.001", regtest_address(2)),
-        "--network", "regtest", path_str(base),
+        "ptj",
+        "pay",
+        "--to",
+        &format!("{}:0.001", regtest_address(2)),
+        "--network",
+        "regtest",
+        path_str(base),
     ]);
     write_psbt(dir, "paid.psbt", psbt)
 }
@@ -2330,8 +2335,15 @@ fn pay_dummy_requires_encrypt() {
     let temp = tempfile::tempdir().unwrap();
     let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
     let error = run_error([
-        "ptj", "pay", "--to", &format!("{}:0.001", regtest_address(2)),
-        "--network", "regtest", "--dummy", "3", path_str(&base),
+        "ptj",
+        "pay",
+        "--to",
+        &format!("{}:0.001", regtest_address(2)),
+        "--network",
+        "regtest",
+        "--dummy",
+        "3",
+        path_str(&base),
     ]);
     assert!(error.to_string().contains("--dummy"));
 }
@@ -2341,8 +2353,14 @@ fn pay_encrypt_requires_secret() {
     let temp = tempfile::tempdir().unwrap();
     let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
     let error = run_error([
-        "ptj", "pay", "--to", &format!("{}:0.001", regtest_address(2)),
-        "--network", "regtest", "--encrypt", path_str(&base),
+        "ptj",
+        "pay",
+        "--to",
+        &format!("{}:0.001", regtest_address(2)),
+        "--network",
+        "regtest",
+        "--encrypt",
+        path_str(&base),
     ]);
     assert!(error.to_string().contains("--secret"));
 }
@@ -2352,23 +2370,55 @@ fn encrypted_payment_roundtrips_with_secret_and_dummies_hidden() {
     let temp = tempfile::tempdir().unwrap();
     let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
     let psbt = run_to_psbt([
-        "ptj", "pay", "--to", &format!("{}:0.001", regtest_address(2)),
-        "--network", "regtest", "--encrypt", "--secret", "aabb", "--dummy", "2",
+        "ptj",
+        "pay",
+        "--to",
+        &format!("{}:0.001", regtest_address(2)),
+        "--network",
+        "regtest",
+        "--encrypt",
+        "--secret",
+        "aabb",
+        "--dummy",
+        "2",
         path_str(&base),
     ]);
     let paid = write_psbt(temp.path(), "paid.psbt", psbt);
 
     // Without the secret: three indistinguishable encrypted entries, none readable.
-    let blind: serde_json::Value =
-        serde_json::from_str(&run_to_string(["ptj", "payments", "--json", path_str(&paid)])).unwrap();
+    let blind: serde_json::Value = serde_json::from_str(&run_to_string([
+        "ptj",
+        "payments",
+        "--json",
+        path_str(&paid),
+    ]))
+    .unwrap();
     assert_eq!(blind["payments"].as_array().unwrap().len(), 3);
-    assert!(blind["payments"].as_array().unwrap().iter().all(|p| p["encrypted"] == true));
-    assert!(blind["payments"].as_array().unwrap().iter().all(|p| p["undecryptable"] == true));
+    assert!(
+        blind["payments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["encrypted"] == true)
+    );
+    assert!(
+        blind["payments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["undecryptable"] == true)
+    );
 
     // With the secret: one real payment, two dummies flagged.
     let seen: serde_json::Value = serde_json::from_str(&run_to_string([
-        "ptj", "payments", "--json", "--secret", "aabb", path_str(&paid),
-    ])).unwrap();
+        "ptj",
+        "payments",
+        "--json",
+        "--secret",
+        "aabb",
+        path_str(&paid),
+    ]))
+    .unwrap();
     let entries = seen["payments"].as_array().unwrap();
     assert_eq!(entries.len(), 3);
     assert_eq!(entries.iter().filter(|p| p["dummy"] == false).count(), 1);
@@ -2384,9 +2434,12 @@ fn confirm_attaches_confirmation_deterministically() {
     // confirming the same content again is idempotent (same derived id).
     let twice = run_to_psbt(["ptj", "confirm", path_str(&first)]);
     let report: serde_json::Value = serde_json::from_str(&run_to_string([
-        "ptj", "payments", "--json",
+        "ptj",
+        "payments",
+        "--json",
         path_str(&write_psbt(temp.path(), "c2.psbt", twice)),
-    ])).unwrap();
+    ]))
+    .unwrap();
     assert_eq!(report["confirmations"].as_array().unwrap().len(), 1);
 }
 
@@ -2394,14 +2447,31 @@ fn confirm_attaches_confirmation_deterministically() {
 fn sort_strips_negotiation_band() {
     let temp = tempfile::tempdir().unwrap();
     let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
-    let paid = write_psbt(temp.path(), "paid.psbt", run_to_psbt([
-        "ptj", "pay", "--to", &format!("{}:0.001", regtest_address(2)),
-        "--network", "regtest", path_str(&base),
-    ]));
-    let sorted = write_psbt(temp.path(), "sorted.psbt", run_to_psbt(["ptj", "sort", path_str(&paid)]));
+    let paid = write_psbt(
+        temp.path(),
+        "paid.psbt",
+        run_to_psbt([
+            "ptj",
+            "pay",
+            "--to",
+            &format!("{}:0.001", regtest_address(2)),
+            "--network",
+            "regtest",
+            path_str(&base),
+        ]),
+    );
+    let sorted = write_psbt(
+        temp.path(),
+        "sorted.psbt",
+        run_to_psbt(["ptj", "sort", path_str(&paid)]),
+    );
     let report: serde_json::Value = serde_json::from_str(&run_to_string([
-        "ptj", "payments", "--json", path_str(&sorted),
-    ])).unwrap();
+        "ptj",
+        "payments",
+        "--json",
+        path_str(&sorted),
+    ]))
+    .unwrap();
     assert!(report["payments"].as_array().unwrap().is_empty());
 }
 
@@ -2412,19 +2482,26 @@ fn sort_strips_fee_band() {
     // the 0x22 band; prove it end to end.
     let temp = tempfile::tempdir().unwrap();
     let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
-    let declared = write_psbt(temp.path(), "declared.psbt", run_to_psbt([
-        "ptj", "fee", "--amount-sats", "700", path_str(&base),
-    ]));
-    let before: serde_json::Value = serde_json::from_str(&run_to_string([
-        "ptj", "inspect", path_str(&declared),
-    ])).unwrap();
+    let declared = write_psbt(
+        temp.path(),
+        "declared.psbt",
+        run_to_psbt(["ptj", "fee", "--amount-sats", "700", path_str(&base)]),
+    );
+    let before: serde_json::Value =
+        serde_json::from_str(&run_to_string(["ptj", "inspect", path_str(&declared)])).unwrap();
     assert_eq!(before["totals"]["declared_fee_sats"].as_u64(), Some(700));
-    let sorted = write_psbt(temp.path(), "sorted.psbt", run_to_psbt(["ptj", "sort", path_str(&declared)]));
-    let after: serde_json::Value = serde_json::from_str(&run_to_string([
-        "ptj", "inspect", path_str(&sorted),
-    ])).unwrap();
+    let sorted = write_psbt(
+        temp.path(),
+        "sorted.psbt",
+        run_to_psbt(["ptj", "sort", path_str(&declared)]),
+    );
+    let after: serde_json::Value =
+        serde_json::from_str(&run_to_string(["ptj", "inspect", path_str(&sorted)])).unwrap();
     assert_eq!(after["totals"]["declared_fee_sats"].as_u64(), Some(0));
-    assert_eq!(after["totals"]["declared_fee_undecoded_count"].as_u64(), Some(0));
+    assert_eq!(
+        after["totals"]["declared_fee_undecoded_count"].as_u64(),
+        Some(0)
+    );
 }
 
 // ---- fee: explicit fee contributions ----
@@ -2463,7 +2540,13 @@ fn fee_encrypts_with_group_secret() {
     let temp = tempfile::tempdir().unwrap();
     let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
     let declared = run_to_psbt([
-        "ptj", "fee", "--amount-sats", "9999", "--encrypt", "--secret", "aabb",
+        "ptj",
+        "fee",
+        "--amount-sats",
+        "9999",
+        "--encrypt",
+        "--secret",
+        "aabb",
         path_str(&base),
     ]);
     let contributions = declared.global.fee_contributions();
@@ -2471,7 +2554,10 @@ fn fee_encrypts_with_group_secret() {
     assert_eq!(contributions[0].1.first(), Some(&FORMAT_ENCRYPTED));
     // Sealed: the plaintext termination sum cannot count it, and inspect
     // reports the unreadable entry instead of hiding it.
-    assert_eq!(concurrent_psbt::fee::total_declared_fee(&declared.global), 0);
+    assert_eq!(
+        concurrent_psbt::fee::total_declared_fee(&declared.global),
+        0
+    );
     let sealed = write_psbt(temp.path(), "sealed.psbt", declared);
     let inspected = inspect_json(&sealed);
     assert_eq!(inspected["totals"]["declared_fee_sats"], 0);
@@ -2482,7 +2568,14 @@ fn fee_encrypts_with_group_secret() {
 fn fee_encrypt_requires_secret() {
     let temp = tempfile::tempdir().unwrap();
     let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
-    let error = run_error(["ptj", "fee", "--amount-sats", "1", "--encrypt", path_str(&base)]);
+    let error = run_error([
+        "ptj",
+        "fee",
+        "--amount-sats",
+        "1",
+        "--encrypt",
+        path_str(&base),
+    ]);
     assert!(error.to_string().contains("--secret"));
 }
 
@@ -2493,5 +2586,8 @@ fn fee_reads_stdin_psbt_source_marker() {
         ["ptj", "fee", "--amount-sats", "5", "-"],
         encode_psbt(&base).as_bytes(),
     );
-    assert_eq!(concurrent_psbt::fee::total_declared_fee(&declared.global), 5);
+    assert_eq!(
+        concurrent_psbt::fee::total_declared_fee(&declared.global),
+        5
+    );
 }

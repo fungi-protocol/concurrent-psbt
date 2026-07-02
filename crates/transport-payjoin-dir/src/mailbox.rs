@@ -45,7 +45,7 @@
 //!
 //! [`AnonymousChannel`]: transport_core::AnonymousChannel
 
-use transport_core::bitcoin::hashes::{sha256, Hash as _};
+use transport_core::bitcoin::hashes::{Hash as _, sha256};
 
 /// Domain-separation tag mixed into every slot-id derivation so these IDs can
 /// never coincide with any other use of the same session secret.
@@ -223,7 +223,10 @@ mod tests {
     fn to_hex_is_64_lowercase_chars() {
         let hex = slot_id(SECRET, Role::Initiator, 0).to_hex();
         assert_eq!(hex.len(), 64);
-        assert!(hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(
+            hex.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
     }
 
     #[test]

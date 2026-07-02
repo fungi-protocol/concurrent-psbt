@@ -23,6 +23,7 @@ transport crate is unauthored.)
 | `debug-panic-hook` | off (on in dev) | yes | Wire `console_error_panic_hook` (via the `initPanicHook` export) for readable wasm panics in the browser console. Dev-only. |
 
 Notes:
+
 - The TS transports gate themselves: deferred paths return a clear runtime
   error until their deps/components are ground; grounded browser-native paths
   (web-sys RTCPeerConnection, WebSocket) work today.

@@ -60,11 +60,9 @@ fn publish_collect_roundtrips_over_child_stdio() {
 /// `fake-kind` entry proves config passthrough reaches the plugin.
 #[test]
 fn attributable_plugin_collects_bare_bytes() {
-    let mut transport = PluginTransport::spawn(
-        &fake_plugin(),
-        config(&[("fake-kind", "attributable")]),
-    )
-    .expect("spawn + attributable handshake");
+    let mut transport =
+        PluginTransport::spawn(&fake_plugin(), config(&[("fake-kind", "attributable")]))
+            .expect("spawn + attributable handshake");
     drive(async {
         transport.publish(b"attributed".to_vec()).await.unwrap();
         // Bare bytes out: the b"fake-sender" ids were dropped by the host.

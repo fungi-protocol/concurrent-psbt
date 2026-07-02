@@ -63,8 +63,8 @@ async-trait = "0.1.89"
 # the crate source stays authored-but-unverified.
 transport-core = { path = "../transport-core" }
 
-[lints]
-workspace = true
-
 [dev-dependencies]
 futures = "0.3.32"
+
+[lints]
+workspace = true

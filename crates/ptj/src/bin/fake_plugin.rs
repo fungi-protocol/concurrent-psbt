@@ -27,9 +27,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt 
 use transport_plugin_api::PROTOCOL_VERSION;
 use transport_plugin_api::capnp;
 use transport_plugin_api::capnp_rpc::{self, RpcSystem, rpc_twoparty_capnp, twoparty};
-use transport_plugin_api::transport_capnp::{
-    attributable_transport, handshake, plugin, transport,
-};
+use transport_plugin_api::transport_capnp::{attributable_transport, handshake, plugin, transport};
 
 /// The in-memory "network": every publish lands here, every collect
 /// snapshots it. Shared (Rc) between the bootstrap plugin and the transport
@@ -92,9 +90,11 @@ impl plugin::Server for FakePlugin {
                 "fake plugin negotiated the attributable kind; request that interface".to_string(),
             ));
         }
-        results.get().set_transport(capnp_rpc::new_client(FakeTransport {
-            store: self.store.clone(),
-        }));
+        results
+            .get()
+            .set_transport(capnp_rpc::new_client(FakeTransport {
+                store: self.store.clone(),
+            }));
         Ok(())
     }
 

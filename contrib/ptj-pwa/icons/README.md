@@ -3,8 +3,8 @@
 The manifest references three PNG icons (not committed in this authoring
 skeleton; the build/design components supply the actual raster assets):
 
-- `icon-192.png`   — 192x192, `purpose: any`. Home-screen / launcher.
-- `icon-512.png`   — 512x512, `purpose: any`. Splash / high-DPI.
+- `icon-192.png` — 192x192, `purpose: any`. Home-screen / launcher.
+- `icon-512.png` — 512x512, `purpose: any`. Splash / high-DPI.
 - `maskable-512.png` — 512x512, `purpose: maskable`. Safe-zone padded so Android
   adaptive-icon masks (circle/squircle) don't clip the mark.
 

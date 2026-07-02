@@ -140,13 +140,14 @@ impl FileSignaling {
             if line.trim().is_empty() {
                 continue;
             }
-            self.pending.push_back(hex_decode(line.trim()).map_err(|error| {
-                Error::new(format!(
-                    "signal-in file {} line {}: {error}",
-                    self.incoming.display(),
-                    self.consumed
-                ))
-            })?);
+            self.pending
+                .push_back(hex_decode(line.trim()).map_err(|error| {
+                    Error::new(format!(
+                        "signal-in file {} line {}: {error}",
+                        self.incoming.display(),
+                        self.consumed
+                    ))
+                })?);
         }
         Ok(())
     }

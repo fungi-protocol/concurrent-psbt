@@ -45,7 +45,13 @@ nym-sdk = { version = "1.21.2", optional = true }
 # io-std/io-util for our stdio RPC stream, time for the mixnet drain poll
 # window, sync out of caution for the SDK's channel types. Grounded via
 # `cargo add` (2026-07).
-tokio = { version = "1.52.3", features = ["rt", "io-std", "io-util", "sync", "time"] }
+tokio = { version = "1.52.3", features = [
+  "rt",
+  "io-std",
+  "io-util",
+  "sync",
+  "time",
+] }
 # tokio<->futures IO compat for the vat over stdio. Grounded via `cargo add`
 # (2026-07).
 tokio-util = { version = "0.7.18", features = ["compat"] }

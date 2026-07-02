@@ -42,7 +42,7 @@ pub use bitcoin;
 
 pub use channel::{AnonymousChannel, AttributableChannel, SenderId};
 pub use error::{Error, Result};
-pub use framing::{deframe, frame, read_frame, write_frame, MAX_FRAME_LEN};
+pub use framing::{MAX_FRAME_LEN, deframe, frame, read_frame, write_frame};
 pub use message::Message;
 pub use transport::{Attributed, Transport};
 
@@ -68,6 +68,9 @@ mod tests {
         let mut buf = framed;
         let record = deframe(&mut buf).unwrap().expect("one full record");
         assert!(buf.is_empty());
-        assert_eq!(Message::decode(&record).unwrap(), Message::Payment(vec![0x11; 8]));
+        assert_eq!(
+            Message::decode(&record).unwrap(),
+            Message::Payment(vec![0x11; 8])
+        );
     }
 }

@@ -68,11 +68,12 @@ ptj create --network regtest --input "$UTXO_B" --output "$DEST_B:9.999" >"$FRAG_
 # decoded shape so the spec can assert the live convergence is non-degenerate.
 EXPECTED_PSBT=$(ptj join "$FRAG_RUST" "$FRAG_BROWSER")
 EXPECTED_DECODED=$(decode_psbt "$EXPECTED_PSBT") # regtest-lib.sh helper
-export E2E_EXPECTED_SHAPE=$(printf '%s' "$EXPECTED_DECODED" | jq -c '{
+E2E_EXPECTED_SHAPE=$(printf '%s' "$EXPECTED_DECODED" | jq -c '{
   inputs: (.tx.vin | length),
   outputs: (.tx.vout | length),
   total: ([.tx.vout[].value] | add),
 }')
+export E2E_EXPECTED_SHAPE
 # Fail the check early if the fixture is degenerate (must be a real 2-in/2-out).
 printf '%s' "$E2E_EXPECTED_SHAPE" | jq -e '.inputs == 2 and .outputs == 2' >/dev/null || {
   echo "FAIL: fixture converged shape is not the expected 2-in/2-out: $E2E_EXPECTED_SHAPE" >&2
@@ -81,7 +82,8 @@ printf '%s' "$E2E_EXPECTED_SHAPE" | jq -e '.inputs == 2 and .outputs == 2' >/dev
 
 # ── Export for the node harness ───────────────────────────────────────────────
 export E2E_FRAGMENT_RUST="$FRAG_RUST"
-export E2E_FRAGMENT_BROWSER_B64="$(cat "$FRAG_BROWSER")" # ptj create emits base64
+E2E_FRAGMENT_BROWSER_B64="$(cat "$FRAG_BROWSER")" # ptj create emits base64
+export E2E_FRAGMENT_BROWSER_B64
 export BITCOIN_CLI_BIN="bitcoin-cli"
 export BITCOIN_CLI_ARGS="-datadir=$DATADIR -regtest -rpcuser=test -rpcpassword=test"
 

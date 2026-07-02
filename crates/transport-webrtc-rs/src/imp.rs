@@ -52,20 +52,20 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
 use webrtc::api::APIBuilder;
+use webrtc::data_channel::RTCDataChannel;
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
-use webrtc::data_channel::RTCDataChannel;
 use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
 use webrtc::ice_transport::ice_server::RTCIceServer;
+use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
-use webrtc::peer_connection::RTCPeerConnection;
 
 use bytes::Bytes;
 
 use transport_core::{Error, Result};
 
-use crate::{drain_frames, wrap_outgoing, Role, SignalBlob, Signaling, WebrtcRsConfig};
+use crate::{Role, SignalBlob, Signaling, WebrtcRsConfig, drain_frames, wrap_outgoing};
 
 /// How long to wait for the SCTP data channel to open after the handshake.
 const OPEN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -111,9 +111,8 @@ impl Inner {
 
         // The handshake is async; drive the whole thing on the owned runtime and
         // hand back the connected peer connection + open data channel.
-        let (pc, dc) = rt.block_on(async {
-            connect_async(role, ice_servers, signaling, inbox.clone()).await
-        })?;
+        let (pc, dc) = rt
+            .block_on(async { connect_async(role, ice_servers, signaling, inbox.clone()).await })?;
 
         Ok(Inner {
             rt,

@@ -1,7 +1,7 @@
 use bitcoin::transaction;
 use concurrent_psbt::payments::membership::{SharedSession, UnknownParty};
 use concurrent_psbt::tx::UnorderedPsbt;
-use concurrent_psbt::{input::InputSet, output::OutputSet, Join};
+use concurrent_psbt::{Join, input::InputSet, output::OutputSet};
 use psbt_v2::v2::Global;
 
 fn fragment(version: transaction::Version) -> concurrent_psbt::tx::ResultUnorderedPsbt {

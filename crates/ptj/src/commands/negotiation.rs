@@ -133,7 +133,9 @@ pub(super) fn run_pay(config: PayConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
         .to
         .address
         .require_network(config.network.0)
-        .map_err(|error| Error::new(format!("address not valid for {}: {error}", config.network)))?;
+        .map_err(|error| {
+            Error::new(format!("address not valid for {}: {error}", config.network))
+        })?;
     let payer = config.payer.map(|p| p.into_array()).unwrap_or([0u8; 32]);
 
     let payment = Payment {
@@ -150,7 +152,9 @@ pub(super) fn run_pay(config: PayConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
         ));
     }
     let secret = if config.encrypt {
-        Some(require_secret(config.secret.as_ref().map(|s| s.as_bytes()))?)
+        Some(require_secret(
+            config.secret.as_ref().map(|s| s.as_bytes()),
+        )?)
     } else {
         None
     };
@@ -308,7 +312,9 @@ pub(super) fn run_confirm(config: ConfirmConfig, stdin: Option<&[u8]>) -> Result
     let peer_id = config.peer_id.map(|p| p.into_array()).unwrap_or([0u8; 32]);
 
     let secret = if config.encrypt {
-        Some(require_secret(config.secret.as_ref().map(|s| s.as_bytes()))?)
+        Some(require_secret(
+            config.secret.as_ref().map(|s| s.as_bytes()),
+        )?)
     } else {
         None
     };
@@ -374,9 +380,13 @@ pub(super) fn run_payments(config: PaymentsConfig, stdin: Option<&[u8]>) -> Resu
 
     let mut confirmations = Vec::new();
     for (id, blob) in psbt.global.confirmations() {
-        let (confirmation, encrypted, undecryptable) =
-            decode_confirmation(&id, &blob, secret);
-        confirmations.push(confirmation_json(&id, confirmation, encrypted, undecryptable));
+        let (confirmation, encrypted, undecryptable) = decode_confirmation(&id, &blob, secret);
+        confirmations.push(confirmation_json(
+            &id,
+            confirmation,
+            encrypted,
+            undecryptable,
+        ));
     }
 
     // Output coverage: does the transaction's real output value cover the
@@ -486,9 +496,16 @@ fn render_human(report: &serde_json::Value) -> String {
     out.push_str(&format!("payments: {payments}\n"));
     for p in report["payments"].as_array().into_iter().flatten() {
         if p.get("undecryptable").and_then(serde_json::Value::as_bool) == Some(true) {
-            out.push_str(&format!("  {} (encrypted, not for us)\n", p["id"].as_str().unwrap_or("")));
+            out.push_str(&format!(
+                "  {} (encrypted, not for us)\n",
+                p["id"].as_str().unwrap_or("")
+            ));
         } else {
-            let dummy = if p["dummy"].as_bool() == Some(true) { " [dummy]" } else { "" };
+            let dummy = if p["dummy"].as_bool() == Some(true) {
+                " [dummy]"
+            } else {
+                ""
+            };
             out.push_str(&format!(
                 "  {} {} sats{}\n",
                 p["id"].as_str().unwrap_or(""),

@@ -68,8 +68,6 @@ fn draw_placeholder(frame: &mut ratatui::Frame) {
          built yet — see the TODO checklist in crates/ptj/src/tui.rs.\n\n\
          Press any key to exit.",
     )
-    .block(
-        ratatui::widgets::Block::bordered().title("ptj tui — work in progress"),
-    );
+    .block(ratatui::widgets::Block::bordered().title("ptj tui — work in progress"));
     frame.render_widget(notice, frame.area());
 }

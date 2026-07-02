@@ -26,21 +26,17 @@ edition = "2024"
 # (tor-rtcompat) plus tokio, and lights up the real send/recv over a Tor stream.
 default = []
 arti = [
-    "dep:arti-client",
-    "dep:tor-rtcompat",
-    "dep:tor-hsservice",
-    "dep:tor-proto",
-    "dep:tor-cell",
-    "dep:tokio",
-    "dep:futures",
-    "dep:safelog",
+  "dep:arti-client",
+  "dep:tor-rtcompat",
+  "dep:tor-hsservice",
+  "dep:tor-proto",
+  "dep:tor-cell",
+  "dep:tokio",
+  "dep:futures",
+  "dep:safelog",
 ]
 
 [dependencies]
-transport-core = { path = "../transport-core" }
-# Desugars the async `AnonymousChannel` impl to boxed futures so the seam stays
-# dyn-compatible. A proc-macro only — no runtime, no network SDK.
-async-trait = "0.1"
 
 # External-network stack — optional, gated behind `arti`. The arti workspace
 # releases its crates in lockstep: arti-client 0.44 resolves the whole tor-*
@@ -52,14 +48,28 @@ async-trait = "0.1"
 # rendering an `HsId` as a string requires its `DisplayRedacted` trait in scope.
 # `static-sqlite` compiles sqlite from source (`rusqlite/bundled`) so linking
 # does not need a system libsqlite3 — the hermetic devshell has none.
-arti-client = { version = "0.44", features = ["onion-service-service", "onion-service-client", "static-sqlite"], optional = true }
-tor-rtcompat = { version = "0.44", optional = true }
-tor-hsservice = { version = "0.44", optional = true }
-tor-proto = { version = "0.44", optional = true }
-tor-cell = { version = "0.44", optional = true }
-tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"], optional = true }
+arti-client = { version = "0.44", features = [
+  "onion-service-service",
+  "onion-service-client",
+  "static-sqlite",
+], optional = true }
+# Desugars the async `AnonymousChannel` impl to boxed futures so the seam stays
+# dyn-compatible. A proc-macro only — no runtime, no network SDK.
+async-trait = "0.1"
 futures = { version = "0.3", optional = true }
 safelog = { version = "0.9", optional = true }
+tokio = { version = "1", features = [
+  "macros",
+  "net",
+  "rt",
+  "sync",
+  "time",
+], optional = true }
+tor-cell = { version = "0.44", optional = true }
+tor-hsservice = { version = "0.44", optional = true }
+tor-proto = { version = "0.44", optional = true }
+tor-rtcompat = { version = "0.44", optional = true }
+transport-core = { path = "../transport-core" }
 
 [dev-dependencies]
 # `futures::executor::block_on` drives the async skeleton test (which has no

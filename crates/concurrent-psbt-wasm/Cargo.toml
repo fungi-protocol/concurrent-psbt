@@ -31,9 +31,6 @@ default = []
 debug-panic-hook = ["dep:console_error_panic_hook"]
 
 [dependencies]
-concurrent-psbt = { path = "../concurrent-psbt" }
-# base64 + BIP-370/BIP-174 (de)serialize. `base64` feature matches ptj's io.rs.
-psbt-v2 = { version = "0.3.0", features = ["base64"] }
 bitcoin = "0.32"
 # Deterministic AEAD for the negotiation band (pay/confirm --encrypt). Pure
 # Rust, wasm-clean; same crate + version ptj uses. bitcoin::hashes provides the
@@ -42,22 +39,27 @@ bitcoin = "0.32"
 # wasm32-unknown-unknown without its own `js` feature) — we derive nonces
 # deterministically and never use AeadCore::generate_nonce. `alloc` keeps the
 # Vec-returning Aead::encrypt/decrypt.
-chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
-# Same serde_json the webgui handlers use to shape inspect/DTO JSON.
-serde_json = "1"
-serde = { version = "1", features = ["derive"] }
+chacha20poly1305 = { version = "0.10", default-features = false, features = [
+  "alloc",
+] }
+concurrent-psbt = { path = "../concurrent-psbt" }
+console_error_panic_hook = { version = "0.1", optional = true }
+# base64 + BIP-370/BIP-174 (de)serialize. `base64` feature matches ptj's io.rs.
+psbt-v2 = { version = "0.3.0", features = ["base64"] }
 # rand is pulled transitively via concurrent-psbt (UniqueId::generate uses
 # rand::random). We depend on it directly ONLY to pin the wasm getrandom
 # backend below; concurrent-psbt itself does no other randomness.
 rand = "0.9"
+serde = { version = "1", features = ["derive"] }
+# serde-wasm-bindgen converts serde types <-> JsValue without a JSON string
+# hop; used for the structured DTO in/out.
+serde-wasm-bindgen = "0.6"
+# Same serde_json the webgui handlers use to shape inspect/DTO JSON.
+serde_json = "1"
 
 # EXACT pin: the wasm-bindgen bindgen format must match the wasm-bindgen-cli
 # in nix/devshell.nix (0.2.121) or wasm-bindgen/wasm-pack refuses the module.
 wasm-bindgen = "=0.2.121"
-# serde-wasm-bindgen converts serde types <-> JsValue without a JSON string
-# hop; used for the structured DTO in/out.
-serde-wasm-bindgen = "0.6"
-console_error_panic_hook = { version = "0.1", optional = true }
 
 # --- wasm getrandom backend (Feasibility requiredChanges) ---
 # rand 0.9 -> rand_core 0.9 -> getrandom 0.3. On wasm32 the RNG has no OS
@@ -74,8 +76,8 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 
 # Browser boundary tests (tests/wasm.rs); wasm-only.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-wasm-bindgen-test = "0.3"
 js-sys = "0.3"
+wasm-bindgen-test = "0.3"
 
 [lints]
 workspace = true

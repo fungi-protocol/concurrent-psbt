@@ -118,9 +118,11 @@ impl plugin::Server for NymPlugin {
         _params: plugin::AnonymousParams,
         mut results: plugin::AnonymousResults,
     ) -> Result<(), capnp::Error> {
-        results.get().set_transport(capnp_rpc::new_client(NymTransport {
-            state: self.state.clone(),
-        }));
+        results
+            .get()
+            .set_transport(capnp_rpc::new_client(NymTransport {
+                state: self.state.clone(),
+            }));
         Ok(())
     }
 

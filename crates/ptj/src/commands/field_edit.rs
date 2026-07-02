@@ -265,9 +265,24 @@ mod tests {
         assert_eq!(MapTarget::parse("in:0").unwrap(), MapTarget::Input(0));
         assert_eq!(MapTarget::parse("out:2").unwrap(), MapTarget::Output(2));
         assert_eq!(MapTarget::parse("output:2").unwrap(), MapTarget::Output(2));
-        assert!(MapTarget::parse("sideways:1").unwrap_err().to_string().contains("sideways"));
-        assert!(MapTarget::parse("input:x").unwrap_err().to_string().contains("map index"));
-        assert!(MapTarget::parse("global-ish").unwrap_err().to_string().contains("expected"));
+        assert!(
+            MapTarget::parse("sideways:1")
+                .unwrap_err()
+                .to_string()
+                .contains("sideways")
+        );
+        assert!(
+            MapTarget::parse("input:x")
+                .unwrap_err()
+                .to_string()
+                .contains("map index")
+        );
+        assert!(
+            MapTarget::parse("global-ish")
+                .unwrap_err()
+                .to_string()
+                .contains("expected")
+        );
     }
 
     #[test]

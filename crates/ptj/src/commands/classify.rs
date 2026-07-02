@@ -80,11 +80,12 @@ pub(crate) fn classify(payload: &str, network: bitcoin::Network) -> Result<serde
 
     // --- fully signed transactions (hex or base64 consensus encoding) -------
     match transaction_bytes(payload) {
-        Ok(bytes) => match bitcoin::consensus::encode::deserialize::<bitcoin::Transaction>(&bytes)
-        {
-            Ok(transaction) => return Ok(transaction_json(&transaction, network)),
-            Err(error) => attempts.push(format!("not a raw transaction ({error})")),
-        },
+        Ok(bytes) => {
+            match bitcoin::consensus::encode::deserialize::<bitcoin::Transaction>(&bytes) {
+                Ok(transaction) => return Ok(transaction_json(&transaction, network)),
+                Err(error) => attempts.push(format!("not a raw transaction ({error})")),
+            }
+        }
         Err(reason) => attempts.push(format!("not a raw transaction ({reason})")),
     }
 
@@ -241,15 +242,8 @@ fn payment_json(
         PaymentInstructions::FixedAmount(fixed) => {
             value["variant"] = json!("fixed_amount");
             value["amount_sats"] = json!(fixed.max_amount().map(amount_sats));
-            value["onchain_amount_sats"] =
-                json!(fixed.onchain_payment_amount().map(amount_sats));
-            value["methods"] = json!(
-                fixed
-                    .methods()
-                    .iter()
-                    .map(method_json)
-                    .collect::<Vec<_>>()
-            );
+            value["onchain_amount_sats"] = json!(fixed.onchain_payment_amount().map(amount_sats));
+            value["methods"] = json!(fixed.methods().iter().map(method_json).collect::<Vec<_>>());
             value["description"] = json!(fixed.recipient_description());
         }
         PaymentInstructions::ConfigurableAmount(configurable) => {
@@ -368,11 +362,7 @@ mod tests {
 
     #[test]
     fn classifies_public_ranged_descriptors() {
-        let value = classify(
-            &format!("wpkh({XPUB}/0/*)"),
-            bitcoin::Network::Bitcoin,
-        )
-        .unwrap();
+        let value = classify(&format!("wpkh({XPUB}/0/*)"), bitcoin::Network::Bitcoin).unwrap();
         assert_eq!(value["kind"], "descriptor");
         assert_eq!(value["has_private_keys"], false);
         assert_eq!(value["is_ranged"], true);
@@ -392,11 +382,7 @@ mod tests {
 
     #[test]
     fn flags_private_descriptor_material_and_never_echoes_it() {
-        let value = classify(
-            &format!("wpkh({XPRV}/0/*)"),
-            bitcoin::Network::Bitcoin,
-        )
-        .unwrap();
+        let value = classify(&format!("wpkh({XPRV}/0/*)"), bitcoin::Network::Bitcoin).unwrap();
         assert_eq!(value["kind"], "descriptor");
         assert_eq!(value["has_private_keys"], true);
         let normalized = value["descriptor"].as_str().unwrap();
@@ -404,11 +390,7 @@ mod tests {
         assert!(!normalized.contains("xprv"), "{normalized}");
         // The public and private forms of the same descriptor derive the
         // same script set.
-        let public = classify(
-            &format!("wpkh({XPUB}/0/*)"),
-            bitcoin::Network::Bitcoin,
-        )
-        .unwrap();
+        let public = classify(&format!("wpkh({XPUB}/0/*)"), bitcoin::Network::Bitcoin).unwrap();
         assert_eq!(value["derived"], public["derived"]);
     }
 

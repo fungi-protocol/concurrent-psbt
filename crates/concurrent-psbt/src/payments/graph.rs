@@ -202,7 +202,9 @@ impl PaymentGraph {
     /// `true` if `who` has any *outgoing* real payment (is a sender in the
     /// spec's sense), regardless of net balance.
     pub fn is_sender(&self, who: &ParticipantId) -> bool {
-        self.edges.iter().any(|e| &e.payer == who && e.amount_sats > 0)
+        self.edges
+            .iter()
+            .any(|e| &e.payer == who && e.amount_sats > 0)
     }
 
     /// `true` if `who` receives at least as much as they send.
@@ -384,10 +386,7 @@ mod tests {
             // The pseudonym is deterministic for the same script.
             let pseudo = script_pseudonym(&[0xde, 0xad]);
             assert_eq!(g.net_balance(&pseudo), 700);
-            assert_eq!(
-                PaymentGraph::recipient_of(&[0xde, 0xad], &|_| None),
-                pseudo
-            );
+            assert_eq!(PaymentGraph::recipient_of(&[0xde, 0xad], &|_| None), pseudo);
         }
 
         #[test]

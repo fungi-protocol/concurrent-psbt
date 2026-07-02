@@ -66,8 +66,7 @@ The ❌ reflects the mdk/MLS SDK not being wasm-proven, not the protocol.
   **AttributableChannel**.
 - **Preferred (deferred):** the rust `nostr` crate compiled to wasm (NIP-44 +
   relay), talking over `ws_stream_wasm`. `nostr` is UNGROUNDED and the rust-side
-  transport crate is unauthored → DEFERRED (`TODO(transport-nostr): unauthored;
-  TODO(ground-deps): nostr`).
+  transport crate is unauthored → DEFERRED (`TODO(transport-nostr): unauthored; TODO(ground-deps): nostr`).
 - MLS groups (mdk/whitenoise) for multi-party forward secrecy are heavier and
   DEFERRED further; the browser transport ships the lighter NIP-44-over-ws path.
 
@@ -81,7 +80,7 @@ The BIP 77 payjoin-directory-over-OHTTP client is its OWN component
 (`signaling-ohttp`). It serves TWO roles here, from ONE mechanism:
 
 1. **WebRTC signaling** (above).
-2. **Async offline fallback** — if a peer is offline, their PSBT waits in the
+1. **Async offline fallback** — if a peer is offline, their PSBT waits in the
    directory; the other peer joins later. This is `app-suite.md`'s "async
    fallback" and it is the SAME crate/mailbox as signaling.
 
@@ -103,8 +102,7 @@ signaling-ohttp component). TODO(transport-nostr): a rust nostr transport crate
 is unauthored. (The merged wasm core `concurrent-psbt-wasm` carries NO transport
 features — it is pure Layer-1/2.) Each transport crate: feature declared, SDK
 dep un-wired, `TODO(ground-deps)`, default compiles, `mod imp` gated behind the
-feature, feature-off ctor/send/recv return `Error::new("... built without the
-'<x>' feature")`. Trait-satisfaction + frame/deframe roundtrip tests run in
+feature, feature-off ctor/send/recv return `Error::new("... built without the '<x>' feature")`. Trait-satisfaction + frame/deframe roundtrip tests run in
 BOTH states with no network.
 
 For the TS side: sneakernet + browser-native WebRTC + browser-native nostr-ws are

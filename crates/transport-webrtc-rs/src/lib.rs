@@ -202,8 +202,7 @@ pub struct WebrtcRsTransport {
 /// WITHOUT the `webrtc-rs` feature. Mirrors the ptj-style gating: the type still
 /// exists and satisfies the channel trait, but you cannot bring a real peer
 /// connection up.
-pub const BUILT_WITHOUT_WEBRTC_RS: &str =
-    "transport-webrtc-rs built without the 'webrtc-rs' feature; \
+pub const BUILT_WITHOUT_WEBRTC_RS: &str = "transport-webrtc-rs built without the 'webrtc-rs' feature; \
      rebuild with `--features webrtc-rs` to enable the webrtc-rs data-channel backend";
 
 impl WebrtcRsTransport {
@@ -440,7 +439,9 @@ mod tests {
         // might coalesce them): drain both whole ones and keep the partial.
         let mut buf = Vec::new();
         buf.extend_from_slice(&wrap_outgoing(&Message::Payment(vec![1, 2]).encode()));
-        buf.extend_from_slice(&wrap_outgoing(&Message::Confirmation(vec![3, 4, 5]).encode()));
+        buf.extend_from_slice(&wrap_outgoing(
+            &Message::Confirmation(vec![3, 4, 5]).encode(),
+        ));
         let third = wrap_outgoing(&Message::Psbt(vec![0xAB; 40]).encode());
         buf.extend_from_slice(&third[..third.len() - 3]); // truncated tail
 
@@ -511,7 +512,10 @@ mod tests {
         s.push(SignalBlob(b"candidate".to_vec())).unwrap();
         assert_eq!(
             s.poll().unwrap(),
-            vec![SignalBlob(b"offer".to_vec()), SignalBlob(b"candidate".to_vec())]
+            vec![
+                SignalBlob(b"offer".to_vec()),
+                SignalBlob(b"candidate".to_vec())
+            ]
         );
         // A second poll is empty: poll drains, matching the snapshot cadence.
         assert!(s.poll().unwrap().is_empty());

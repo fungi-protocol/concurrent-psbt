@@ -107,7 +107,7 @@ finalize_and_broadcast_psbt() {
   local mine_addr="$2"
   local expected_outputs="$3"
   local expected_total="$4"
-  local finalized complete hex txid mined raw
+  local finalized complete hex txid raw
 
   finalized=$($CLI finalizepsbt "$psbt")
   complete=$(echo "$finalized" | jq -r '.complete')
@@ -119,7 +119,7 @@ finalize_and_broadcast_psbt() {
 
   hex=$(echo "$finalized" | jq -r '.hex')
   txid=$($CLI sendrawtransaction "$hex" 0)
-  mined=$($CLI generatetoaddress 1 "$mine_addr")
+  $CLI generatetoaddress 1 "$mine_addr" >/dev/null
   raw=$($CLI getrawtransaction "$txid" true)
 
   echo "$raw" | jq -e --argjson expected "$expected_outputs" \

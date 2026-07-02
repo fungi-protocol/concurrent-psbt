@@ -76,7 +76,10 @@ pub fn create(req: dto::CreateRequest) -> Result<Value, String> {
             .txid
             .parse()
             .map_err(|e| format!("invalid txid {}: {e}", input.txid))?;
-        let outpoint = bitcoin::OutPoint { txid, vout: input.vout };
+        let outpoint = bitcoin::OutPoint {
+            txid,
+            vout: input.vout,
+        };
         constructor = constructor.input(Input::new(&outpoint));
     }
     for output in &req.outputs {
@@ -157,7 +160,10 @@ fn join_psbts(psbts: Vec<Psbt>) -> Result<Psbt, String> {
         .reduce(|left, right| left.join(right))
         .ok_or_else(|| "join expects at least one PSBT".to_string())?;
     if !result.is_ok() {
-        let mut details = vec!["join produced conflicting fields".to_string(), String::new()];
+        let mut details = vec![
+            "join produced conflicting fields".to_string(),
+            String::new(),
+        ];
         result.for_each_conflict(|section, field, conflict| {
             details.push(format!("  {section}.{field}: {conflict:?}"));
         });
@@ -178,8 +184,8 @@ pub fn sort(psbt: &str, seed_hex: Option<&str>, allow_short_seed: bool) -> Resul
         .map(crate::bytes_arg::parse_bytes_arg)
         .transpose()?;
     let psbt = parse_psbt_str("request psbt", psbt)?;
-    let constructor = dynamic::Constructor::try_from_psbt(psbt)
-        .map_err(|e| format!("request psbt: {e}"))?;
+    let constructor =
+        dynamic::Constructor::try_from_psbt(psbt).map_err(|e| format!("request psbt: {e}"))?;
     let mut unordered = constructor.into_inner();
     if let Some(seed) = seed {
         require_spec_minimum_seed(&seed, allow_short_seed)?;
@@ -196,7 +202,9 @@ pub fn sort(psbt: &str, seed_hex: Option<&str>, allow_short_seed: bool) -> Resul
         Some(0x01) => {
             Sorter::<Deterministic>::from_unordered_psbt(unordered).into_ordered_psbt_with(policy)
         }
-        Some(0x00) => Sorter::<ExplicitSortKeys>::from_unordered_psbt(unordered).into_ordered_psbt(),
+        Some(0x00) => {
+            Sorter::<ExplicitSortKeys>::from_unordered_psbt(unordered).into_ordered_psbt()
+        }
         _ => Sorter::<Unset>::from_unordered_psbt(unordered).into_ordered_psbt(),
     }
     .map_err(|e| e.to_string())?;
@@ -237,10 +245,7 @@ pub fn atomize(psbt: &str) -> Result<Value, String> {
         .map(dynamic::Constructor::into_psbt)
         .map_err(|e| e.to_string())?;
     let atoms = atomize_psbt(psbt)?;
-    let fragments = atoms
-        .iter()
-        .map(psbt_response)
-        .collect::<Vec<_>>();
+    let fragments = atoms.iter().map(psbt_response).collect::<Vec<_>>();
     Ok(json!({ "fragments": fragments }))
 }
 
@@ -572,7 +577,6 @@ fn parse_network(value: Option<&str>) -> Result<Network, String> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     //! Native (off-target) tests over the pure op logic. These run under a
@@ -634,7 +638,10 @@ mod tests {
             outputs: vec![],
         })
         .unwrap_err();
-        assert!(err.contains("deterministic ordering requires seed_hex"), "{err}");
+        assert!(
+            err.contains("deterministic ordering requires seed_hex"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -670,8 +677,8 @@ mod tests {
         // Liberal parsing parity: a bech32 seed decodes to its 16-byte data
         // part and satisfies the spec minimum.
         use bitcoin::bech32::{self, Hrp};
-        let seed = bech32::encode::<bech32::Bech32m>(Hrp::parse("seed").unwrap(), &[0xab; 16])
-            .unwrap();
+        let seed =
+            bech32::encode::<bech32::Bech32m>(Hrp::parse("seed").unwrap(), &[0xab; 16]).unwrap();
         let created = created_with_output(4);
         let sorted = sort(&created, Some(&seed), false).expect("bech32 seed sorts");
         assert_eq!(sorted["inspect"]["sort"]["seed_hex"], "ab".repeat(16));
@@ -726,7 +733,10 @@ mod tests {
             ordering: None,
             seed_hex: Some(SEED.to_string()),
             allow_short_seed: false,
-            inputs: vec![dto::CreateInput { txid: format!("{seed_byte:064x}"), vout }],
+            inputs: vec![dto::CreateInput {
+                txid: format!("{seed_byte:064x}"),
+                vout,
+            }],
             outputs: vec![],
         })
         .expect("create");
@@ -739,7 +749,10 @@ mod tests {
             ordering: None,
             seed_hex: Some(SEED.to_string()),
             allow_short_seed: false,
-            inputs: vec![dto::CreateInput { txid: format!("{seed_byte:064x}"), vout: 7 }],
+            inputs: vec![dto::CreateInput {
+                txid: format!("{seed_byte:064x}"),
+                vout: 7,
+            }],
             outputs: vec![dto::CreateOutput {
                 address: regtest_address(seed_byte),
                 amount_btc: "0.00050000".to_string(),
@@ -758,7 +771,8 @@ mod tests {
     #[test]
     fn sort_then_make_unordered_toggles_ordering() {
         let created = created_with_output(5);
-        let sorted = sort(&created, Some("deadbeefdeadbeefdeadbeefdeadbeef"), false).expect("sort ok");
+        let sorted =
+            sort(&created, Some("deadbeefdeadbeefdeadbeefdeadbeef"), false).expect("sort ok");
         assert_eq!(sorted["inspect"]["ordering"], "ordered");
 
         let unordered =
@@ -797,8 +811,7 @@ mod tests {
         let exported = export_bip174(&ordered).expect("export ok");
         assert_eq!(exported["format"], "bip174");
 
-        let imported =
-            import_bip174(exported["psbt"].as_str().unwrap(), false).expect("import ok");
+        let imported = import_bip174(exported["psbt"].as_str().unwrap(), false).expect("import ok");
         assert_eq!(imported["inspect"]["format"], "bip370");
         assert_eq!(imported["inspect"]["ordering"], "ordered");
         assert_eq!(imported["inspect"]["input_count"], 1);
@@ -824,8 +837,7 @@ mod tests {
             output.proprietaries.clear();
         }
         let exported = export_bip174(&encode_psbt(&bare)).expect("export ok");
-        let imported =
-            import_bip174(exported["psbt"].as_str().unwrap(), true).expect("import ok");
+        let imported = import_bip174(exported["psbt"].as_str().unwrap(), true).expect("import ok");
         let imported_psbt = imported["psbt"].as_str().unwrap();
 
         // Previously failed here: no PSBT_OUT_UNIQUE_ID.
@@ -950,7 +962,10 @@ mod tests {
         let x = created_psbt(3, 1);
         let once = local_sync(vec![x.clone()]).unwrap();
         let twice = local_sync(vec![x.clone(), x]).unwrap();
-        assert_eq!(once["inspect"]["input_count"], twice["inspect"]["input_count"]);
+        assert_eq!(
+            once["inspect"]["input_count"],
+            twice["inspect"]["input_count"]
+        );
     }
 
     #[test]
@@ -965,8 +980,11 @@ mod tests {
         })
         .expect("pay");
         let out = paid["psbt"].as_str().unwrap().to_string();
-        let decoded = payments(dto::PaymentsRequest { psbt: out, secret_hex: None })
-            .expect("payments");
+        let decoded = payments(dto::PaymentsRequest {
+            psbt: out,
+            secret_hex: None,
+        })
+        .expect("payments");
         let entries = decoded["payments"].as_array().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0], "deadbeef");

@@ -1,9 +1,7 @@
-use std::collections::BTreeSet;
 use std::path::Path;
 
 use concurrent_psbt::Join;
 use concurrent_psbt::global::GlobalSortExt;
-use concurrent_psbt::output::OutputUniqueIdExt;
 use concurrent_psbt::roles::combiner::ResultOrderedPsbt;
 use concurrent_psbt::roles::constructor::dynamic;
 use psbt_v2::v2::Psbt;
@@ -66,22 +64,6 @@ pub(crate) fn join_psbts(psbts: impl IntoIterator<Item = Psbt>) -> Result<Psbt> 
 
 /// Join unordered PSBTs: inputs keyed by outpoint, outputs by unique id.
 fn join_unordered(psbts: Vec<Psbt>) -> Result<Psbt> {
-    // Distinct identifiers between operands (added inputs or outputs) are
-    // allowed only while the corresponding TX_MODIFIABLE bit is set. The key
-    // sets are recorded before parsing consumes the operands.
-    let inputs_differ = differ(psbts.iter().map(|psbt| {
-        psbt.inputs
-            .iter()
-            .map(|input| (input.previous_txid, input.spent_output_index))
-            .collect::<BTreeSet<_>>()
-    }));
-    let outputs_differ = differ(psbts.iter().map(|psbt| {
-        psbt.outputs
-            .iter()
-            .map(|output| output.unique_id().map(|id| id.as_bytes().to_vec()))
-            .collect::<BTreeSet<_>>()
-    }));
-
     let result = psbts
         .into_iter()
         .map(|psbt| {
@@ -103,20 +85,7 @@ fn join_unordered(psbts: Vec<Psbt>) -> Result<Psbt> {
         Ok(constructor) => constructor,
         Err(_) => unreachable!("is_ok() guard verified all entries"),
     };
-    let psbt = constructor.into_psbt();
-
-    let flags = psbt.global.tx_modifiable_flags;
-    if inputs_differ && flags & 0x01 == 0 {
-        return Err(Error::new(
-            "PSBTs are not joinable: input sets differ but inputs are not modifiable",
-        ));
-    }
-    if outputs_differ && flags & 0x02 == 0 {
-        return Err(Error::new(
-            "PSBTs are not joinable: output sets differ but outputs are not modifiable",
-        ));
-    }
-    Ok(psbt)
+    Ok(constructor.into_psbt())
 }
 
 /// Combine ordered PSBTs positionally: entry i of every operand must describe
@@ -140,14 +109,6 @@ fn combine_ordered(psbts: Vec<Psbt>) -> Result<Psbt> {
     }
 }
 
-fn differ<T: Eq>(sets: impl IntoIterator<Item = T>) -> bool {
-    let mut sets = sets.into_iter();
-    match sets.next() {
-        Some(first) => sets.any(|set| set != first),
-        None => false,
-    }
-}
-
 fn conflict_error(visit: impl FnOnce(&mut dyn FnMut(&str, &str, &dyn std::fmt::Debug))) -> Error {
     let mut details = vec![
         "join produced conflicting fields".to_string(),
@@ -164,7 +125,7 @@ mod tests {
     use super::*;
 
     use bitcoin::hashes::Hash;
-    use concurrent_psbt::output::UniqueId;
+    use concurrent_psbt::output::{OutputUniqueIdExt, UniqueId};
     use psbt_v2::v2::{Global, Input, Output};
 
     fn input(txid_byte: u8) -> Input {
@@ -272,11 +233,19 @@ mod tests {
         // Both operands are unordered but no longer modifiable: their sets
         // are frozen, so an output present on one side only must refuse.
         let left = psbt(0x00, true, vec![input(1)], vec![output(10, 1)]);
-        let right = psbt(0x00, true, vec![input(1)], vec![output(10, 1), output(20, 2)]);
+        let right = psbt(
+            0x00,
+            true,
+            vec![input(1)],
+            vec![output(10, 1), output(20, 2)],
+        );
 
         let error = join_psbts([left, right]).expect_err("frozen sets must not grow");
+        let message = error.to_string();
         assert!(
-            error.to_string().contains("output sets differ"),
+            message.contains("global.tx_modifiable_flags")
+                && message.contains("global.output_count")
+                && !message.contains("global.input_count"),
             "unexpected error: {error}"
         );
     }

@@ -53,16 +53,16 @@ use std::collections::VecDeque;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
-use transport_core::{deframe, frame, Error, Result, MAX_FRAME_LEN};
+use transport_core::{Error, MAX_FRAME_LEN, Result, deframe, frame};
 
 use super::{Role, Str0mConfig};
 
 // The str0m surface the backend codes against (grounded to the pinned version).
 use str0m::{
+    Candidate, Event, Input, Output, Rtc,
     change::{SdpAnswer, SdpOffer, SdpPendingOffer},
     channel::ChannelId,
     net::{Protocol, Receive},
-    Candidate, Event, Input, Output, Rtc,
 };
 
 /// How long a single `recv` poll blocks reading the UDP socket before returning
@@ -199,7 +199,9 @@ impl Inner {
                 let answer = SdpAnswer::from_sdp_string(sdp)
                     .map_err(|e| Error::new(format!("str0m: parsing remote answer: {e}")))?;
                 let pending = self.pending_offer.take().ok_or_else(|| {
-                    Error::new("str0m: got an answer but no pending offer (call local_handshake first)")
+                    Error::new(
+                        "str0m: got an answer but no pending offer (call local_handshake first)",
+                    )
                 })?;
                 // str0m-api: complete the pending offer with the answer.
                 self.rtc
@@ -312,13 +314,10 @@ impl Inner {
             match self.socket.recv_from(&mut buf) {
                 Ok((n, source)) => {
                     // str0m-api: hand the datagram to the state machine.
-                    let receive = Receive::new(
-                        Protocol::Udp,
-                        source,
-                        self.local_addr,
-                        &buf[..n],
-                    )
-                    .map_err(|e| Error::new(format!("str0m: parsing inbound datagram: {e}")))?;
+                    let receive = Receive::new(Protocol::Udp, source, self.local_addr, &buf[..n])
+                        .map_err(|e| {
+                        Error::new(format!("str0m: parsing inbound datagram: {e}"))
+                    })?;
                     self.rtc
                         .handle_input(Input::Receive(now, receive))
                         .map_err(|e| Error::new(format!("str0m: handle_input(Receive): {e}")))?;

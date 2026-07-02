@@ -7,8 +7,8 @@
 
 use std::collections::BTreeSet;
 
-use crate::tx::ResultUnorderedPsbt;
 use crate::Join;
+use crate::tx::ResultUnorderedPsbt;
 
 /// Ephemeral identity of a party in a shared session.
 pub type PartyId = crate::payments::graph::ParticipantId;
