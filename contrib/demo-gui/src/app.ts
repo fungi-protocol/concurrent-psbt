@@ -10,7 +10,8 @@ const {
   joinPsbts: joinBackendPsbts,
   makeUnordered: makeBackendUnordered,
   sortPsbt: sortBackendPsbt,
-} = await import("./backend.js?v=20260705-paste-inspect-v1");
+  syncPsbts: syncBackendPsbts,
+} = await import("./backend.js?v=20260705-iroh-sync-v1");
 
 const {
   amountParts,
@@ -869,6 +870,32 @@ function addPsbtFragmentFromRaw(label, raw, sourceDescription, shouldRender = tr
   return fragment;
 }
 
+async function hydrateIrohSync(ticket) {
+  const psbts = state.fragments.map((fragment) => fragment.raw).filter(Boolean);
+  state.log.unshift(`Syncing ${psbts.length} raw PSBT(s) over iroh…`);
+  render();
+  try {
+    const response = await syncBackendPsbts(window.fetch.bind(window), {
+      psbts,
+      irohTicket: ticket,
+    });
+    const fragment = addPsbtFragmentFromRaw("iroh sync PSBT", response.psbt, "Converged PSBT from ptj webgui /api/sync over the iroh transport.", false);
+    fragment.inspect = response.inspect || null;
+    state.log.unshift(`ptj backend synced over iroh into ${fragment.id}.`);
+    for (const payment of response.payments || []) {
+      state.log.unshift(`iroh sync delivered an out-of-band payment message (${payment.length / 2} bytes).`);
+    }
+    for (const confirmation of response.confirmations || []) {
+      state.log.unshift(`iroh sync delivered an out-of-band confirmation message (${confirmation.length / 2} bytes).`);
+    }
+    render();
+  } catch (error) {
+    if (!(error instanceof PtjBackendError)) throw error;
+    state.log.unshift(`ptj backend rejected iroh sync: ${error.message}`);
+    render();
+  }
+}
+
 async function hydratePastedPsbtFragment(fragment) {
   const fetchImpl = window.fetch.bind(window);
   try {
@@ -925,6 +952,12 @@ function handlePastedCandidate(value, source, shouldRender = true) {
   const relay = value.match(/\b(?:wss?:\/\/|nostr\+relay:\/\/)[^\s<>"']+/i)?.[0];
   if (relay) {
     addConnectivityPeer(contactPeerLabel("relay", relay), "relay", relay, shouldRender);
+    return true;
+  }
+  const irohTicket = value.match(/\bdoc[a-z2-7]{40,}\b/i)?.[0];
+  if (irohTicket) {
+    addConnectivityPeer(contactPeerLabel("iroh", irohTicket), "iroh", irohTicket, shouldRender);
+    void hydrateIrohSync(irohTicket);
     return true;
   }
   const wormhole = value.match(/\b\d{1,4}-[a-z0-9]+(?:-[a-z0-9]+){1,}\b/i)?.[0];
