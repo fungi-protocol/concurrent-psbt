@@ -3,6 +3,7 @@ mod joinable_struct_macro;
 mod values;
 
 pub mod global;
+pub mod negotiation;
 pub mod input;
 mod input_set;
 pub mod output;
