@@ -12,6 +12,7 @@ import {
   joinPsbts,
   makeUnordered,
   sortPsbt,
+  syncPsbts,
 } from "../dist/backend.js";
 
 function jsonResponse(status, body) {
@@ -107,6 +108,14 @@ test("backend client exposes every offline PSBT transform endpoint", async () =>
   assert.deepEqual(await importBip174(imported.fetch, "core"), { psbt: "bip370", inspect: { format: "bip370" } });
   assert.equal(imported.calls[0].path, "/api/import-bip174");
   assert.deepEqual(imported.calls[0].body, { psbt: "core" });
+
+  const synced = recordingFetch(jsonResponse(200, { psbt: "lub", payments: [], confirmations: [] }));
+  assert.deepEqual(
+    await syncPsbts(synced.fetch, { psbts: ["a", "b"], irohTicket: "docabc", irohWaitMs: 100 }),
+    { psbt: "lub", payments: [], confirmations: [] },
+  );
+  assert.equal(synced.calls[0].path, "/api/sync");
+  assert.deepEqual(synced.calls[0].body, { psbts: ["a", "b"], iroh_ticket: "docabc", iroh_wait_ms: 100 });
 });
 
 test("backend client raises structured ptj errors", async () => {
