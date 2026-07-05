@@ -3891,12 +3891,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "transport-arti"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "transport-core",
+]
+
+[[package]]
 name = "transport-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "bitcoin",
  "futures",
+]
+
+[[package]]
+name = "transport-emissary"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "transport-core",
 ]
 
 [[package]]
@@ -3911,6 +3928,24 @@ dependencies = [
  "iroh-gossip",
  "n0-future",
  "tokio",
+ "transport-core",
+]
+
+[[package]]
+name = "transport-mdk"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "transport-core",
+]
+
+[[package]]
+name = "transport-nym"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
  "transport-core",
 ]
 
