@@ -1,5 +1,4 @@
 use concurrent_psbt::global::GlobalSortExt;
-use concurrent_psbt::output::PSBT_OUT_UNIQUE_ID_SUBTYPE;
 use concurrent_psbt::roles::Creator;
 use psbt_v2::v2::{Input, Output, Psbt};
 
@@ -25,15 +24,12 @@ pub(super) fn run(config: CreateConfig) -> Result<Psbt> {
                 ))
             })?;
 
-        let mut psbt_output = Output {
+        let psbt_output = Output {
             amount: output.amount,
             script_pubkey: address.script_pubkey(),
             ..Output::default()
         };
-        psbt_output
-            .proprietaries
-            .insert(unique_id_key(), rand::random::<[u8; 16]>().to_vec());
-        constructor = constructor.output(psbt_output);
+        constructor = constructor.output_with_new_uid(psbt_output);
     }
 
     let mut psbt = constructor.into_inner();
@@ -45,12 +41,4 @@ pub(super) fn run(config: CreateConfig) -> Result<Psbt> {
     psbt.global.tx_modifiable_flags = 0x03;
 
     Ok(psbt.into_psbt())
-}
-
-fn unique_id_key() -> psbt_v2::raw::ProprietaryKey {
-    psbt_v2::raw::ProprietaryKey {
-        prefix: concurrent_psbt::PROPRIETARY_PREFIX.to_vec(),
-        subtype: PSBT_OUT_UNIQUE_ID_SUBTYPE,
-        key: vec![],
-    }
 }
