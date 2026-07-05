@@ -1,0 +1,43 @@
+[package]
+name = "transport-mdk"
+version.workspace = true
+edition = "2024"
+
+# transport-mdk — an ATTRIBUTABLE transport over MDK (the Nostr Messaging
+# Development Kit: MLS group messaging carried on Nostr events). A received
+# application message carries the sending group member's public key, which we
+# hand up as the transport-core `SenderId`. This is ordinary messaging plumbing:
+# we use the upstream `mdk` crate to move OPAQUE bytes between group members; any
+# confidentiality is a property of MLS/MDK, not something authored here.
+#
+# ALL external-network / MLS SDK usage is gated behind the `mdk` cargo feature
+# (default OFF), mirroring how the ptj CLI gates its `iroh-sync` feature. With
+# the feature off the crate compiles as a skeleton against `transport-core` +
+# `std` alone, and every network operation returns a clear "built without mdk"
+# error. The `AttributableChannel` trait impl and the framing round-trip are
+# compiled and tested WITHOUT the feature (no network required).
+
+[dependencies]
+# TODO(ground-deps): defer the network SDK until pinned to a resolvable
+# crate/version (mdk/nostr/nostr-sdk). The `mdk` feature is declared but empty so the
+# default skeleton (channel trait + framing) compiles; the feature-on network
+# path in the crate source stays authored-but-unverified until then.
+transport-core = { path = "../transport-core" }
+# Desugars the async `AttributableChannel` impl to boxed futures so `MdkChannel`
+# stays dyn-compatible. Proc-macro only — no runtime, no network SDK.
+async-trait = "0.1"
+
+[dev-dependencies]
+# `futures::executor::block_on` drives the async skeleton/channel tests (which
+# have no tokio) to completion. Dev-only, runtime-free.
+futures = "0.3"
+
+[features]
+default = []
+# Turning on `mdk` pulls in the MLS SDK, the Nostr event/keys types, the relay
+# client, and the runtime the backend uses, and switches the channel from the
+# skeleton stub to the real send/recv path over Nostr relays.
+mdk = []
+
+[lints]
+workspace = true
