@@ -5,6 +5,7 @@ use psbt_v2::v2::Psbt;
 
 use crate::global::GlobalSortExt;
 use crate::input::{InputSortKeyExt, out_point};
+use crate::negotiation::GlobalNegotiationExt;
 use crate::output::{OutputSortKeyExt, OutputUniqueIdExt};
 use crate::tx::UnorderedPsbt;
 
@@ -202,6 +203,9 @@ where
 
     let mut global = psbt.global;
     global.clear_unordered();
+    // Negotiation metadata (payments/confirmations) has done its job once
+    // ordering begins; do not leak the payment graph into the signing artifact.
+    global.clear_negotiation();
     global.input_count = sorted_inputs.len();
     global.output_count = sorted_outputs.len();
 
