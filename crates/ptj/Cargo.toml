@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 bitcoin = "0.32"
+chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive"] }
 concurrent-psbt = { path = "../concurrent-psbt" }
 psbt-v2 = { version = "0.3.0", features = ["base64"] }
