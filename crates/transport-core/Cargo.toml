@@ -1,0 +1,27 @@
+[package]
+name = "transport-core"
+version.workspace = true
+edition = "2024"
+
+[dependencies]
+# The messaging seam (AnonymousChannel / AttributableChannel / Transport) is
+# ASYNC and must stay dyn-compatible — the driver holds `Box<dyn Transport>`.
+# async fns in traits are not object-safe on stable, so the whole seam is
+# desugared to `Pin<Box<dyn Future>>` by this small, standard proc-macro. It
+# pulls NO runtime: transport-core still has no tokio, no transport SDK; the
+# runtime lives at the single driver edge in the ptj crate.
+async-trait = "0.1"
+# The pinned bitcoin crate is re-exported from this hub (`pub use bitcoin`) so
+# every transport-<name> crate shares the exact same version through
+# transport-core instead of pinning it independently. transport-core stays
+# dependency-light: bitcoin + std, and the one small proc-macro below.
+bitcoin = "0.32"
+
+[dev-dependencies]
+# `futures::executor::block_on` drives the async trait tests to completion. It
+# is a dev-only, runtime-free single-future executor — the shipping crate still
+# pulls no async runtime; the driver runtime lives at the ptj edge.
+futures = "0.3"
+
+[lints]
+workspace = true
