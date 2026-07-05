@@ -40,6 +40,12 @@ pub enum Command {
     Inspect(InspectConfig),
     /// Mark a safe BIP 370 constructor PSBT unordered for lattice joining
     MakeUnordered(MakeUnorderedConfig),
+    /// Attach a payment a participant wants constructed (negotiation metadata)
+    Pay(PayConfig),
+    /// Attach a confirmation of the converged transaction prior to signing
+    Confirm(ConfirmConfig),
+    /// Decode the payments and confirmations negotiated in a PSBT
+    Payments(PaymentsConfig),
     /// Sort a PSBT into BIP 370 order
     Sort(SortConfig),
     /// Join local PSBT sources and print the converged state
@@ -58,6 +64,9 @@ impl Command {
             Command::Inspect(config) => is_stdin_path(&config.file),
             Command::Join(config) => config.files.iter().any(|path| is_stdin_path(path)),
             Command::MakeUnordered(config) => is_stdin_path(&config.file),
+            Command::Pay(config) => is_stdin_path(&config.file),
+            Command::Confirm(config) => is_stdin_path(&config.file),
+            Command::Payments(config) => is_stdin_path(&config.file),
             Command::Sort(config) => is_stdin_path(&config.file),
             Command::Sync(config) => config.sources.iter().any(|path| is_stdin_path(path)),
             Command::Create(_) | Command::Webgui(_) => false,
@@ -81,6 +90,9 @@ impl Command {
                 .filter(|path| is_stdin_path(path))
                 .count(),
             Command::MakeUnordered(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Pay(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Confirm(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Payments(config) => usize::from(is_stdin_path(&config.file)),
             Command::Sort(config) => usize::from(is_stdin_path(&config.file)),
             Command::Sync(config) => config
                 .sources
@@ -242,6 +254,81 @@ impl FromStr for OrderingArg {
                 "unknown ordering '{other}' (expected: unset, deterministic, explicit)"
             )),
         }
+    }
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PayConfig {
+    /// Recipient in addr:amount_btc format
+    #[arg(long = "to")]
+    pub to: OutputArg,
+    /// Optional payment label
+    #[arg(long)]
+    pub label: Option<String>,
+    /// Payer peer id as 32-byte hex (defaults to unspecified/zero)
+    #[arg(long)]
+    pub payer: Option<Hex32>,
+    /// Network the recipient address must be valid for
+    #[arg(long = "network", default_value_t = NetworkArg(bitcoin::Network::Bitcoin))]
+    pub network: NetworkArg,
+    /// Encrypt the payment record with the group secret
+    #[arg(long)]
+    pub encrypt: bool,
+    /// Out-of-band shared secret as hex (required with --encrypt)
+    #[arg(long)]
+    pub secret: Option<HexSeed>,
+    /// Add N indistinguishable dummy payments (requires --encrypt)
+    #[arg(long, default_value_t = 0)]
+    pub dummy: u32,
+    /// PSBT file to attach the payment to
+    pub file: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ConfirmConfig {
+    /// Confirming peer id as 32-byte hex (defaults to unspecified/zero)
+    #[arg(long = "peer-id")]
+    pub peer_id: Option<Hex32>,
+    /// Encrypt the confirmation record with the group secret
+    #[arg(long)]
+    pub encrypt: bool,
+    /// Out-of-band shared secret as hex (required with --encrypt)
+    #[arg(long)]
+    pub secret: Option<HexSeed>,
+    /// PSBT file to confirm
+    pub file: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PaymentsConfig {
+    /// Out-of-band shared secret as hex (decrypts encrypted entries)
+    #[arg(long)]
+    pub secret: Option<HexSeed>,
+    /// Emit the report as JSON
+    #[arg(long)]
+    pub json: bool,
+    /// PSBT file to read negotiation metadata from
+    pub file: PathBuf,
+}
+
+/// A fixed 32-byte value parsed from hex.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hex32([u8; 32]);
+
+impl Hex32 {
+    pub fn into_array(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+impl FromStr for Hex32 {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        let bytes = decode_hex(value)?;
+        <[u8; 32]>::try_from(bytes.as_slice())
+            .map(Self)
+            .map_err(|_| format!("expected 32 bytes (64 hex chars), got {}", value.len() / 2))
     }
 }
 
