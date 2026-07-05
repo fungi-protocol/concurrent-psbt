@@ -159,21 +159,21 @@ background operation) and hardware wallet workflows (USB access).
 
 ## How this informs the traits
 
-### MessageStore must be synchronous and pull-based
+### Transport must be synchronous and pull-based
 
 Mobile and web both have constrained event models. Mobile background
 tasks are killed unpredictably. Browser tabs freeze. A push-based
 trait (`on_message` callback) requires the caller to maintain a
 long-lived event loop, which is unreliable on both platforms.
 
-Pull-based (`list()` returns current messages) works everywhere:
+Pull-based (`collect()` returns current messages) works everywhere:
 
 - POSIX: call in a loop with `sleep`
 - Web: call from `setInterval` or `requestAnimationFrame`
 - Mobile: call from a timer, or on push notification wakeup
 
 The transport implementation converts push to pull internally. A
-nostr relay handler appends to a buffer; `list()` drains it. This
+nostr relay handler appends to a buffer; `collect()` drains it. This
 is the adaptor pattern: push transport → internal buffer → pull
 trait.
 
@@ -215,10 +215,10 @@ resumption.
 BLE, NFC, WiFi Direct, and mDNS are all platform-specific APIs.
 The library shouldn't know about any of them. Instead, local
 discovery is a transport that produces messages, just like any
-other `MessageStore`.
+other `Transport`.
 
-A mobile app implements `BleMessageStore` using platform BLE APIs.
-A POSIX tool implements `MdnsMessageStore` using mDNS. Both satisfy
+A mobile app implements `BleTransport` using platform BLE APIs.
+A POSIX tool implements `MdnsTransport` using mDNS. Both satisfy
 the same trait. The library joins PSBTs regardless.
 
 The introduction layer similarly abstracts local discovery:
@@ -236,7 +236,7 @@ handles it differently:
 - BLE/NFC/WiFi Direct: local, no NAT
 - Directory/Nostr: client-server, no NAT for the client
 
-The `MessageStore` trait hides all of this. A NAT-punched WebRTC
+The `Transport` trait hides all of this. A NAT-punched WebRTC
 channel and a file on a USB stick satisfy the same interface.
 
 ## Cross-platform composition
@@ -262,5 +262,5 @@ phone. They review and sign with biometric auth. The server
 combines and broadcasts.
 
 In each case, the same traits: `Introducer` on one device,
-`MessageStore` bridging the gap, `Session` state transferred.
+`Transport` bridging the gap, `Session` state transferred.
 The lattice doesn't care which device computed the join.
