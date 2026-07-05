@@ -1458,6 +1458,10 @@ fn run_to_psbts<const N: usize>(args: [&str; N]) -> Vec<psbt_v2::v2::Psbt> {
         .collect()
 }
 
+fn run_to_string<const N: usize>(args: [&str; N]) -> String {
+    ptj::run(Cli::try_parse_from(args).unwrap()).unwrap()
+}
+
 fn run_error<const N: usize>(args: [&str; N]) -> ptj::Error {
     ptj::run(Cli::try_parse_from(args).unwrap()).unwrap_err()
 }
@@ -1592,4 +1596,107 @@ fn btc_value(amount_sats: u64) -> String {
 
 fn path_str(path: &std::path::Path) -> &str {
     path.to_str().unwrap()
+}
+
+// ---- negotiation: pay / confirm / payments ----
+
+#[test]
+fn pay_attaches_plaintext_payment() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let out = run_to_string([
+        "ptj", "payments", "--json", path_str(&run_pay_to(&base, temp.path())),
+    ]);
+    let report: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(report["payments"].as_array().unwrap().len(), 1);
+    assert_eq!(report["payments"][0]["encrypted"], false);
+    assert_eq!(report["payments"][0]["amount_sats"], 100_000);
+}
+
+fn run_pay_to(base: &std::path::Path, dir: &std::path::Path) -> PathBuf {
+    let psbt = run_to_psbt([
+        "ptj", "pay", "--to", &format!("{}:0.001", regtest_address(2)),
+        "--network", "regtest", path_str(base),
+    ]);
+    write_psbt(dir, "paid.psbt", psbt)
+}
+
+#[test]
+fn pay_dummy_requires_encrypt() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let error = run_error([
+        "ptj", "pay", "--to", &format!("{}:0.001", regtest_address(2)),
+        "--network", "regtest", "--dummy", "3", path_str(&base),
+    ]);
+    assert!(error.to_string().contains("--dummy"));
+}
+
+#[test]
+fn pay_encrypt_requires_secret() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let error = run_error([
+        "ptj", "pay", "--to", &format!("{}:0.001", regtest_address(2)),
+        "--network", "regtest", "--encrypt", path_str(&base),
+    ]);
+    assert!(error.to_string().contains("--secret"));
+}
+
+#[test]
+fn encrypted_payment_roundtrips_with_secret_and_dummies_hidden() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let psbt = run_to_psbt([
+        "ptj", "pay", "--to", &format!("{}:0.001", regtest_address(2)),
+        "--network", "regtest", "--encrypt", "--secret", "aabb", "--dummy", "2",
+        path_str(&base),
+    ]);
+    let paid = write_psbt(temp.path(), "paid.psbt", psbt);
+
+    // Without the secret: three indistinguishable encrypted entries, none readable.
+    let blind: serde_json::Value =
+        serde_json::from_str(&run_to_string(["ptj", "payments", "--json", path_str(&paid)])).unwrap();
+    assert_eq!(blind["payments"].as_array().unwrap().len(), 3);
+    assert!(blind["payments"].as_array().unwrap().iter().all(|p| p["encrypted"] == true));
+    assert!(blind["payments"].as_array().unwrap().iter().all(|p| p["undecryptable"] == true));
+
+    // With the secret: one real payment, two dummies flagged.
+    let seen: serde_json::Value = serde_json::from_str(&run_to_string([
+        "ptj", "payments", "--json", "--secret", "aabb", path_str(&paid),
+    ])).unwrap();
+    let entries = seen["payments"].as_array().unwrap();
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries.iter().filter(|p| p["dummy"] == false).count(), 1);
+    assert_eq!(entries.iter().filter(|p| p["dummy"] == true).count(), 2);
+}
+
+#[test]
+fn confirm_attaches_confirmation_deterministically() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let once = run_to_psbt(["ptj", "confirm", path_str(&base)]);
+    let first = write_psbt(temp.path(), "c1.psbt", once);
+    // confirming the same content again is idempotent (same derived id).
+    let twice = run_to_psbt(["ptj", "confirm", path_str(&first)]);
+    let report: serde_json::Value = serde_json::from_str(&run_to_string([
+        "ptj", "payments", "--json",
+        path_str(&write_psbt(temp.path(), "c2.psbt", twice)),
+    ])).unwrap();
+    assert_eq!(report["confirmations"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn sort_strips_negotiation_band() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let paid = write_psbt(temp.path(), "paid.psbt", run_to_psbt([
+        "ptj", "pay", "--to", &format!("{}:0.001", regtest_address(2)),
+        "--network", "regtest", path_str(&base),
+    ]));
+    let sorted = write_psbt(temp.path(), "sorted.psbt", run_to_psbt(["ptj", "sort", path_str(&paid)]));
+    let report: serde_json::Value = serde_json::from_str(&run_to_string([
+        "ptj", "payments", "--json", path_str(&sorted),
+    ])).unwrap();
+    assert!(report["payments"].as_array().unwrap().is_empty());
 }

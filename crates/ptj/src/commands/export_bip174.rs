@@ -106,6 +106,18 @@ fn map_proprietaries(
     keys: BTreeMap<psbt_v2::raw::ProprietaryKey, Vec<u8>>,
 ) -> BTreeMap<bip174::raw::ProprietaryKey, Vec<u8>> {
     keys.into_iter()
+        // Belt-and-braces: strip the negotiation band (payments/confirmations)
+        // on the BIP 174 handoff so it never reaches the Core-facing artifact.
+        // The sorter already clears it before ordering; unique ids and sort
+        // keys are preserved for round-trip recovery.
+        .filter(|(key, _)| {
+            !(key.prefix == concurrent_psbt::PROPRIETARY_PREFIX
+                && matches!(
+                    key.subtype,
+                    concurrent_psbt::negotiation::PSBT_GLOBAL_PAYMENT_SUBTYPE
+                        | concurrent_psbt::negotiation::PSBT_GLOBAL_CONFIRMATION_SUBTYPE
+                ))
+        })
         .map(|(key, value)| {
             (
                 bip174::raw::ProprietaryKey {
