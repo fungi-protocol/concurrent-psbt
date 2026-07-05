@@ -29,16 +29,16 @@ The core never reads from the network, never writes to disk, never
 blocks. It takes bytes in, returns bytes out. Everything else is the
 caller's responsibility.
 
-### MessageStore
+### Transport
 
 The transport boundary. Decouples "where do messages come from" from
 "how do I join them."
 
 ```rust
-trait MessageStore {
+trait Transport {
     type Error;
-    fn put(&mut self, message: Vec<u8>) -> Result<(), Self::Error>;
-    fn list(&self) -> Result<Vec<Vec<u8>>, Self::Error>;
+    fn publish(&mut self, message: Vec<u8>) -> Result<(), Self::Error>;
+    fn collect(&self) -> Result<Vec<Vec<u8>>, Self::Error>;
 }
 ```
 
@@ -51,11 +51,11 @@ Implementations:
 - `FileStore`: watches a directory for `.psbt` files. Sneakernet.
 
 The interface is synchronous and pull-based. An async caller polls
-`list()` periodically. A CLI caller calls `list()` once. The trait
+`collect()` periodically. A CLI caller calls `collect()` once. The trait
 doesn't prescribe timing.
 
 ```capnp
-interface MessageStore {
+interface Transport {
     put  @0 (message :Data) -> ();
     list @1 () -> (messages :List(Data));
 }
@@ -71,7 +71,7 @@ interface message-store {
 Both Cap'n Proto and WIT use the same pull-based interface. For
 push-based transports (nostr relay notifications, iroh sync events),
 the transport implementation converts push to pull internally: the
-push handler appends to a buffer, `list()` drains it.
+push handler appends to a buffer, `collect()` drains it.
 
 ### Introducer
 
@@ -108,7 +108,7 @@ Implementations:
 - `QrIntroducer`: displays ticket as QR, scans peer's QR.
 
 The introducer is called once per session. After introduction, the
-`MessageStore` handles ongoing communication.
+`Transport` handles ongoing communication.
 
 ```capnp
 interface Introducer {
@@ -193,9 +193,9 @@ The network flow:
 
 ```rust
 let mut session = Session::new(my_psbt, Some(3));
-store.put(my_psbt)?;
+store.publish(my_psbt)?;
 loop {
-    for msg in store.list()? {
+    for msg in store.collect()? {
         session.process(&msg)?;
     }
     match session.phase() {
@@ -221,16 +221,16 @@ host                          transport plugin
  |                                 |
  |  (user shares code)             |
  |                                 |
- |-- list() ---------------------->|  (poll loop)
+ |-- collect() ---------------------->|  (poll loop)
  |<-- [msg1, msg2] ---------------|
  |                                 |
  |  session.process(msg1)          |
  |  session.process(msg2)          |
  |  session.phase() == Confirming  |
  |                                 |
- |-- put(confirmation) ----------->|
+ |-- publish(confirmation) ----------->|
  |                                 |
- |-- list() ---------------------->|
+ |-- collect() ---------------------->|
  |<-- [msg1, msg2, msg3, conf] ---|
  |                                 |
  |  session.phase() == Ready       |
@@ -320,17 +320,17 @@ Introducer::create_session(my_psbt)
 Introducer::join_session(ticket)
     → (session established)
 
-MessageStore::put(my_psbt)          (publish to transport)
+Transport::publish(my_psbt)          (publish to transport)
 
 loop {
-    messages = MessageStore::list()  (pull from transport)
+    messages = Transport::collect()  (pull from transport)
     for msg in messages:
         Session::process(msg)        (IO-free join)
 
     match Session::phase():
         Confirming →
             conf = Session::local_confirmation(my_id)
-            MessageStore::put(serialize(conf))
+            Transport::put(serialize(conf))
         Ready →
             psbt = Session::export()
             merge_same_script_outputs(&mut psbt)
@@ -342,5 +342,5 @@ loop {
 ```
 
 The same trait calls, the same order, regardless of whether the
-MessageStore is backed by files, a network, or a WASM component.
+Transport is backed by files, a network, or a WASM component.
 The Session never knows.
