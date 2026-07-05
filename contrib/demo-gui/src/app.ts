@@ -5,10 +5,12 @@ const {
   PtjBackendError,
   atomizePsbt: atomizeBackendPsbt,
   createPsbt: createBackendPsbt,
+  importBip174: importBackendBip174,
+  inspectPsbt: inspectBackendPsbt,
   joinPsbts: joinBackendPsbts,
   makeUnordered: makeBackendUnordered,
   sortPsbt: sortBackendPsbt,
-} = await import("./backend.js?v=20260629-backend-client-v1");
+} = await import("./backend.js?v=20260705-paste-inspect-v1");
 
 const {
   amountParts,
@@ -858,6 +860,36 @@ function addPsbtFragmentFromRaw(label, raw, sourceDescription, shouldRender = tr
   return fragment;
 }
 
+async function hydratePastedPsbtFragment(fragment) {
+  const fetchImpl = window.fetch.bind(window);
+  try {
+    const inspect = await inspectBackendPsbt(fetchImpl, fragment.raw);
+    if (byId(state.fragments, fragment.id) !== fragment) return;
+    fragment.inspect = inspect || null;
+    fragment.sourceDescription = "Raw PSBT from paste; fields inspected via ptj webgui /api/inspect.";
+    state.log.unshift(`ptj backend inspected pasted PSBT for ${fragment.id}.`);
+    render();
+    return;
+  } catch (error) {
+    if (!(error instanceof PtjBackendError)) throw error;
+  }
+  try {
+    const response = await importBackendBip174(fetchImpl, fragment.raw);
+    if (byId(state.fragments, fragment.id) !== fragment) return;
+    fragment.raw = response.psbt;
+    fragment.inspect = response.inspect || null;
+    fragment.sourceDescription = "BIP 174 PSBT from paste; upgraded via ptj webgui /api/import-bip174.";
+    state.log.unshift(`ptj backend upgraded pasted BIP 174 PSBT for ${fragment.id}.`);
+    render();
+  } catch (error) {
+    if (!(error instanceof PtjBackendError)) throw error;
+    if (byId(state.fragments, fragment.id) !== fragment) return;
+    fragment.sourceDescription = "Pasted PSBT was rejected by the ptj backend; kept as opaque bytes.";
+    state.log.unshift(`ptj backend rejected pasted PSBT: ${error.message}`);
+    render();
+  }
+}
+
 function handlePastedText(text, source = "paste") {
   const value = String(text || "").trim();
   if (!value) return 0;
@@ -901,7 +933,8 @@ function handlePastedCandidate(value, source, shouldRender = true) {
     return true;
   }
   if (looksLikeBase64Psbt(value)) {
-    addPsbtFragmentFromRaw(`${source} PSBT`, compactBase64(value), "PSBT bytes imported from paste; this mock keeps only elided counts.", shouldRender);
+    const fragment = addPsbtFragmentFromRaw(`${source} PSBT`, compactBase64(value), "PSBT bytes imported from paste; awaiting ptj backend inspection.", shouldRender);
+    void hydratePastedPsbtFragment(fragment);
     return true;
   }
   if (looksLikeDescriptor(value)) {
@@ -2095,6 +2128,10 @@ function renderDescriptorDrawer(parent, descriptorId) {
 
   const body = document.createElement("div");
   body.className = "descriptor-drawer-body";
+  summary.addEventListener("click", (event) => {
+    event.stopPropagation();
+    positionDescriptorDrawer(summary, body);
+  });
   if (!items.length) {
     const empty = document.createElement("div");
     empty.className = "descriptor-drawer-empty";
