@@ -305,6 +305,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "transport-arti"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "transport-core",
+]
+
+[[package]]
 name = "transport-core"
 version = "0.1.0"
 dependencies = [
