@@ -64,3 +64,10 @@ export function exportBip174(fetchImpl, psbt) {
 export function importBip174(fetchImpl, psbt) {
     return postJson(fetchImpl, "/api/import-bip174", { psbt });
 }
+export function syncPsbts(fetchImpl, request) {
+    return postJson(fetchImpl, "/api/sync", {
+        psbts: request.psbts,
+        iroh_ticket: request.irohTicket,
+        iroh_wait_ms: request.irohWaitMs,
+    });
+}

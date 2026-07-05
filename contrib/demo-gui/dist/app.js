@@ -1,7 +1,7 @@
 // @ts-nocheck
 // The graph shell is an incremental TypeScript migration from the preview JS.
 // Pure PSBT/session model code is strictly checked in src/model.ts.
-const { PtjBackendError, atomizePsbt: atomizeBackendPsbt, createPsbt: createBackendPsbt, importBip174: importBackendBip174, inspectPsbt: inspectBackendPsbt, joinPsbts: joinBackendPsbts, makeUnordered: makeBackendUnordered, sortPsbt: sortBackendPsbt, } = await import("./backend.js?v=20260705-paste-inspect-v1");
+const { PtjBackendError, atomizePsbt: atomizeBackendPsbt, createPsbt: createBackendPsbt, importBip174: importBackendBip174, inspectPsbt: inspectBackendPsbt, joinPsbts: joinBackendPsbts, makeUnordered: makeBackendUnordered, sortPsbt: sortBackendPsbt, syncPsbts: syncBackendPsbts, } = await import("./backend.js?v=20260705-iroh-sync-v1");
 const { amountParts, accountingDeltaPresentation, balanceSheetFeeSignal, coinDetailLines, compactBase64, descriptorFeeContributionPlan, descriptorFeeSignal, descriptorDrawerItems, descriptorMenuState, descriptorLooksPrivate, finalizeDescriptorExplicitFee, formatSizeEstimate, formatSatAmount, hashHex, joinSessionSeeds, looksLikeBase64Psbt, looksLikeDescriptor, mergePayloads, orderedProjectionPayload, parseBitcoinUri, payloadSizeEstimate, payloadRowKey, pendingPayloadRowKeys, peerAckPlan, peerBridgeComponents: modelPeerBridgeComponents, peerEdgeTermination: modelPeerEdgeTermination, peerGroupBounds, peerIsInteractive, sessionVisibleToPeerGroup, psbtRole, psbtCompatibility, psbtProtocolIdentity, psbtUnaryActions, normalizeSessionOrdering, seedFromRandomBytes, shouldShowGrandTotal, transactionBalance, unorderedBalanceSheetTotalRows, unorderedPsbtDisplay, } = await import("./model.js?v=20260629-global-fields-v1");
 const palette = ["#1967d2", "#0f7b4f", "#b65c00", "#7b3f98", "#607d00", "#b3261e"];
 const descriptorPalette = ["#1967d2", "#b65c00", "#0f7b4f", "#7b3f98", "#b3261e", "#607d00", "#39434d", "#c2410c"];
@@ -804,6 +804,33 @@ function addPsbtFragmentFromRaw(label, raw, sourceDescription, shouldRender = tr
         render();
     return fragment;
 }
+async function hydrateIrohSync(ticket) {
+    const psbts = state.fragments.map((fragment) => fragment.raw).filter(Boolean);
+    state.log.unshift(`Syncing ${psbts.length} raw PSBT(s) over iroh…`);
+    render();
+    try {
+        const response = await syncBackendPsbts(window.fetch.bind(window), {
+            psbts,
+            irohTicket: ticket,
+        });
+        const fragment = addPsbtFragmentFromRaw("iroh sync PSBT", response.psbt, "Converged PSBT from ptj webgui /api/sync over the iroh transport.", false);
+        fragment.inspect = response.inspect || null;
+        state.log.unshift(`ptj backend synced over iroh into ${fragment.id}.`);
+        for (const payment of response.payments || []) {
+            state.log.unshift(`iroh sync delivered an out-of-band payment message (${payment.length / 2} bytes).`);
+        }
+        for (const confirmation of response.confirmations || []) {
+            state.log.unshift(`iroh sync delivered an out-of-band confirmation message (${confirmation.length / 2} bytes).`);
+        }
+        render();
+    }
+    catch (error) {
+        if (!(error instanceof PtjBackendError))
+            throw error;
+        state.log.unshift(`ptj backend rejected iroh sync: ${error.message}`);
+        render();
+    }
+}
 async function hydratePastedPsbtFragment(fragment) {
     const fetchImpl = window.fetch.bind(window);
     try {
@@ -868,6 +895,12 @@ function handlePastedCandidate(value, source, shouldRender = true) {
     const relay = value.match(/\b(?:wss?:\/\/|nostr\+relay:\/\/)[^\s<>"']+/i)?.[0];
     if (relay) {
         addConnectivityPeer(contactPeerLabel("relay", relay), "relay", relay, shouldRender);
+        return true;
+    }
+    const irohTicket = value.match(/\bdoc[a-z2-7]{40,}\b/i)?.[0];
+    if (irohTicket) {
+        addConnectivityPeer(contactPeerLabel("iroh", irohTicket), "iroh", irohTicket, shouldRender);
+        void hydrateIrohSync(irohTicket);
         return true;
     }
     const wormhole = value.match(/\b\d{1,4}-[a-z0-9]+(?:-[a-z0-9]+){1,}\b/i)?.[0];

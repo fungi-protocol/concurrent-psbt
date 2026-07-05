@@ -130,3 +130,24 @@ export function exportBip174(fetchImpl: FetchLike, psbt: string): Promise<Export
 export function importBip174(fetchImpl: FetchLike, psbt: string): Promise<PsbtResponse> {
   return postJson(fetchImpl, "/api/import-bip174", { psbt });
 }
+
+export interface SyncRequest {
+  psbts?: string[];
+  irohTicket?: string;
+  irohWaitMs?: number;
+}
+
+export interface SyncResponse {
+  psbt: string;
+  inspect?: InspectResponse;
+  payments: string[];
+  confirmations: string[];
+}
+
+export function syncPsbts(fetchImpl: FetchLike, request: SyncRequest): Promise<SyncResponse> {
+  return postJson(fetchImpl, "/api/sync", {
+    psbts: request.psbts,
+    iroh_ticket: request.irohTicket,
+    iroh_wait_ms: request.irohWaitMs,
+  });
+}
