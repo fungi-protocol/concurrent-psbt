@@ -1,0 +1,46 @@
+[package]
+name = "transport-arti"
+version.workspace = true
+edition = "2024"
+
+# transport-arti: a Tor onion-service backend, an ANONYMOUS transport. Received
+# messages are delivered as BARE opaque bytes (no sender identity) — Tor gives us
+# a circuit, not a peer identity, so this crate implements AnonymousChannel only.
+#
+# Anonymity here is a property of the arti crate (an in-process Tor client), NOT
+# of anything this crate does: we just move opaque bytes over a Tor stream. This
+# crate reasons about framing and connection lifecycle, never about threat models.
+#
+# Layer 0 of the DAG (a leaf transport): depends ONLY on transport-core (for the
+# frozen channel contract + length-prefixed TLV framing) and its own upstream
+# arti SDK. It is never depended on by other transport-<name> crates.
+#
+# ALL external-network dependency usage sits behind the `arti` cargo feature
+# (mirroring how ptj gates `iroh-sync`): with the feature OFF the crate compiles
+# as a skeleton whose constructors/methods return a clear "built without the
+# 'arti' feature" error, so the workspace builds without pulling the arti SDK.
+
+[features]
+# Off by default: the stock build is a network-free skeleton. Turning on `arti`
+# pulls the in-process Tor client (arti-client) and its async runtime shim
+# (tor-rtcompat) plus tokio, and lights up the real send/recv over a Tor stream.
+default = []
+arti = []
+
+[dependencies]
+# TODO(ground-deps): defer the network SDK until pinned to a resolvable
+# crate/version (arti-client/tor-rtcompat/tor-hsservice/tor-proto/tor-cell 0.28.x). The `arti` feature is declared but empty so the
+# default skeleton (channel trait + framing) compiles; the feature-on network
+# path in the crate source stays authored-but-unverified until then.
+transport-core = { path = "../transport-core" }
+# Desugars the async `AnonymousChannel` impl to boxed futures so the seam stays
+# dyn-compatible. A proc-macro only — no runtime, no network SDK.
+async-trait = "0.1"
+
+[dev-dependencies]
+# `futures::executor::block_on` drives the async skeleton test (which has no
+# tokio) to completion. Dev-only, runtime-free.
+futures = "0.3"
+
+[lints]
+workspace = true
