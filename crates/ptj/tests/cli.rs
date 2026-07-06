@@ -18,6 +18,8 @@ fn create_command_parses_typed_values_at_the_boundary() {
         "ptj",
         "--output-file",
         "created.psbt",
+        "--output-file-format",
+        "binary",
         "create",
         "--input",
         &format!("{TXID}:7"),
@@ -35,6 +37,7 @@ fn create_command_parses_typed_values_at_the_boundary() {
     };
 
     assert_eq!(cli.output, Some(PathBuf::from("created.psbt")));
+    assert_eq!(cli.output_file_format, ptj::cli::OutputFileFormat::Binary);
     assert_eq!(config.inputs[0].txid.to_string(), TXID);
     assert_eq!(config.inputs[0].vout, 7);
     assert_eq!(config.outputs[0].address_text, ADDRESS);
@@ -84,6 +87,12 @@ fn join_and_sort_commands_parse_to_config_types() {
     };
     assert_eq!(config.file, PathBuf::from("transaction.psbt"));
 
+    let import = Cli::try_parse_from(["ptj", "import-bip174", "core.psbt"]).unwrap();
+    let Command::ImportBip174(config) = import.command else {
+        panic!("expected import-bip174 command");
+    };
+    assert_eq!(config.file, PathBuf::from("core.psbt"));
+
     let make_unordered = Cli::try_parse_from(["ptj", "make-unordered", "ordered.psbt"]).unwrap();
     let Command::MakeUnordered(config) = make_unordered.command else {
         panic!("expected make-unordered command");
@@ -104,11 +113,10 @@ fn join_and_sort_commands_parse_to_config_types() {
         "ptj",
         "sync",
         "--state",
-        "session.psbt",
-        "--dir",
+        "state.psbt",
         "usb-a",
-        "--directory",
         "usb-b",
+        "-",
         "a.psbt",
         "b.psbt",
     ])
@@ -116,14 +124,16 @@ fn join_and_sort_commands_parse_to_config_types() {
     let Command::Sync(config) = sync.command else {
         panic!("expected sync command");
     };
-    assert_eq!(config.state, PathBuf::from("session.psbt"));
+    assert_eq!(config.state, Some(PathBuf::from("state.psbt")));
     assert_eq!(
-        config.directories,
-        vec![PathBuf::from("usb-a"), PathBuf::from("usb-b")]
-    );
-    assert_eq!(
-        config.files,
-        vec![PathBuf::from("a.psbt"), PathBuf::from("b.psbt")]
+        config.sources,
+        vec![
+            PathBuf::from("usb-a"),
+            PathBuf::from("usb-b"),
+            PathBuf::from("-"),
+            PathBuf::from("a.psbt"),
+            PathBuf::from("b.psbt"),
+        ]
     );
 
     let webgui =
@@ -158,6 +168,51 @@ fn typed_arguments_reject_malformed_values() {
     assert!(OutPointArg::from_str(&format!("{TXID}:not-a-vout")).is_err());
     assert!(OutputArg::from_str(&format!("{ADDRESS}:not-an-amount")).is_err());
     assert!(OutputArg::from_str(ADDRESS).is_err());
+}
+
+#[test]
+fn sync_state_writes_converged_output_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = write_psbt(temp.path(), "session.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let incoming = write_psbt(
+        temp.path(),
+        "incoming.psbt",
+        create_psbt("0000000000000000000000000000000000000000000000000000000000000002", 1, 2, 70_000),
+    );
+
+    let cli = Cli::try_parse_from([
+        "ptj",
+        "sync",
+        "--state",
+        path_str(&state),
+        path_str(&state),
+        path_str(&incoming),
+    ])
+    .unwrap();
+
+    assert_eq!(ptj::run_or_write(cli).unwrap(), None);
+    let updated = decode_psbt(&std::fs::read_to_string(&state).unwrap());
+    assert_eq!(updated.global.input_count, 2);
+    assert_eq!(updated.global.output_count, 2);
+}
+
+#[test]
+fn sync_state_rejects_global_output_alias() {
+    let error = ptj::run_or_write(
+        Cli::try_parse_from([
+            "ptj",
+            "--output-file",
+            "one.psbt",
+            "sync",
+            "--state",
+            "two.psbt",
+        ])
+        .unwrap(),
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("--output-file"));
+    assert!(error.to_string().contains("--state"));
 }
 
 #[test]
@@ -488,48 +543,8 @@ fn sort_deterministic_mode_ignores_explicit_sort_keys() {
 }
 
 #[test]
-fn sync_converges_state_file_and_prints_same_lub() {
+fn sync_joins_positional_sources_and_prints_lub() {
     let temp = tempfile::tempdir().unwrap();
-    let state = write_psbt(temp.path(), "session.psbt", create_psbt(TXID, 0, 1, 50_000));
-    let incoming = write_psbt(
-        temp.path(),
-        "incoming.psbt",
-        create_psbt(
-            "0000000000000000000000000000000000000000000000000000000000000002",
-            1,
-            2,
-            70_000,
-        ),
-    );
-
-    let synced = run_to_psbt([
-        "ptj",
-        "sync",
-        "--state",
-        path_str(&state),
-        path_str(&incoming),
-    ]);
-    let stored = decode_psbt(&std::fs::read_to_string(&state).unwrap());
-
-    assert_eq!(synced.global.input_count, 2);
-    assert_eq!(synced.global.output_count, 2);
-    assert_eq!(psbt_bytes(&stored), psbt_bytes(&synced));
-
-    let repeated = run_to_psbt([
-        "ptj",
-        "sync",
-        "--state",
-        path_str(&state),
-        path_str(&incoming),
-    ]);
-    assert_eq!(repeated.global.input_count, 2);
-    assert_eq!(repeated.global.output_count, 2);
-}
-
-#[test]
-fn sync_creates_missing_state_from_inputs() {
-    let temp = tempfile::tempdir().unwrap();
-    let state = temp.path().join("missing-session.psbt");
     let a = write_psbt(temp.path(), "a.psbt", create_psbt(TXID, 0, 1, 50_000));
     let b = write_psbt(
         temp.path(),
@@ -542,19 +557,172 @@ fn sync_creates_missing_state_from_inputs() {
         ),
     );
 
-    let synced = run_to_psbt([
+    let synced = run_to_psbt(["ptj", "sync", path_str(&a), path_str(&b)]);
+
+    assert_eq!(synced.global.input_count, 2);
+    assert_eq!(synced.global.output_count, 2);
+    let synced_path = write_psbt(temp.path(), "synced.psbt", synced);
+
+    let repeated = run_to_psbt(["ptj", "sync", path_str(&a), path_str(&b), path_str(&a)]);
+    let repeated_path = write_psbt(temp.path(), "repeated.psbt", repeated);
+    let sorted_synced = run_to_psbt(["ptj", "sort", "--seed", "abcd", path_str(&synced_path)]);
+    let sorted_repeated = run_to_psbt(["ptj", "sort", "--seed", "abcd", path_str(&repeated_path)]);
+    assert_eq!(psbt_bytes(&sorted_repeated), psbt_bytes(&sorted_synced));
+}
+
+#[test]
+fn sync_reads_stdin_source() {
+    let incoming = create_psbt(TXID, 0, 1, 50_000);
+
+    let synced = run_to_psbt_with_stdin(["ptj", "sync", "-"], encode_psbt(&incoming).as_bytes());
+
+    assert_eq!(synced.global.input_count, 1);
+    assert_eq!(synced.global.output_count, 1);
+}
+
+#[test]
+fn sync_joins_stdin_with_positional_sources() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = write_psbt(temp.path(), "session.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let incoming = create_psbt(
+        "0000000000000000000000000000000000000000000000000000000000000002",
+        1,
+        2,
+        70_000,
+    );
+
+    let synced = run_to_psbt_with_stdin(
+        ["ptj", "sync", path_str(&state), "-"],
+        encode_psbt(&incoming).as_bytes(),
+    );
+
+    assert_eq!(synced.global.input_count, 2);
+    assert_eq!(synced.global.output_count, 2);
+}
+
+#[test]
+fn join_reads_stdin_psbt_source_marker() {
+    let temp = tempfile::tempdir().unwrap();
+    let a = write_psbt(temp.path(), "a.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let incoming = create_psbt(
+        "0000000000000000000000000000000000000000000000000000000000000002",
+        1,
+        2,
+        70_000,
+    );
+
+    let joined = run_to_psbt_with_stdin(
+        ["ptj", "join", path_str(&a), "-"],
+        encode_psbt(&incoming).as_bytes(),
+    );
+
+    assert_eq!(joined.global.input_count, 2);
+    assert_eq!(joined.global.output_count, 2);
+}
+
+#[test]
+fn sort_reads_stdin_psbt_source_marker() {
+    let unordered = create_psbt(TXID, 0, 1, 50_000);
+
+    let sorted = run_to_psbt_with_stdin(
+        ["ptj", "sort", "--seed", "abcd", "-"],
+        encode_psbt(&unordered).as_bytes(),
+    );
+
+    assert!(!sorted.global.is_unordered());
+    assert_eq!(sorted.global.input_count, 1);
+    assert_eq!(sorted.global.output_count, 1);
+}
+
+#[test]
+fn sync_reads_stdin_psbt_source_marker() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = write_psbt(temp.path(), "session.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let incoming = create_psbt(
+        "0000000000000000000000000000000000000000000000000000000000000002",
+        1,
+        2,
+        70_000,
+    );
+
+    let cli = Cli::try_parse_from([
         "ptj",
         "sync",
         "--state",
         path_str(&state),
-        path_str(&a),
-        path_str(&b),
-    ]);
+        path_str(&state),
+        "-",
+    ])
+    .unwrap();
+
+    assert_eq!(
+        ptj::run_or_write_with_stdin(cli, Some(encode_psbt(&incoming).as_bytes())).unwrap(),
+        None
+    );
+    let updated = decode_psbt(&std::fs::read_to_string(&state).unwrap());
+    assert_eq!(updated.global.input_count, 2);
+    assert_eq!(updated.global.output_count, 2);
+}
+
+#[test]
+fn commands_reject_multiple_stdin_psbt_sources() {
+    let incoming = create_psbt(TXID, 0, 1, 50_000);
+
+    let error = run_with_stdin_error(
+        ["ptj", "join", "-", "-"],
+        encode_psbt(&incoming).as_bytes(),
+    );
+
+    assert!(error.to_string().contains("stdin"));
+    assert!(error.to_string().contains("one PSBT source"));
+}
+
+#[test]
+fn sync_stdin_requires_runner_input() {
+    let error = run_error(["ptj", "sync", "-"]);
+
+    assert!(error.to_string().contains("stdin"));
+}
+
+#[test]
+fn sync_rejects_runner_stdin_without_source_marker() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = write_psbt(temp.path(), "session.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let incoming = create_psbt(
+        "0000000000000000000000000000000000000000000000000000000000000002",
+        1,
+        2,
+        70_000,
+    );
+
+    let error = run_with_stdin_error(
+        ["ptj", "sync", path_str(&state)],
+        encode_psbt(&incoming).as_bytes(),
+    );
     let stored = decode_psbt(&std::fs::read_to_string(&state).unwrap());
 
-    assert_eq!(synced.global.input_count, 2);
-    assert_eq!(synced.global.output_count, 2);
-    assert_eq!(psbt_bytes(&stored), psbt_bytes(&synced));
+    assert!(error.to_string().contains("no command argument reads '-'"));
+    assert_eq!(stored.global.input_count, 1);
+    assert_eq!(stored.global.output_count, 1);
+}
+
+#[test]
+fn run_with_stdin_rejects_commands_that_do_not_read_stdin() {
+    let error = run_with_stdin_error(
+        [
+            "ptj",
+            "create",
+            "--network",
+            "regtest",
+            "--input",
+            &format!("{TXID}:7"),
+            "--output",
+            &format!("{}:{}", regtest_address(1), btc_value(50_000)),
+        ],
+        b"not a command input",
+    );
+
+    assert!(error.to_string().contains("no command argument reads '-'"));
 }
 
 #[test]
@@ -574,25 +742,40 @@ fn sync_joins_psbt_files_from_directories() {
             70_000,
         ),
     );
-    let state = temp.path().join("session.psbt");
-
-    let synced = run_to_psbt([
-        "ptj",
-        "sync",
-        "--state",
-        path_str(&state),
-        "--dir",
-        path_str(&inbox),
-    ]);
-    let stored = decode_psbt(&std::fs::read_to_string(&state).unwrap());
+    let synced = run_to_psbt(["ptj", "sync", path_str(&inbox)]);
 
     assert_eq!(synced.global.input_count, 2);
     assert_eq!(synced.global.output_count, 2);
-    assert_eq!(psbt_bytes(&stored), psbt_bytes(&synced));
 }
 
 #[test]
-fn sync_waits_for_transient_state_lock() {
+fn sync_output_can_replace_a_source_file_after_joining() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = write_psbt(temp.path(), "session.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let incoming = write_psbt(
+        temp.path(),
+        "incoming.psbt",
+        create_psbt("0000000000000000000000000000000000000000000000000000000000000002", 1, 2, 70_000),
+    );
+
+    let cli = Cli::try_parse_from([
+        "ptj",
+        "-o",
+        path_str(&state),
+        "sync",
+        path_str(&state),
+        path_str(&incoming),
+    ])
+    .unwrap();
+
+    assert_eq!(ptj::run_or_write(cli).unwrap(), None);
+    let updated = decode_psbt(&std::fs::read_to_string(&state).unwrap());
+    assert_eq!(updated.global.input_count, 2);
+    assert_eq!(updated.global.output_count, 2);
+}
+
+#[test]
+fn sync_output_waits_for_transient_lock() {
     let temp = tempfile::tempdir().unwrap();
     let state = write_psbt(temp.path(), "session.psbt", create_psbt(TXID, 0, 1, 50_000));
     let incoming = write_psbt(
@@ -610,45 +793,60 @@ fn sync_waits_for_transient_state_lock() {
         })
     };
 
-    let synced = run_to_psbt(["ptj", "sync", "--state", path_str(&state), path_str(&incoming)]);
-    releaser.join().unwrap();
+    let cli = Cli::try_parse_from([
+        "ptj",
+        "--output-file",
+        path_str(&state),
+        "sync",
+        path_str(&state),
+        path_str(&incoming),
+    ])
+    .unwrap();
 
-    assert_eq!(synced.global.input_count, 2);
-    assert_eq!(synced.global.output_count, 2);
+    assert_eq!(ptj::run_or_write(cli).unwrap(), None);
+    releaser.join().unwrap();
+    let updated = decode_psbt(&std::fs::read_to_string(&state).unwrap());
+    assert_eq!(updated.global.input_count, 2);
+    assert_eq!(updated.global.output_count, 2);
 }
 
 #[test]
-fn sync_failed_join_preserves_state_and_releases_lock() {
+fn sync_failed_join_preserves_output_source_file() {
     let temp = tempfile::tempdir().unwrap();
     let state = write_psbt(temp.path(), "session.psbt", create_psbt(TXID, 0, 1, 50_000));
     let original_state = std::fs::read_to_string(&state).unwrap();
     let malformed = temp.path().join("malformed.psbt");
     std::fs::write(&malformed, "not a psbt").unwrap();
 
-    let error = run_error(["ptj", "sync", "--state", path_str(&state), path_str(&malformed)]);
+    let cli = Cli::try_parse_from([
+        "ptj",
+        "-o",
+        path_str(&state),
+        "sync",
+        path_str(&state),
+        path_str(&malformed),
+    ])
+    .unwrap();
+    let error = ptj::run_or_write(cli).unwrap_err();
 
     assert!(error.to_string().contains(path_str(&malformed)));
     assert_eq!(std::fs::read_to_string(&state).unwrap(), original_state);
-    assert!(!temp.path().join(".session.psbt.lock").exists());
 
     let incoming = write_psbt(
         temp.path(),
         "incoming.psbt",
         create_psbt("0000000000000000000000000000000000000000000000000000000000000002", 1, 2, 70_000),
     );
-    let synced = run_to_psbt(["ptj", "sync", "--state", path_str(&state), path_str(&incoming)]);
+    let synced = run_to_psbt(["ptj", "sync", path_str(&state), path_str(&incoming)]);
     assert_eq!(synced.global.input_count, 2);
     assert_eq!(synced.global.output_count, 2);
 }
 
 #[test]
-fn sync_rejects_empty_missing_state() {
-    let temp = tempfile::tempdir().unwrap();
-    let state = temp.path().join("missing-session.psbt");
+fn sync_rejects_empty_source_set() {
+    let error = run_error(["ptj", "sync"]);
 
-    let error = run_error(["ptj", "sync", "--state", path_str(&state)]);
-
-    assert!(error.to_string().contains("no existing state"));
+    assert!(error.to_string().contains("no PSBT sources"));
 }
 
 #[test]
@@ -879,7 +1077,7 @@ fn export_bip174_rejects_unordered_psbts() {
 }
 
 #[test]
-fn commands_reject_bip174_inputs_explicitly_until_import_exists() {
+fn bip370_operations_reject_bip174_inputs_and_point_to_import() {
     let temp = tempfile::tempdir().unwrap();
     let ordered = write_psbt(temp.path(), "ordered.psbt", sorted_psbt(TXID, 0, 1, 50_000));
     let core_psbt =
@@ -894,13 +1092,52 @@ fn commands_reject_bip174_inputs_explicitly_until_import_exists() {
 }
 
 #[test]
+fn import_bip174_upgrades_core_psbt_to_ordered_bip370() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut ordered = sorted_psbt(TXID, 0, 1, 50_000);
+    ordered.inputs[0].sequence = Some(bitcoin::Sequence(0xffff_fffd));
+    ordered.inputs[0].witness_utxo = Some(bitcoin::TxOut {
+        value: bitcoin::Amount::from_sat(90_000),
+        script_pubkey: bitcoin::ScriptBuf::new(),
+    });
+    let ordered = write_psbt(temp.path(), "ordered.psbt", ordered);
+    let core_psbt =
+        ptj::run(Cli::try_parse_from(["ptj", "export-bip174", path_str(&ordered)]).unwrap())
+            .unwrap();
+    let core_path = temp.path().join("core.psbt");
+    std::fs::write(&core_path, core_psbt).unwrap();
+
+    let upgraded = run_to_psbt(["ptj", "import-bip174", path_str(&core_path)]);
+
+    assert_eq!(upgraded.global.input_count, 1);
+    assert_eq!(upgraded.global.output_count, 1);
+    assert!(!upgraded.global.is_unordered());
+    assert_eq!(upgraded.global.tx_modifiable_flags, 0);
+    assert_eq!(upgraded.inputs[0].previous_txid.to_string(), TXID);
+    assert_eq!(upgraded.inputs[0].spent_output_index, 0);
+    assert_eq!(
+        upgraded.inputs[0].sequence,
+        Some(bitcoin::Sequence(0xffff_fffd))
+    );
+    assert_eq!(
+        upgraded.inputs[0].witness_utxo.as_ref().unwrap().value,
+        bitcoin::Amount::from_sat(90_000)
+    );
+    assert_eq!(
+        upgraded.outputs[0].amount,
+        bitcoin::Amount::from_sat(50_000)
+    );
+    assert!(upgraded.outputs[0].has_unique_id());
+}
+
+#[test]
 fn run_or_write_atomically_writes_output_file() {
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("created.psbt");
 
     let cli = Cli::try_parse_from([
         "ptj",
-        "--output-file",
+        "-o",
         path_str(&output),
         "create",
         "--network",
@@ -923,6 +1160,112 @@ fn run_or_write_atomically_writes_output_file() {
 }
 
 #[test]
+fn run_or_write_can_write_binary_psbt_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = temp.path().join("created.psbt");
+
+    let cli = Cli::try_parse_from([
+        "ptj",
+        "--output-file",
+        path_str(&output),
+        "--output-file-format",
+        "binary",
+        "create",
+        "--network",
+        "regtest",
+        "--input",
+        &format!("{TXID}:7"),
+        "--output",
+        &format!("{}:0.00123456", regtest_address(1)),
+        "--seed",
+        "abcd",
+    ])
+    .unwrap();
+
+    assert_eq!(ptj::run_or_write(cli).unwrap(), None);
+    let bytes = std::fs::read(output).unwrap();
+    assert!(bytes.starts_with(b"psbt"));
+    let psbt = psbt_v2::v2::Psbt::deserialize(&bytes).unwrap();
+    assert_eq!(psbt.global.input_count, 1);
+    assert_eq!(psbt.global.output_count, 1);
+}
+
+#[test]
+fn run_or_write_binary_shortcut_writes_binary_psbt_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = temp.path().join("created.psbt");
+
+    let cli = Cli::try_parse_from([
+        "ptj",
+        "--binary",
+        "--output-file",
+        path_str(&output),
+        "create",
+        "--network",
+        "regtest",
+        "--input",
+        &format!("{TXID}:7"),
+        "--output",
+        &format!("{}:0.00123456", regtest_address(1)),
+        "--seed",
+        "abcd",
+    ])
+    .unwrap();
+
+    assert_eq!(ptj::run_or_write(cli).unwrap(), None);
+    let bytes = std::fs::read(output).unwrap();
+    assert!(bytes.starts_with(b"psbt"));
+    let psbt = psbt_v2::v2::Psbt::deserialize(&bytes).unwrap();
+    assert_eq!(psbt.global.input_count, 1);
+    assert_eq!(psbt.global.output_count, 1);
+}
+
+#[test]
+fn run_or_write_rejects_binary_stdout() {
+    let cli = Cli::try_parse_from([
+        "ptj",
+        "--binary",
+        "create",
+        "--network",
+        "regtest",
+        "--input",
+        &format!("{TXID}:7"),
+        "--output",
+        &format!("{}:0.00123456", regtest_address(1)),
+        "--seed",
+        "abcd",
+    ])
+    .unwrap();
+
+    let error = ptj::run_or_write(cli).unwrap_err();
+
+    assert!(error.to_string().contains("--binary requires"));
+    assert!(error.to_string().contains("stdout"));
+}
+
+#[test]
+fn run_or_write_rejects_binary_for_non_single_psbt_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let target = write_psbt(temp.path(), "target.psbt", sorted_psbt(TXID, 0, 1, 50_000));
+    let output = temp.path().join("atoms.psbt");
+
+    let cli = Cli::try_parse_from([
+        "ptj",
+        "--output-file",
+        path_str(&output),
+        "--output-file-format",
+        "binary",
+        "atomize",
+        path_str(&target),
+    ])
+    .unwrap();
+
+    let error = ptj::run_or_write(cli).unwrap_err();
+    assert!(error.to_string().contains("exactly one PSBT"));
+    assert!(!output.exists());
+}
+
+#[test]
 fn run_or_write_can_replace_an_input_file_after_joining() {
     let temp = tempfile::tempdir().unwrap();
     let target = write_psbt(temp.path(), "target.psbt", create_psbt(TXID, 0, 1, 50_000));
@@ -939,7 +1282,7 @@ fn run_or_write_can_replace_an_input_file_after_joining() {
 
     let cli = Cli::try_parse_from([
         "ptj",
-        "--output-file",
+        "-o",
         path_str(&target),
         "join",
         path_str(&target),
@@ -960,7 +1303,7 @@ fn run_or_write_rejects_in_place_export_bip174() {
 
     let cli = Cli::try_parse_from([
         "ptj",
-        "--output-file",
+        "-o",
         path_str(&target),
         "export-bip174",
         path_str(&target),
@@ -978,13 +1321,87 @@ fn run_or_write_rejects_in_place_export_bip174() {
 }
 
 #[test]
+fn run_or_write_rejects_in_place_import_bip174() {
+    let temp = tempfile::tempdir().unwrap();
+    let ordered = write_psbt(temp.path(), "ordered.psbt", sorted_psbt(TXID, 0, 1, 50_000));
+    let core_psbt =
+        ptj::run(Cli::try_parse_from(["ptj", "export-bip174", path_str(&ordered)]).unwrap())
+            .unwrap();
+    let target = temp.path().join("core.psbt");
+    std::fs::write(&target, core_psbt.clone()).unwrap();
+
+    let cli = Cli::try_parse_from([
+        "ptj",
+        "-o",
+        path_str(&target),
+        "import-bip174",
+        path_str(&target),
+    ])
+    .unwrap();
+
+    let error = ptj::run_or_write(cli).unwrap_err();
+    assert!(error.to_string().contains("refusing to overwrite"));
+    assert!(error.to_string().contains("import-bip174"));
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), core_psbt);
+}
+
+#[test]
+fn run_or_write_rejects_in_place_order_transitions() {
+    let temp = tempfile::tempdir().unwrap();
+    let unordered = write_psbt(
+        temp.path(),
+        "unordered.psbt",
+        create_psbt(TXID, 0, 1, 50_000),
+    );
+    let ordered = write_psbt(temp.path(), "ordered.psbt", sorted_psbt(TXID, 0, 1, 50_000));
+
+    let sort = Cli::try_parse_from([
+        "ptj",
+        "-o",
+        path_str(&unordered),
+        "sort",
+        path_str(&unordered),
+    ])
+    .unwrap();
+    let sort_error = ptj::run_or_write(sort).unwrap_err();
+    assert!(sort_error.to_string().contains("refusing to overwrite"));
+    assert!(sort_error.to_string().contains("sort"));
+    assert!(
+        decode_psbt(&std::fs::read_to_string(&unordered).unwrap())
+            .global
+            .is_unordered()
+    );
+
+    let make_unordered = Cli::try_parse_from([
+        "ptj",
+        "-o",
+        path_str(&ordered),
+        "make-unordered",
+        path_str(&ordered),
+    ])
+    .unwrap();
+    let make_unordered_error = ptj::run_or_write(make_unordered).unwrap_err();
+    assert!(
+        make_unordered_error
+            .to_string()
+            .contains("refusing to overwrite")
+    );
+    assert!(make_unordered_error.to_string().contains("make-unordered"));
+    assert!(
+        !decode_psbt(&std::fs::read_to_string(&ordered).unwrap())
+            .global
+            .is_unordered()
+    );
+}
+
+#[test]
 fn run_or_write_rejects_in_place_atomize() {
     let temp = tempfile::tempdir().unwrap();
     let target = write_psbt(temp.path(), "target.psbt", sorted_psbt(TXID, 0, 1, 50_000));
 
     let cli = Cli::try_parse_from([
         "ptj",
-        "--output-file",
+        "-o",
         path_str(&target),
         "atomize",
         path_str(&target),
@@ -1028,6 +1445,11 @@ fn run_to_psbt<const N: usize>(args: [&str; N]) -> psbt_v2::v2::Psbt {
     decode_psbt(&output)
 }
 
+fn run_to_psbt_with_stdin<const N: usize>(args: [&str; N], stdin: &[u8]) -> psbt_v2::v2::Psbt {
+    let output = ptj::run_with_stdin(Cli::try_parse_from(args).unwrap(), stdin).unwrap();
+    decode_psbt(&output)
+}
+
 fn run_to_psbts<const N: usize>(args: [&str; N]) -> Vec<psbt_v2::v2::Psbt> {
     ptj::run(Cli::try_parse_from(args).unwrap())
         .unwrap()
@@ -1038,6 +1460,10 @@ fn run_to_psbts<const N: usize>(args: [&str; N]) -> Vec<psbt_v2::v2::Psbt> {
 
 fn run_error<const N: usize>(args: [&str; N]) -> ptj::Error {
     ptj::run(Cli::try_parse_from(args).unwrap()).unwrap_err()
+}
+
+fn run_with_stdin_error<const N: usize>(args: [&str; N], stdin: &[u8]) -> ptj::Error {
+    ptj::run_with_stdin(Cli::try_parse_from(args).unwrap(), stdin).unwrap_err()
 }
 
 fn run_to_bip174<const N: usize>(args: [&str; N]) -> psbt_v2::v0::bitcoin::Psbt {

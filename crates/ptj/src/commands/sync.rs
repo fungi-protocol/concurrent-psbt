@@ -5,39 +5,35 @@ use psbt_v2::v2::Psbt;
 use crate::cli::SyncConfig;
 use crate::{Error, Result, io};
 
-pub(super) fn run(config: SyncConfig) -> Result<Psbt> {
-    io::with_file_lock(&config.state, || {
-        sync_locked(&config.state, &config.files, &config.directories)
-    })
+pub(super) fn run(config: SyncConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
+    sync_sources(&config.sources, stdin)
 }
 
-fn sync_locked(state: &Path, files: &[PathBuf], directories: &[PathBuf]) -> Result<Psbt> {
-    let state_exists = state
-        .try_exists()
-        .map_err(|error| Error::new(format!("checking {}: {error}", state.display())))?;
-    let mut paths = Vec::with_capacity(files.len() + usize::from(state_exists));
-    if state_exists {
-        paths.push(state.to_path_buf());
-    }
-    paths.extend(files.iter().cloned());
-    for directory in directories {
-        paths.extend(psbt_files_in_directory(directory)?);
-    }
-    if state_exists {
-        paths.retain(|path| !same_existing_path(path, state));
-        paths.insert(0, state.to_path_buf());
+fn sync_sources(sources: &[PathBuf], stdin: Option<&[u8]>) -> Result<Psbt> {
+    let stdin_psbt = stdin_source(sources, stdin)?;
+    let paths = psbt_paths_from_sources(sources)?;
+    let has_stdin_psbt = stdin_psbt.is_some();
+    if paths.is_empty() && !has_stdin_psbt {
+        return Err(Error::new("no PSBT sources provided"));
     }
 
-    if !state_exists && paths.is_empty() {
-        return Err(Error::new(format!(
-            "no existing state at {} and no PSBT files provided",
-            state.display()
-        )));
+    let mut psbts =
+        Vec::with_capacity(usize::from(!paths.is_empty()) + usize::from(has_stdin_psbt));
+    if !paths.is_empty() {
+        psbts.push(super::join::join_paths(paths.iter().map(PathBuf::as_path))?);
     }
-
-    let psbt = super::join::join_paths(paths.iter().map(PathBuf::as_path))?;
-    io::write_text_atomic(state, &io::encode_psbt(&psbt))?;
+    if let Some(psbt) = stdin_psbt {
+        psbts.push(psbt);
+    }
+    let psbt = super::join::join_psbts(psbts)?;
     Ok(psbt)
+}
+
+fn stdin_source(sources: &[PathBuf], stdin: Option<&[u8]>) -> Result<Option<Psbt>> {
+    if sources.iter().any(|source| io::is_stdin_path(source)) {
+        return io::read_psbt_source(Path::new("-"), stdin).map(Some);
+    }
+    Ok(None)
 }
 
 fn psbt_files_in_directory(directory: &Path) -> Result<Vec<PathBuf>> {
@@ -67,18 +63,30 @@ fn psbt_files_in_directory(directory: &Path) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+fn psbt_paths_from_sources(sources: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for source in sources {
+        if io::is_stdin_path(source) {
+            continue;
+        }
+        let metadata = std::fs::metadata(source)
+            .map_err(|error| Error::new(format!("reading source {}: {error}", source.display())))?;
+        if metadata.is_dir() {
+            paths.extend(psbt_files_in_directory(source)?);
+        } else if metadata.is_file() {
+            paths.push(source.clone());
+        } else {
+            return Err(Error::new(format!(
+                "{} is neither a PSBT file nor a directory",
+                source.display()
+            )));
+        }
+    }
+    Ok(paths)
+}
+
 fn has_psbt_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("psbt"))
-}
-
-fn same_existing_path(left: &Path, right: &Path) -> bool {
-    if left == right {
-        return true;
-    }
-    match (left.canonicalize(), right.canonicalize()) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
-    }
 }

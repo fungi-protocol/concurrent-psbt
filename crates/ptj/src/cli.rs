@@ -1,5 +1,5 @@
 use std::net::IpAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -10,6 +10,12 @@ pub struct Cli {
     /// Write command output atomically to a file instead of stdout
     #[arg(short = 'o', long = "output-file", global = true)]
     pub output: Option<PathBuf>,
+    /// Encoding to use with --output-file
+    #[arg(long = "output-file-format", value_enum, default_value_t = OutputFileFormat::Base64, global = true)]
+    pub output_file_format: OutputFileFormat,
+    /// Write raw PSBT bytes to --output-file or sync --state
+    #[arg(long, global = true)]
+    pub binary: bool,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -28,16 +34,66 @@ pub enum Command {
     /// Export an ordered BIP 370 PSBT as Bitcoin Core-compatible BIP 174
     #[command(alias = "to-bip174")]
     ExportBip174(ExportBip174Config),
+    /// Import a Bitcoin Core-compatible BIP 174 PSBT as ordered BIP 370
+    ImportBip174(ImportBip174Config),
     /// Inspect a PSBT without transforming it
     Inspect(InspectConfig),
     /// Mark a safe BIP 370 constructor PSBT unordered for lattice joining
     MakeUnordered(MakeUnorderedConfig),
     /// Sort a PSBT into BIP 370 order
     Sort(SortConfig),
-    /// Join PSBTs into a local state file and print the converged state
+    /// Join local PSBT sources and print the converged state
     Sync(SyncConfig),
     /// Serve the offline web GUI
     Webgui(WebguiConfig),
+}
+
+impl Command {
+    pub fn reads_stdin(&self) -> bool {
+        match self {
+            Command::Atomize(config) => is_stdin_path(&config.file),
+            Command::Concatenate(config) => config.files.iter().any(|path| is_stdin_path(path)),
+            Command::ExportBip174(config) => is_stdin_path(&config.file),
+            Command::ImportBip174(config) => is_stdin_path(&config.file),
+            Command::Inspect(config) => is_stdin_path(&config.file),
+            Command::Join(config) => config.files.iter().any(|path| is_stdin_path(path)),
+            Command::MakeUnordered(config) => is_stdin_path(&config.file),
+            Command::Sort(config) => is_stdin_path(&config.file),
+            Command::Sync(config) => config.sources.iter().any(|path| is_stdin_path(path)),
+            Command::Create(_) | Command::Webgui(_) => false,
+        }
+    }
+
+    pub(crate) fn stdin_source_count(&self) -> usize {
+        match self {
+            Command::Atomize(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Concatenate(config) => config
+                .files
+                .iter()
+                .filter(|path| is_stdin_path(path))
+                .count(),
+            Command::ExportBip174(config) => usize::from(is_stdin_path(&config.file)),
+            Command::ImportBip174(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Inspect(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Join(config) => config
+                .files
+                .iter()
+                .filter(|path| is_stdin_path(path))
+                .count(),
+            Command::MakeUnordered(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Sort(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Sync(config) => config
+                .sources
+                .iter()
+                .filter(|path| is_stdin_path(path))
+                .count(),
+            Command::Create(_) | Command::Webgui(_) => 0,
+        }
+    }
+}
+
+fn is_stdin_path(path: &Path) -> bool {
+    path == Path::new("-")
 }
 
 #[derive(Args, Debug, Clone)]
@@ -86,6 +142,12 @@ pub struct ExportBip174Config {
 }
 
 #[derive(Args, Debug, Clone)]
+pub struct ImportBip174Config {
+    /// BIP 174 PSBT file to import
+    pub file: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
 pub struct InspectConfig {
     /// PSBT file to inspect
     pub file: PathBuf,
@@ -108,14 +170,11 @@ pub struct SortConfig {
 
 #[derive(Args, Debug, Clone)]
 pub struct SyncConfig {
-    /// Local PSBT state file to converge
-    #[arg(long)]
-    pub state: PathBuf,
-    /// Directory of PSBT files to join into the state (repeatable, sorted by path)
-    #[arg(long = "dir", alias = "directory")]
-    pub directories: Vec<PathBuf>,
-    /// Additional PSBT files to join into the state
-    pub files: Vec<PathBuf>,
+    /// State PSBT file to update atomically with the converged result
+    #[arg(long = "state")]
+    pub state: Option<PathBuf>,
+    /// PSBT files or directories of .psbt files to join
+    pub sources: Vec<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -126,6 +185,14 @@ pub struct WebguiConfig {
     /// Port to bind
     #[arg(long, default_value_t = 8035)]
     pub port: u16,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFileFormat {
+    /// Write base64 text, matching stdout.
+    Base64,
+    /// Write raw PSBT bytes. Only valid for commands that emit one PSBT.
+    Binary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
