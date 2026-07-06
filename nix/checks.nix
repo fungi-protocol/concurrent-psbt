@@ -97,6 +97,14 @@
         coverage-collect-unit-only = mkCoverageCollection "-unit-only" "unit-tests";
       };
 
+      ptj-bin = toolchains.nightly.buildPackage (
+        commonArgs
+        // {
+          cargoArtifacts = cargoArtifactsDev;
+          pnameSuffix = "-ptj";
+        }
+      );
+
       checks = testChecks // {
         coverage-gate-tests =
           pkgs.runCommand "coverage-gate-tests-${rev}"
@@ -196,6 +204,48 @@
             ''
               bash ${./checks/validate-commits-repository-probes.sh} ${./validate-commits.sh}
               mkdir -p $out
+            '';
+
+        joinpsbt-gap =
+          pkgs.runCommand "joinpsbt-gap-${rev}"
+            {
+              nativeBuildInputs = with pkgs; [
+                bitcoind
+                jq
+              ];
+              testScripts = ../contrib/tests;
+            }
+            ''
+              export PATH="${ptj-bin}/bin:$PATH"
+              bash "$testScripts/joinpsbt-gap.sh"
+            '';
+
+        sneakernet-lattice =
+          pkgs.runCommand "sneakernet-lattice-${rev}"
+            {
+              nativeBuildInputs = with pkgs; [
+                bitcoind
+                jq
+              ];
+              testScripts = ../contrib/tests;
+            }
+            ''
+              export PATH="${ptj-bin}/bin:$PATH"
+              bash "$testScripts/sneakernet-lattice.sh"
+            '';
+
+        ptj-sneakernet =
+          pkgs.runCommand "ptj-sneakernet-${rev}"
+            {
+              nativeBuildInputs = with pkgs; [
+                bitcoind
+                jq
+              ];
+              testScripts = ../contrib/tests;
+            }
+            ''
+              export PATH="${ptj-bin}/bin:$PATH"
+              bash "$testScripts/ptj-sneakernet.sh"
             '';
       };
     in
