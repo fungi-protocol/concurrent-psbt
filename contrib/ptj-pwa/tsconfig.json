@@ -1,0 +1,20 @@
+{
+  "//": "Strict TS checker for the PWA backend + transport modules (which live in the shared frontend tree, contrib/demo-gui/src/{backend,transport}), mirroring demo-gui/tsconfig.model.json strictness. noEmit: authoring-only — the demo-gui tsconfig owns emission; bundler wiring comes with the PWA build.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
+    "strict": true,
+    "noImplicitAny": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": [
+    "../demo-gui/src/backend/**/*.ts",
+    "../demo-gui/src/transport/**/*.ts"
+  ]
+}
