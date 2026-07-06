@@ -65,9 +65,27 @@ fn join_and_sort_commands_parse_to_config_types() {
         vec![PathBuf::from("a.psbt"), PathBuf::from("b.psbt")]
     );
 
+    let atomize = Cli::try_parse_from(["ptj", "atomize", "joined.psbt"]).unwrap();
+    let Command::Atomize(config) = atomize.command else {
+        panic!("expected atomize command");
+    };
+    assert_eq!(config.file, PathBuf::from("joined.psbt"));
+
     let export = Cli::try_parse_from(["ptj", "to-bip174", "ordered.psbt"]).unwrap();
     let Command::ExportBip174(config) = export.command else {
         panic!("expected export-bip174 command");
+    };
+    assert_eq!(config.file, PathBuf::from("ordered.psbt"));
+
+    let inspect = Cli::try_parse_from(["ptj", "inspect", "transaction.psbt"]).unwrap();
+    let Command::Inspect(config) = inspect.command else {
+        panic!("expected inspect command");
+    };
+    assert_eq!(config.file, PathBuf::from("transaction.psbt"));
+
+    let make_unordered = Cli::try_parse_from(["ptj", "make-unordered", "ordered.psbt"]).unwrap();
+    let Command::MakeUnordered(config) = make_unordered.command else {
+        panic!("expected make-unordered command");
     };
     assert_eq!(config.file, PathBuf::from("ordered.psbt"));
 
@@ -128,6 +146,40 @@ fn create_emits_real_unordered_psbt_bytes() {
 }
 
 #[test]
+fn inspect_reports_psbt_state_as_json() {
+    let temp = tempfile::tempdir().unwrap();
+    let psbt = write_psbt(temp.path(), "created.psbt", create_psbt(TXID, 7, 1, 123_456));
+
+    let inspected = inspect_json(&psbt);
+
+    assert_eq!(inspected["format"], "bip370");
+    assert_eq!(inspected["ordering"], "unordered");
+    assert_eq!(inspected["input_count"], 1);
+    assert_eq!(inspected["output_count"], 1);
+    assert_eq!(inspected["modifiability"]["inputs"], true);
+    assert_eq!(inspected["modifiability"]["outputs"], true);
+    assert_eq!(inspected["sort"]["mode"], "deterministic");
+    assert_eq!(inspected["sort"]["seed_hex"], "abcd");
+
+    let no_seed = write_psbt(
+        temp.path(),
+        "no-seed.psbt",
+        create_psbt_without_seed(TXID, 8, 2, 234_567),
+    );
+    let inspected = inspect_json(&no_seed);
+    assert_eq!(inspected["sort"]["mode"], "unset");
+    assert!(inspected["sort"]["seed_hex"].is_null());
+
+    let mut explicit = create_psbt_without_seed(TXID, 9, 3, 345_678);
+    explicit.global.set_sort_deterministic(0x00);
+    let explicit = write_psbt(temp.path(), "explicit.psbt", explicit);
+    assert_eq!(inspect_json(&explicit)["sort"]["mode"], "explicit");
+
+    let ordered = write_psbt(temp.path(), "ordered.psbt", sorted_psbt(TXID, 10, 4, 456_789));
+    assert_eq!(inspect_json(&ordered)["ordering"], "ordered");
+}
+
+#[test]
 fn join_is_idempotent_on_real_psbt_files() {
     let temp = tempfile::tempdir().unwrap();
     let a = write_psbt(temp.path(), "a.psbt", create_psbt(TXID, 0, 1, 50_000));
@@ -159,6 +211,25 @@ fn join_is_idempotent_on_real_psbt_files() {
 }
 
 #[test]
+fn join_reports_conflicting_fields_with_section_context() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut left = create_input_only_psbt(TXID, 0);
+    left.inputs[0].sequence = Some(bitcoin::Sequence(1));
+    let mut right = create_input_only_psbt(TXID, 0);
+    right.inputs[0].sequence = Some(bitcoin::Sequence(2));
+    let left = write_psbt(temp.path(), "left.psbt", left);
+    let right = write_psbt(temp.path(), "right.psbt", right);
+
+    let error = run_error(["ptj", "join", path_str(&left), path_str(&right)]);
+    let message = error.to_string();
+
+    assert!(message.contains("join produced conflicting fields"));
+    assert!(message.contains("input:"));
+    assert!(message.contains(TXID));
+    assert!(message.contains("sequence"));
+}
+
+#[test]
 fn sort_makes_join_paths_byte_identical() {
     let temp = tempfile::tempdir().unwrap();
     let a = write_psbt(temp.path(), "a.psbt", create_psbt(TXID, 0, 1, 50_000));
@@ -183,6 +254,79 @@ fn sort_makes_join_paths_byte_identical() {
 
     assert!(!sorted_ab.global.is_unordered());
     assert_eq!(psbt_bytes(&sorted_ab), psbt_bytes(&sorted_ba));
+}
+
+#[test]
+fn make_unordered_marks_sorted_bip370_as_joinable_again() {
+    let temp = tempfile::tempdir().unwrap();
+    let ordered = write_psbt(temp.path(), "ordered.psbt", sorted_psbt(TXID, 0, 1, 50_000));
+
+    let unordered = run_to_psbt(["ptj", "make-unordered", path_str(&ordered)]);
+
+    assert!(unordered.global.is_unordered());
+    assert_eq!(unordered.global.input_count, 1);
+    assert_eq!(unordered.global.output_count, 1);
+    assert_eq!(unordered.global.tx_modifiable_flags & 0x03, 0x03);
+    assert!(unordered.outputs[0].has_unique_id());
+
+    let unordered_path = write_psbt(temp.path(), "unordered.psbt", unordered);
+    let idempotent = run_to_psbt(["ptj", "make-unordered", path_str(&unordered_path)]);
+    assert!(idempotent.global.is_unordered());
+    assert_eq!(idempotent.global.input_count, 1);
+    assert_eq!(idempotent.global.output_count, 1);
+}
+
+#[test]
+fn make_unordered_rejects_psbts_without_constructor_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut ordered = sorted_psbt(TXID, 0, 1, 50_000);
+    ordered.outputs[0].proprietaries.clear();
+    let missing_uid = write_psbt(temp.path(), "missing-uid.psbt", ordered);
+
+    let error = run_error(["ptj", "make-unordered", path_str(&missing_uid)]);
+    assert!(error.to_string().contains("PSBT_OUT_UNIQUE_ID"));
+
+    let mut fixed = sorted_psbt(TXID, 1, 2, 70_000);
+    fixed.global.tx_modifiable_flags = 0x00;
+    let fixed = write_psbt(temp.path(), "fixed.psbt", fixed);
+
+    let error = run_error(["ptj", "make-unordered", path_str(&fixed)]);
+    assert!(error.to_string().contains("not modifiable"));
+}
+
+#[test]
+fn atomize_emits_joinable_unordered_fragments() {
+    let temp = tempfile::tempdir().unwrap();
+    let ordered = write_psbt(temp.path(), "ordered.psbt", sorted_psbt(TXID, 0, 1, 50_000));
+
+    let atoms = run_to_psbts(["ptj", "atomize", path_str(&ordered)]);
+
+    assert_eq!(atoms.len(), 2);
+    assert!(atoms.iter().all(|atom| atom.global.is_unordered()));
+    assert!(atoms.iter().all(|atom| atom.global.tx_modifiable_flags & 0x03 == 0x03));
+    assert_eq!(
+        atoms
+            .iter()
+            .map(|atom| atom.global.input_count + atom.global.output_count)
+            .collect::<Vec<_>>(),
+        vec![1, 1]
+    );
+
+    let atom_a = write_psbt(temp.path(), "atom-a.psbt", atoms[0].clone());
+    let atom_b = write_psbt(temp.path(), "atom-b.psbt", atoms[1].clone());
+    let joined = run_to_psbt(["ptj", "join", path_str(&atom_a), path_str(&atom_b)]);
+    assert_eq!(joined.global.input_count, 1);
+    assert_eq!(joined.global.output_count, 1);
+}
+
+#[test]
+fn atomize_rejects_already_atomic_psbts() {
+    let temp = tempfile::tempdir().unwrap();
+    let atom = write_psbt(temp.path(), "atom.psbt", create_input_only_psbt(TXID, 0));
+
+    let error = run_error(["ptj", "atomize", path_str(&atom)]);
+
+    assert!(error.to_string().contains("already atomic"));
 }
 
 #[test]
@@ -409,6 +553,46 @@ fn run_or_write_can_replace_an_input_file_after_joining() {
 }
 
 #[test]
+fn run_or_write_rejects_in_place_export_bip174() {
+    let temp = tempfile::tempdir().unwrap();
+    let target = write_psbt(temp.path(), "target.psbt", sorted_psbt(TXID, 0, 1, 50_000));
+
+    let cli = Cli::try_parse_from([
+        "ptj",
+        "--output-file",
+        path_str(&target),
+        "export-bip174",
+        path_str(&target),
+    ])
+    .unwrap();
+
+    let error = ptj::run_or_write(cli).unwrap_err();
+    assert!(error.to_string().contains("refusing to overwrite"));
+    assert!(error.to_string().contains("export-bip174"));
+    assert!(!decode_psbt(&std::fs::read_to_string(&target).unwrap()).global.is_unordered());
+}
+
+#[test]
+fn run_or_write_rejects_in_place_atomize() {
+    let temp = tempfile::tempdir().unwrap();
+    let target = write_psbt(temp.path(), "target.psbt", sorted_psbt(TXID, 0, 1, 50_000));
+
+    let cli = Cli::try_parse_from([
+        "ptj",
+        "--output-file",
+        path_str(&target),
+        "atomize",
+        path_str(&target),
+    ])
+    .unwrap();
+
+    let error = ptj::run_or_write(cli).unwrap_err();
+    assert!(error.to_string().contains("refusing to overwrite"));
+    assert!(error.to_string().contains("atomize"));
+    assert_eq!(decode_psbt(&std::fs::read_to_string(&target).unwrap()).global.input_count, 1);
+}
+
+#[test]
 fn webgui_embeds_static_offline_assets() {
     let index = ptj::webgui::asset("/").unwrap();
     assert_eq!(index.content_type, "text/html; charset=utf-8");
@@ -432,6 +616,14 @@ fn webgui_embeds_static_offline_assets() {
 fn run_to_psbt<const N: usize>(args: [&str; N]) -> psbt_v2::v2::Psbt {
     let output = ptj::run(Cli::try_parse_from(args).unwrap()).unwrap();
     decode_psbt(&output)
+}
+
+fn run_to_psbts<const N: usize>(args: [&str; N]) -> Vec<psbt_v2::v2::Psbt> {
+    ptj::run(Cli::try_parse_from(args).unwrap())
+        .unwrap()
+        .lines()
+        .map(decode_psbt)
+        .collect()
 }
 
 fn run_error<const N: usize>(args: [&str; N]) -> ptj::Error {
@@ -464,6 +656,32 @@ fn create_psbt(txid: &str, vout: u32, address_seed: u8, amount_sats: u64) -> psb
     ])
 }
 
+fn create_psbt_without_seed(txid: &str, vout: u32, address_seed: u8, amount_sats: u64) -> psbt_v2::v2::Psbt {
+    run_to_psbt([
+        "ptj",
+        "create",
+        "--network",
+        "regtest",
+        "--input",
+        &format!("{txid}:{vout}"),
+        "--output",
+        &format!("{}:{}", regtest_address(address_seed), btc_value(amount_sats)),
+    ])
+}
+
+fn create_input_only_psbt(txid: &str, vout: u32) -> psbt_v2::v2::Psbt {
+    run_to_psbt([
+        "ptj",
+        "create",
+        "--network",
+        "regtest",
+        "--input",
+        &format!("{txid}:{vout}"),
+        "--seed",
+        "abcd",
+    ])
+}
+
 fn sorted_psbt(txid: &str, vout: u32, address_seed: u8, amount_sats: u64) -> psbt_v2::v2::Psbt {
     let temp = tempfile::tempdir().unwrap();
     let unordered = write_psbt(
@@ -472,6 +690,10 @@ fn sorted_psbt(txid: &str, vout: u32, address_seed: u8, amount_sats: u64) -> psb
         create_psbt(txid, vout, address_seed, amount_sats),
     );
     run_to_psbt(["ptj", "sort", "--seed", "abcd", path_str(&unordered)])
+}
+
+fn inspect_json(path: &std::path::Path) -> serde_json::Value {
+    serde_json::from_str(&ptj::run(Cli::try_parse_from(["ptj", "inspect", path_str(path)]).unwrap()).unwrap()).unwrap()
 }
 
 fn write_psbt(dir: &std::path::Path, name: &str, psbt: psbt_v2::v2::Psbt) -> PathBuf {
