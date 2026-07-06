@@ -31,6 +31,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "base64"
+version = "0.21.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
+
+[[package]]
 name = "bech32"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -58,6 +64,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9cf93e61f2dbc3e3c41234ca26a65e2c0b0975c52e0f069ab9893ebbede584d3"
 dependencies = [
  "base58ck",
+ "base64",
  "bech32",
  "bitcoin-internals",
  "bitcoin-io",
@@ -366,6 +373,14 @@ checksum = "e075616cae99e29d70960a6374c2757dff4dd6b646dd0398ce1012666231c7aa"
 dependencies = [
  "bitcoin",
  "miniscript",
+]
+
+[[package]]
+name = "ptj"
+version = "0.1.0"
+dependencies = [
+ "concurrent-psbt",
+ "psbt-v2",
 ]
 
 [[package]]

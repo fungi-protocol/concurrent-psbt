@@ -1,0 +1,17 @@
+[package]
+name = "ptj"
+version.workspace = true
+edition = "2024"
+
+[[bin]]
+name = "ptj"
+path = "src/main.rs"
+
+[dependencies]
+concurrent-psbt = { path = "../concurrent-psbt" }
+psbt-v2 = { version = "0.3.0", features = [
+  "base64",
+] }
+
+[lints]
+workspace = true
