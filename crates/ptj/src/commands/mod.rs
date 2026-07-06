@@ -16,5 +16,8 @@ pub(crate) fn run(command: Command) -> Result<String> {
         Command::ExportBip174(config) => export_bip174::run(config),
         Command::Join(config) => join::run(config).map(|psbt| crate::io::encode_psbt(&psbt)),
         Command::Sort(config) => sort::run(config).map(|psbt| crate::io::encode_psbt(&psbt)),
+        Command::Webgui(_) => Err(crate::Error::new(
+            "webgui is an interactive command; call ptj::webgui::serve",
+        )),
     }
 }
