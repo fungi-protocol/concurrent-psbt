@@ -1953,6 +1953,10 @@ function renderDescriptorDrawer(parent, descriptorId) {
 
   const body = document.createElement("div");
   body.className = "descriptor-drawer-body";
+  summary.addEventListener("click", (event) => {
+    event.stopPropagation();
+    positionDescriptorDrawer(summary, body);
+  });
   if (!items.length) {
     const empty = document.createElement("div");
     empty.className = "descriptor-drawer-empty";
