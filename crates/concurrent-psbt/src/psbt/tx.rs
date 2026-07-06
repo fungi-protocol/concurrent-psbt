@@ -79,10 +79,20 @@ impl UnorderedPsbt {
     /// that are join-equal may produce different Psbt serializations.
     /// Use `Sorter` to apply deterministic
     /// ordering before serializing for signing or comparison.
+    ///
+    /// The live-set projection is applied (tombstoned inputs/outputs are
+    /// dropped) so callers see the same live set the sorter would produce. This
+    /// is the NON-TERMINAL exit: unlike the sorter, it KEEPS the tombstone (and
+    /// fee) proprietary fields in place, so the projection stays reproducible if
+    /// the artifact is re-parsed back into the unordered domain. No-op when the
+    /// `removal` feature is off (tombstones ignored, fail-safe).
     pub fn into_psbt(self) -> Psbt {
-        let inputs: Vec<_> = self.inputs.into_iter().collect();
-        let outputs: Vec<_> = self.outputs.into_iter().collect();
-        let mut global = self.global;
+        let mut inputs: Vec<_> = self.inputs.into_iter().collect();
+        let mut outputs: Vec<_> = self.outputs.into_iter().collect();
+        let global = self.global;
+        crate::removal::retain_live_inputs(&global, &mut inputs);
+        crate::removal::retain_live_outputs(&global, &mut outputs);
+        let mut global = global;
         global.input_count = inputs.len();
         global.output_count = outputs.len();
         Psbt {
