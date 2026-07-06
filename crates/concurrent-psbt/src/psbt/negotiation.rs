@@ -38,9 +38,20 @@ sha256t_hash_newtype! {
 /// in sorted order, so all participants who have converged on the same set of
 /// inputs and outputs agree regardless of ordering. This is the value a
 /// [`Confirmation`] attests to (`contrib/design/ptj-net.md` Layer 4).
+///
+/// The **live-set projection** is applied first: tombstoned (removed) inputs and
+/// outputs are dropped before hashing, so the confirmed id commits to what will
+/// actually be signed rather than to phantom removed elements. When the
+/// `removal` feature is off the projection is the identity, so the id is
+/// byte-identical to a non-removal build — no behaviour change there.
 pub fn unordered_unique_id(psbt: &Psbt) -> [u8; 32] {
-    let mut inputs: Vec<Vec<u8>> = psbt
-        .inputs
+    // Project out tombstoned elements before hashing (see module docs).
+    let mut live_inputs = psbt.inputs.clone();
+    let mut live_outputs = psbt.outputs.clone();
+    crate::removal::retain_live_inputs(&psbt.global, &mut live_inputs);
+    crate::removal::retain_live_outputs(&psbt.global, &mut live_outputs);
+
+    let mut inputs: Vec<Vec<u8>> = live_inputs
         .iter()
         .map(|input| {
             let mut bytes = Vec::with_capacity(36);
@@ -51,8 +62,7 @@ pub fn unordered_unique_id(psbt: &Psbt) -> [u8; 32] {
         .collect();
     inputs.sort_unstable();
 
-    let mut outputs: Vec<Vec<u8>> = psbt
-        .outputs
+    let mut outputs: Vec<Vec<u8>> = live_outputs
         .iter()
         .map(|output| {
             let mut bytes = Vec::new();
