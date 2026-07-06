@@ -9,6 +9,7 @@ use psbt_v2::v2::Psbt;
 
 use crate::{Error, Result};
 
+#[allow(dead_code)]
 pub(crate) fn read_modifiable(path: &Path) -> Result<dynamic::Constructor> {
     let psbt = read_psbt(path)?;
     dynamic::Constructor::try_from_psbt(psbt)

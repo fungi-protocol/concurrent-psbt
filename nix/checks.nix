@@ -101,7 +101,7 @@
       );
 
       checks = testChecks // {
-        build = toolchains.nightly.buildPackage (commonArgs // { cargoArtifacts = cargoArtifactsRelease; });
+        build = toolchains.nightly.buildPackage (checkArgs // { cargoArtifacts = cargoArtifactsDev; });
 
         demo-gui =
           pkgs.runCommand "demo-gui-${rev}"
