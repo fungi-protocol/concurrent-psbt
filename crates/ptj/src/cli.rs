@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -27,6 +28,8 @@ pub enum Command {
     ExportBip174(ExportBip174Config),
     /// Sort a PSBT into BIP 370 order
     Sort(SortConfig),
+    /// Serve the offline web GUI
+    Webgui(WebguiConfig),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -72,6 +75,16 @@ pub struct SortConfig {
     pub seed: Option<HexSeed>,
     /// PSBT file to sort
     pub file: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct WebguiConfig {
+    /// Address to bind
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: IpAddr,
+    /// Port to bind
+    #[arg(long, default_value_t = 8035)]
+    pub port: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
