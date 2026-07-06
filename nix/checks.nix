@@ -131,6 +131,7 @@
               tsc -p tsconfig.json
               node --test \
                 --experimental-test-coverage \
+                --test-coverage-include='dist/backend.js' \
                 --test-coverage-include='dist/model.js' \
                 --test-coverage-lines=100 \
                 --test-coverage-branches=100 \

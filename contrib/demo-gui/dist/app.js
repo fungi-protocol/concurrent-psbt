@@ -4,6 +4,7 @@
 const {
   amountParts,
   accountingDeltaPresentation,
+  balanceSheetFeeSignal,
   coinDetailLines,
   compactBase64,
   descriptorFeeContributionPlan,
@@ -2899,6 +2900,7 @@ function drawUnorderedPsbtBalanceSheet(group, node, display, pendingRows, box, p
   const totalRows = unorderedBalanceSheetTotalRows(display);
   const sectionTotals = totalRows.slice(0, -1);
   const grandTotal = shouldShowGrandTotal(display) ? totalRows.at(-1) : null;
+  const averageFeeRate = display.whole.fee.total / Math.max(1, display.estimatedVbytes);
   const grandTotalHeight = grandTotal ? sectionSubtotalHeight(grandTotal) : 0;
   const grandTotalY = grandTotal ? Math.max(96, maxY - grandTotalHeight) : maxY;
   const sectionMaxY = grandTotal ? grandTotalY - 4 : maxY;
@@ -2908,10 +2910,9 @@ function drawUnorderedPsbtBalanceSheet(group, node, display, pendingRows, box, p
   group.appendChild(svgText(rightX, cursor, "outputs", "psbt-column-heading"));
   cursor += 15;
   for (const [sectionIndex, section] of display.subtransactions.entries()) {
-    const sectionTotal = sectionTotals[sectionIndex] || section;
     const remainingMinY = remainingBalanceSectionMinimum(display.subtransactions, sectionTotals, sectionIndex + 1);
     const sectionLimitY = Math.max(cursor, sectionMaxY - remainingMinY);
-    if (cursor + sectionSubtotalHeight(sectionTotal) > sectionLimitY && rendered > 0) break;
+    if (cursor + sectionSubtotalHeight(section) > sectionLimitY && rendered > 0) break;
     if (sectionIndex > 0 && cursor + 8 <= sectionLimitY) {
       group.appendChild(svgEl("line", {
         class: "psbt-section-divider",
@@ -2934,7 +2935,7 @@ function drawUnorderedPsbtBalanceSheet(group, node, display, pendingRows, box, p
       cursor += 16;
     }
     const rowCount = Math.max(section.inputs.rows.length, section.outputs.rows.length);
-    const subtotalHeight = sectionSubtotalHeight(sectionTotal);
+    const subtotalHeight = sectionSubtotalHeight(section);
     const rowLimitY = Math.max(cursor, sectionLimitY - subtotalHeight - 4);
     let renderedRows = 0;
     for (let index = 0; index < rowCount; index += 1) {
@@ -2959,7 +2960,7 @@ function drawUnorderedPsbtBalanceSheet(group, node, display, pendingRows, box, p
       cursor += 14;
     }
     if (cursor + subtotalHeight > sectionLimitY) cursor = Math.max(cursor, sectionLimitY - subtotalHeight);
-    drawSectionSubtotal(sectionGroup, sectionTotal, leftX, rightX, cursor, columnWidth, node);
+    drawSectionSubtotal(sectionGroup, section, leftX, rightX, cursor, columnWidth, node, averageFeeRate);
     cursor += subtotalHeight + 4;
     if (section.descriptorMine) {
       sectionGroup.insertBefore(svgEl("rect", {
@@ -2987,7 +2988,7 @@ function drawUnorderedPsbtBalanceSheet(group, node, display, pendingRows, box, p
         y2: grandTotalY - 7,
       }));
     }
-    drawSectionSubtotal(group, grandTotal, leftX, rightX, grandTotalY, columnWidth);
+    drawSectionSubtotal(group, grandTotal, leftX, rightX, grandTotalY, columnWidth, node, averageFeeRate);
   }
 }
 
@@ -2995,11 +2996,11 @@ function sectionSubtotalHeight(section) {
   const presentation = accountingDeltaPresentation(section);
   return (presentation.showTotals ? 18 : 0) +
     (presentation.kind !== "balanced" ? 28 : 0) +
-    (hasMineFeeSignal(section) ? 20 : 0);
+    (hasBalanceFeeSignal(section) ? 20 : 0);
 }
 
-function hasMineFeeSignal(section) {
-  return section.descriptorMine === true && Boolean(section.descriptorId);
+function hasBalanceFeeSignal(section) {
+  return Number(section.estimatedVbytes || 0) > 0 && Number(section.feeSats || 0) !== 0;
 }
 
 function minimumBalanceSectionHeight(section, total, includeDivider = true) {
@@ -3014,7 +3015,7 @@ function remainingBalanceSectionMinimum(sections, totals, startIndex) {
   return total;
 }
 
-function drawSectionSubtotal(group, section, leftX, rightX, y, columnWidth, node = null) {
+function drawSectionSubtotal(group, section, leftX, rightX, y, columnWidth, node = null, averageFeeRate = 0) {
   const sectionClass = "psbt-section-total";
   const presentation = accountingDeltaPresentation(section);
   let cursor = y;
@@ -3057,22 +3058,17 @@ function drawSectionSubtotal(group, section, leftX, rightX, y, columnWidth, node
     }
     cursor += 28;
     lastFigureY = deltaY;
-    if (node && hasMineFeeSignal(section)) {
-      const feeX = presentation.oppositeColumn === "input" ? leftX : rightX;
-      drawDescriptorFeeSignal(group, node, section, feeX, deltaY, columnWidth);
-      return;
-    }
   }
-  if (node && hasMineFeeSignal(section)) {
-    drawDescriptorFeeSignal(group, node, section, leftX, lastFigureY + 19, columnWidth);
+  if (hasBalanceFeeSignal(section)) {
+    const feeX = presentation.kind !== "balanced" && presentation.oppositeColumn === "output" ? rightX : leftX;
+    drawBalanceSheetFeeSignal(group, node, section, feeX, lastFigureY + 19, columnWidth, averageFeeRate);
   }
 }
 
-function drawDescriptorFeeSignal(group, node, section, x, y, columnWidth) {
-  const signal = descriptorFeeSignal(node, section.descriptorId);
-  if (!signal) return;
+function drawBalanceSheetFeeSignal(group, node, section, x, y, columnWidth, averageFeeRate) {
+  const signal = balanceSheetFeeSignal(section, averageFeeRate);
   const label = `~${formatFeeRate(signal.feeRateSatsPerVbyte)} sat/vB · avg ${formatFeeRate(signal.averageFeeRateSatsPerVbyte)}`;
-  if (signal.canFinalizeExplicitFee) {
+  if (node && signal.canFinalizeExplicitFee) {
     const button = svgEl("g", {
       class: "fee-finalize-button",
       transform: `translate(${x} ${y - 14})`,
@@ -3097,10 +3093,17 @@ function drawDescriptorFeeSignal(group, node, section, x, y, columnWidth) {
       }
     });
     group.appendChild(button);
-    group.appendChild(svgText(x + 92, y, short(label, Math.max(16, Math.floor((columnWidth - 96) / 5.5))), "fee-rate-signal"));
+    group.appendChild(feeRateSignalText(section, x + 92, y, short(label, Math.max(16, Math.floor((columnWidth - 96) / 5.5)))));
     return;
   }
-  group.appendChild(svgText(x, y, short(label, Math.max(18, Math.floor(columnWidth / 5.5))), "fee-rate-signal"));
+  group.appendChild(feeRateSignalText(section, x, y, short(label, Math.max(18, Math.floor(columnWidth / 5.5)))));
+}
+
+function feeRateSignalText(section, x, y, label) {
+  const text = svgText(x, y, label, "fee-rate-signal");
+  text.setAttribute("data-section-kind", section.kind);
+  if (section.descriptorId) text.setAttribute("data-descriptor-id", section.descriptorId);
+  return text;
 }
 
 function drawPayloadSizeTotal(group, node, leftX, y, rightX) {

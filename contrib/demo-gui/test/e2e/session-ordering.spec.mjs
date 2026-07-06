@@ -186,6 +186,31 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
   );
   assert(Number(amountTone.scaleOpacity) < Number(amountTone.significantOpacity || 1), "expected muted leading zeros to use lower opacity");
 
+  const coloredAmountTone = await page.evaluate(() => {
+    const scale = document.querySelector(".psbt-balance-delta.deficit .amount-scale");
+    const significant = scale?.nextElementSibling;
+    const scaleStyle = scale ? getComputedStyle(scale) : null;
+    const significantStyle = significant ? getComputedStyle(significant) : null;
+    return {
+      scaleText: scale?.textContent || "",
+      significantText: significant?.textContent || "",
+      scaleFill: scaleStyle?.fill || "",
+      scaleOpacity: scaleStyle?.opacity || "",
+      significantFill: significantStyle?.fill || "",
+      significantOpacity: significantStyle?.opacity || "",
+    };
+  });
+  assert(coloredAmountTone.scaleText, "expected a colored deficit amount with muted leading zeros");
+  assert(coloredAmountTone.significantText, "expected significant deficit digits after muted leading zeros");
+  assert(
+    coloredAmountTone.scaleFill === coloredAmountTone.significantFill,
+    `expected colored muted leading zeros to inherit ${coloredAmountTone.significantFill}, got ${coloredAmountTone.scaleFill}`,
+  );
+  assert(
+    Number(coloredAmountTone.scaleOpacity) < Number(coloredAmountTone.significantOpacity || 1),
+    "expected colored muted leading zeros to use lower opacity only",
+  );
+
   const sizeUnitCycle = await page.evaluate(async () => {
     const before = [...document.querySelectorAll(".psbt-size-total")].map((node) => node.textContent.trim());
     const target = document.querySelector(".psbt-size-total");
@@ -286,6 +311,21 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
     assert(note.parentClass.includes("psbt-section-total"), `expected subtotal note to live in a subtotal amount, got ${note.parentClass}`);
     assert(note.noteFontSize < note.parentFontSize, `expected note font ${note.noteFontSize} to be smaller than subtotal font ${note.parentFontSize}`);
   }
+
+  const feeRateSignals = await page.evaluate(() => ({
+    labels: [...document.querySelectorAll(".node.session .psbt-balance-delta-label")].map((label) => label.textContent?.trim() || ""),
+    signals: [...document.querySelectorAll(".node.session .fee-rate-signal")].map((signal) => ({
+      text: signal.textContent?.trim() || "",
+      sectionKind: signal.getAttribute("data-section-kind") || "",
+      descriptorId: signal.getAttribute("data-descriptor-id") || "",
+    })),
+  }));
+  assert(!feeRateSignals.labels.includes("explicit / surplus"), "surplus label should describe accounted fees, not expose the raw field name");
+  assert(feeRateSignals.labels.includes("accounted / surplus"), "expected clearer accounted/surplus label");
+  assert(feeRateSignals.signals.some((signal) => signal.sectionKind === "recognized" && signal.descriptorId !== "alice"),
+    `expected non-mine descriptor fee-rate signal, got ${JSON.stringify(feeRateSignals.signals)}`);
+  assert(feeRateSignals.signals.some((signal) => signal.sectionKind === "whole"),
+    `expected whole-transaction fee-rate signal, got ${JSON.stringify(feeRateSignals.signals)}`);
 
   const subtotalAndFeeOverlaps = await page.evaluate(() => {
     const selectors = [
