@@ -3,7 +3,7 @@ use std::io::Read as _;
 
 use clap::Parser;
 use ptj::cli::Cli;
-#[cfg(feature = "webgui")]
+#[cfg(any(feature = "webgui", feature = "tui"))]
 use ptj::cli::Command;
 
 fn main() {
@@ -22,6 +22,14 @@ fn main() {
                 Err(ptj::Error::new("webgui does not write PSBT output"))
             } else {
                 ptj::webgui::serve(config).map(|()| None)
+            }
+        }
+        #[cfg(feature = "tui")]
+        Command::Tui(config) => {
+            if cli.output.is_some() {
+                Err(ptj::Error::new("tui does not write PSBT output"))
+            } else {
+                ptj::tui::run(config).map(|()| None)
             }
         }
         _ => ptj::run_or_write_with_stdin(cli, stdin.as_deref()),
