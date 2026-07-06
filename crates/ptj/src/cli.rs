@@ -2,7 +2,7 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "ptj")]
@@ -57,6 +57,9 @@ pub struct CreateConfig {
     /// Sort seed as hex
     #[arg(long)]
     pub seed: Option<HexSeed>,
+    /// Ordering mode for the unordered PSBT
+    #[arg(long = "ordering", value_enum, default_value_t = OrderingArg::Unset)]
+    pub ordering: OrderingArg,
     /// Bitcoin network (bitcoin, testnet, signet, regtest)
     #[arg(long, default_value = "bitcoin")]
     pub network: NetworkArg,
@@ -144,6 +147,31 @@ impl FromStr for NetworkArg {
 impl std::fmt::Display for NetworkArg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderingArg {
+    /// Sorter mode is unset; explicit keys are used when present, otherwise derived from seed.
+    Unset,
+    /// Sort keys are derived from the global seed.
+    Deterministic,
+    /// Sort keys must be provided explicitly on every input and output.
+    Explicit,
+}
+
+impl FromStr for OrderingArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "unset" => Ok(Self::Unset),
+            "deterministic" | "det" => Ok(Self::Deterministic),
+            "explicit" => Ok(Self::Explicit),
+            other => Err(format!(
+                "unknown ordering '{other}' (expected: unset, deterministic, explicit)"
+            )),
+        }
     }
 }
 

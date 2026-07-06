@@ -4,9 +4,10 @@ use std::str::FromStr;
 
 use clap::Parser;
 use concurrent_psbt::global::GlobalSortExt;
-use concurrent_psbt::output::OutputUniqueIdExt;
+use concurrent_psbt::input::PSBT_IN_SORT_KEY_SUBTYPE;
+use concurrent_psbt::output::{OutputSortKeyExt, OutputUniqueIdExt};
 
-use ptj::cli::{Cli, Command, HexSeed, NetworkArg, OutPointArg, OutputArg};
+use ptj::cli::{Cli, Command, HexSeed, NetworkArg, OrderingArg, OutPointArg, OutputArg};
 
 const TXID: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 const ADDRESS: &str = "1BoatSLRHtKNngkdXEeobR76b53LETtpyT";
@@ -121,6 +122,14 @@ fn join_and_sort_commands_parse_to_config_types() {
 
 #[test]
 fn typed_arguments_reject_malformed_values() {
+    assert_eq!(OrderingArg::from_str("unset").unwrap(), OrderingArg::Unset);
+    assert_eq!(
+        OrderingArg::from_str("deterministic").unwrap(),
+        OrderingArg::Deterministic
+    );
+    assert_eq!(OrderingArg::from_str("det").unwrap(), OrderingArg::Deterministic);
+    assert_eq!(OrderingArg::from_str("explicit").unwrap(), OrderingArg::Explicit);
+    assert!(OrderingArg::from_str("sideways").is_err());
     assert!(NetworkArg::from_str("liquid").is_err());
     assert!(HexSeed::from_str("abc").is_err());
     assert!(HexSeed::from_str("zz").is_err());
@@ -150,10 +159,77 @@ fn create_emits_real_unordered_psbt_bytes() {
     assert_eq!(psbt.global.tx_modifiable_flags & 0x03, 0x03);
     assert!(psbt.global.is_unordered());
     assert_eq!(psbt.global.sort_seed(), Some(&[0xab, 0xcd][..]));
+    assert_eq!(psbt.global.sort_deterministic(), None);
     assert_eq!(psbt.inputs[0].previous_txid.to_string(), TXID);
     assert_eq!(psbt.inputs[0].spent_output_index, 7);
     assert_eq!(psbt.outputs[0].amount, bitcoin::Amount::from_sat(123_456));
     assert!(psbt.outputs[0].has_unique_id());
+}
+
+#[test]
+fn create_deterministic_ordering_requires_seed() {
+    let error = ptj::run(
+        Cli::try_parse_from(["ptj", "create", "--ordering", "deterministic"]).unwrap(),
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("deterministic ordering requires --seed"));
+}
+
+#[test]
+fn create_explicit_ordering_rejects_seed() {
+    let error = ptj::run(
+        Cli::try_parse_from(["ptj", "create", "--ordering", "explicit", "--seed", "abcd"])
+            .unwrap(),
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("explicit ordering does not use --seed"));
+}
+
+#[test]
+fn create_sets_explicit_and_deterministic_ordering_modes() {
+    let explicit = run_to_psbt([
+        "ptj",
+        "create",
+        "--network",
+        "regtest",
+        "--ordering",
+        "explicit",
+    ]);
+    assert_eq!(explicit.global.sort_seed(), None);
+    assert_eq!(explicit.global.sort_deterministic(), Some(0x00));
+
+    let deterministic = run_to_psbt([
+        "ptj",
+        "create",
+        "--network",
+        "regtest",
+        "--ordering",
+        "deterministic",
+        "--seed",
+        "abcd",
+        "--input",
+        &format!("{TXID}:7"),
+    ]);
+    assert_eq!(deterministic.global.sort_seed(), Some(&[0xab, 0xcd][..]));
+    assert_eq!(deterministic.global.sort_deterministic(), Some(0x01));
+}
+
+#[test]
+fn create_explicit_ordering_rejects_non_empty_psbts_until_sort_keys_are_supported() {
+    let error = run_error([
+        "ptj",
+        "create",
+        "--network",
+        "regtest",
+        "--ordering",
+        "explicit",
+        "--input",
+        &format!("{TXID}:7"),
+    ]);
+
+    assert!(error.to_string().contains("explicit ordering requires sort keys"));
 }
 
 #[test]
@@ -309,6 +385,67 @@ fn sort_makes_join_paths_byte_identical() {
 
     assert!(!sorted_ab.global.is_unordered());
     assert_eq!(psbt_bytes(&sorted_ab), psbt_bytes(&sorted_ba));
+}
+
+#[test]
+fn sort_deterministic_mode_ignores_explicit_sort_keys() {
+    let temp = tempfile::tempdir().unwrap();
+    let a = write_psbt(temp.path(), "a.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let b = write_psbt(
+        temp.path(),
+        "b.psbt",
+        create_psbt("0000000000000000000000000000000000000000000000000000000000000002", 1, 2, 70_000),
+    );
+    let mut joined = run_to_psbt(["ptj", "join", path_str(&a), path_str(&b)]);
+    assert_eq!(joined.global.sort_deterministic(), Some(0x01));
+
+    let expected_path = write_psbt(temp.path(), "deterministic.psbt", joined.clone());
+    let expected = run_to_psbt(["ptj", "sort", path_str(&expected_path)]);
+    let first_txid = expected.inputs[0].previous_txid;
+    let first_amount = expected.outputs[0].amount;
+
+    for input in &mut joined.inputs {
+        set_input_sort_key(input, if input.previous_txid == first_txid {
+            vec![0x02]
+        } else {
+            vec![0x01]
+        });
+    }
+    for output in &mut joined.outputs {
+        output.set_sort_key(if output.amount == first_amount {
+            vec![0x02]
+        } else {
+            vec![0x01]
+        });
+    }
+    let path = write_psbt(temp.path(), "explicit-keys.psbt", joined);
+
+    let sorted = run_to_psbt(["ptj", "sort", path_str(&path)]);
+
+    assert_eq!(
+        sorted
+            .inputs
+            .iter()
+            .map(|input| input.previous_txid)
+            .collect::<Vec<_>>(),
+        expected
+            .inputs
+            .iter()
+            .map(|input| input.previous_txid)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        sorted
+            .outputs
+            .iter()
+            .map(|output| output.amount)
+            .collect::<Vec<_>>(),
+        expected
+            .outputs
+            .iter()
+            .map(|output| output.amount)
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -787,12 +924,25 @@ fn run_to_bip174<const N: usize>(args: [&str; N]) -> psbt_v2::v0::bitcoin::Psbt 
         .unwrap()
 }
 
+fn set_input_sort_key(input: &mut psbt_v2::v2::Input, sort_key: Vec<u8>) {
+    input.proprietaries.insert(
+        psbt_v2::raw::ProprietaryKey {
+            prefix: concurrent_psbt::PROPRIETARY_PREFIX.to_vec(),
+            subtype: PSBT_IN_SORT_KEY_SUBTYPE,
+            key: vec![],
+        },
+        sort_key,
+    );
+}
+
 fn create_psbt(txid: &str, vout: u32, address_seed: u8, amount_sats: u64) -> psbt_v2::v2::Psbt {
     run_to_psbt([
         "ptj",
         "create",
         "--network",
         "regtest",
+        "--ordering",
+        "deterministic",
         "--input",
         &format!("{txid}:{vout}"),
         "--output",
