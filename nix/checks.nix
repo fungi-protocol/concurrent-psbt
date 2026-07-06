@@ -18,6 +18,7 @@
         CARGO_PROFILE = "";
       };
       src = commonArgs.src;
+      demoGuiSrc = inputs.self + /contrib/demo-gui;
 
       profiles = {
         dev = "dev";
@@ -34,7 +35,25 @@
           // {
             cargoArtifacts = deps;
             CARGO_PROFILE = profile;
-            cargoNextestExtraArgs = "--no-tests=warn";
+          }
+        );
+
+      mkMutants =
+        suffix: features:
+        toolchains.nightly.mkCargoDerivation (
+          checkArgs
+          // {
+            cargoArtifacts = cargoArtifactsDev;
+            CARGO_PROFILE = "dev";
+            pnameSuffix = "-mutants${suffix}";
+            nativeBuildInputs = [
+              pkgs.cargo-mutants
+              pkgs.cargo-nextest
+            ];
+            buildPhaseCargoCommand = ''
+              cargo mutants --in-place --test-tool nextest --no-default-features --features ${features}
+            '';
+            installPhase = "mkdir -p $out";
           }
         );
 
@@ -46,30 +65,134 @@
         ) profiles
       ) toolchains;
 
-      checks = testChecks // {
-        build = toolchains.nightly.buildPackage (checkArgs // { cargoArtifacts = cargoArtifactsRelease; });
-
-        coverage = toolchains.nightly.mkCargoDerivation (
+      mkCoverage =
+        suffix: features: failUnder:
+        toolchains.nightly.mkCargoDerivation (
           checkArgs
           // {
             cargoArtifacts = cargoArtifactsDev;
-            pnameSuffix = "-coverage";
-            nativeBuildInputs = [ pkgs.cargo-llvm-cov ];
+            pnameSuffix = "-coverage${suffix}";
+            nativeBuildInputs = with pkgs; [
+              cargo-llvm-cov
+              cargo-nextest
+            ];
             buildPhaseCargoCommand = ''
+              cargo llvm-cov nextest --no-report --no-default-features --features ${features}
+
               mkdir -p $out
-              cargo llvm-cov --all-features --lcov --output-path $out/coverage.lcov || {
-                # no coverage data when there are no tests yet
-                if [ ! -s $out/coverage.lcov ]; then
-                  echo "no coverage data (no tests), skipping assertion"
-                  exit 0
-                fi
+              find target/llvm-cov-target -name '*.prof*' -print -quit | grep -q . || {
+                echo "coverage: no profile data produced; refusing to pass vacuously" >&2
                 exit 1
               }
-              cargo llvm-cov report --fail-under-regions 100
+
+              cargo llvm-cov report --summary-only
+              cargo llvm-cov report --lcov --output-path $out/coverage.lcov --fail-under-regions ${toString failUnder}
             '';
             installPhase = "true";
           }
         );
+
+      ptj-bin = toolchains.nightly.buildPackage (
+        commonArgs
+        // {
+          cargoArtifacts = cargoArtifactsDev;
+          pnameSuffix = "-ptj";
+        }
+      );
+
+      checks = testChecks // {
+        build = toolchains.nightly.buildPackage (commonArgs // { cargoArtifacts = cargoArtifactsRelease; });
+
+        demo-gui =
+          pkgs.runCommand "demo-gui-${rev}"
+            {
+              inherit demoGuiSrc;
+              nativeBuildInputs = with pkgs; [
+                nodejs
+                typescript
+              ];
+            }
+            ''
+              cp -R "$demoGuiSrc" ./demo-gui
+              chmod -R u+w ./demo-gui
+              cd ./demo-gui
+
+              tsc -p tsconfig.model.json
+              tsc -p tsconfig.json
+              node --test \
+                --experimental-test-coverage \
+                --test-coverage-include='dist/backend.js' \
+                --test-coverage-include='dist/model.js' \
+                --test-coverage-lines=100 \
+                --test-coverage-branches=100 \
+                --test-coverage-functions=100 \
+                test/*.mjs
+
+              mkdir -p "$out"
+              cp -R dist "$out/dist"
+            '';
+
+        demo-gui-playwright =
+          pkgs.runCommand "demo-gui-playwright-${rev}"
+            {
+              inherit demoGuiSrc;
+              nativeBuildInputs = with pkgs; [
+                nodejs
+                playwright-test
+                typescript
+              ];
+            }
+            ''
+              cp -R "$demoGuiSrc" ./demo-gui
+              chmod -R u+w ./demo-gui
+              cd ./demo-gui
+
+              tsc -p tsconfig.model.json
+              tsc -p tsconfig.json
+
+              export HOME="$TMPDIR"
+              export PLAYWRIGHT_BROWSERS_PATH="${pkgs.playwright-driver.browsers}"
+              export PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=true
+              export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+              export PLAYWRIGHT_CORE="${pkgs.playwright-test}/lib/node_modules/playwright-core/index.mjs"
+
+              CHROMIUM_BIN=""
+              for _c in \
+                "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux64/chrome \
+                "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux/chrome \
+                "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-mac*/*.app/Contents/MacOS/*; do
+                [ -e "$_c" ] && CHROMIUM_BIN="$_c" && break
+              done
+              if [ -z "$CHROMIUM_BIN" ]; then
+                echo "ERROR: no store Chromium under $PLAYWRIGHT_BROWSERS_PATH" >&2
+                exit 1
+              fi
+              export CHROMIUM_BIN
+              export DEMO_GUI_HTML="$PWD/index.html"
+
+              echo "node $(node --version); chromium=$CHROMIUM_BIN"
+              for spec in test/e2e/*.spec.mjs; do
+                echo "--- $(basename "$spec") ---"
+                node "$spec"
+              done
+
+              mkdir -p "$out"
+            '';
+
+        demo-gui-webgui-assets = pkgs.runCommand "demo-gui-webgui-assets-${rev}" { inherit src; } ''
+          test -f "$src/contrib/demo-gui/dist/app.js"
+          test -f "$src/contrib/demo-gui/dist/backend.js"
+          grep -q 'backend\.js' "$src/contrib/demo-gui/dist/app.js"
+          grep -q 'const BACKEND_JS' "$src/crates/ptj/src/webgui.rs"
+          grep -q '"/dist/backend\.js"' "$src/crates/ptj/src/webgui.rs"
+          mkdir -p "$out"
+        '';
+
+        coverage = mkCoverage "" "unit-tests,prop-tests" 100;
+        coverage-no-unit-tests = mkCoverage "-no-unit-tests" "prop-tests" 100;
+        coverage-no-prop-tests = mkCoverage "-no-prop-tests" "unit-tests" 100;
+
+        mutants = mkMutants "" "unit-tests,prop-tests";
 
         clippy = toolchains.nightly.cargoClippy (
           checkArgs
@@ -120,6 +243,47 @@
           fi
           mkdir -p $out
         '';
+        joinpsbt-gap =
+          pkgs.runCommand "joinpsbt-gap-${rev}"
+            {
+              nativeBuildInputs = with pkgs; [
+                bitcoind
+                jq
+              ];
+              testScripts = ../contrib/tests;
+            }
+            ''
+              export PATH="${ptj-bin}/bin:$PATH"
+              bash "$testScripts/joinpsbt-gap.sh"
+            '';
+
+        sneakernet-lattice =
+          pkgs.runCommand "sneakernet-lattice-${rev}"
+            {
+              nativeBuildInputs = with pkgs; [
+                bitcoind
+                jq
+              ];
+              testScripts = ../contrib/tests;
+            }
+            ''
+              export PATH="${ptj-bin}/bin:$PATH"
+              bash "$testScripts/sneakernet-lattice.sh"
+            '';
+
+        ptj-sneakernet =
+          pkgs.runCommand "ptj-sneakernet-${rev}"
+            {
+              nativeBuildInputs = with pkgs; [
+                bitcoind
+                jq
+              ];
+              testScripts = ../contrib/tests;
+            }
+            ''
+              export PATH="${ptj-bin}/bin:$PATH"
+              bash "$testScripts/ptj-sneakernet.sh"
+            '';
       };
     in
     {
@@ -129,6 +293,9 @@
           paths = with checks; [
             tests-nightly-dev
             clippy
+            demo-gui
+            demo-gui-webgui-assets
+            demo-gui-playwright
           ];
         };
         lint = pkgs.symlinkJoin {
@@ -136,6 +303,8 @@
           paths = with checks; [
             cargo-sort
             clippy
+            demo-gui
+            demo-gui-webgui-assets
             doc
             unused-lints
             no-todo-comments
@@ -143,7 +312,11 @@
         };
         nightly = pkgs.symlinkJoin {
           name = "nightly-checks-${rev}";
-          paths = builtins.attrValues checks;
+          paths = builtins.attrValues (
+            removeAttrs checks [
+              "mutants"
+            ]
+          );
         };
       };
     };
