@@ -2,6 +2,7 @@ pub(crate) mod atomize;
 pub(crate) mod concatenate;
 pub(crate) mod create;
 pub(crate) mod export_bip174;
+pub(crate) mod import_bip174;
 pub(crate) mod inspect;
 pub(crate) mod join;
 pub(crate) mod make_unordered;
@@ -19,6 +20,7 @@ pub(crate) fn run(command: Command) -> Result<String> {
         }
         Command::Create(config) => create::run(config).map(|psbt| crate::io::encode_psbt(&psbt)),
         Command::ExportBip174(config) => export_bip174::run(config),
+        Command::ImportBip174(config) => import_bip174::run(config).map(|psbt| crate::io::encode_psbt(&psbt)),
         Command::Inspect(config) => inspect::run(config),
         Command::Join(config) => join::run(config).map(|psbt| crate::io::encode_psbt(&psbt)),
         Command::MakeUnordered(config) => {
