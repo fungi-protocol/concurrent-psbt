@@ -54,6 +54,9 @@ pub enum Command {
     /// Serve the offline web GUI
     #[cfg(feature = "webgui")]
     Webgui(WebguiConfig),
+    /// Open the interactive terminal UI (WIP placeholder)
+    #[cfg(feature = "tui")]
+    Tui(TuiConfig),
 }
 
 impl Command {
@@ -76,6 +79,8 @@ impl Command {
             Command::Create(_) => false,
             #[cfg(feature = "webgui")]
             Command::Webgui(_) => false,
+            #[cfg(feature = "tui")]
+            Command::Tui(_) => false,
         }
     }
 
@@ -108,6 +113,8 @@ impl Command {
             Command::Create(_) => 0,
             #[cfg(feature = "webgui")]
             Command::Webgui(_) => 0,
+            #[cfg(feature = "tui")]
+            Command::Tui(_) => 0,
         }
     }
 }
@@ -246,6 +253,13 @@ pub enum TransportKind {
     /// Nostr-MLS (MDK) transport (feature `mdk`).
     Mdk,
 }
+
+/// WIP: no options yet. Candidates once the TUI is real: a state/--sources
+/// pair like `sync` (which document to converge on), a read-only flag, and a
+/// network selector for address validation in the pay screen.
+#[cfg(feature = "tui")]
+#[derive(Args, Debug, Clone)]
+pub struct TuiConfig {}
 
 #[cfg(feature = "webgui")]
 #[derive(Args, Debug, Clone)]

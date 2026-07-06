@@ -1,6 +1,8 @@
 use cli::OutputFileFormat;
 
 pub mod cli;
+#[cfg(feature = "tui")]
+pub mod tui;
 #[cfg(feature = "webgui")]
 pub mod webgui;
 
