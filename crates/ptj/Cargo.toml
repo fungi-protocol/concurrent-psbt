@@ -8,7 +8,8 @@ name = "ptj"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["webgui"]
+webgui = []
 iroh-sync = ["dep:transport-iroh", "transport-iroh/iroh"]
 arti = ["dep:transport-arti", "transport-arti/arti"]
 nym = ["dep:transport-nym", "transport-nym/nym"]

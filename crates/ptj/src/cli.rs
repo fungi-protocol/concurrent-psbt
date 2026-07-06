@@ -1,3 +1,4 @@
+#[cfg(feature = "webgui")]
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -51,6 +52,7 @@ pub enum Command {
     /// Join local PSBT sources and print the converged state
     Sync(SyncConfig),
     /// Serve the offline web GUI
+    #[cfg(feature = "webgui")]
     Webgui(WebguiConfig),
 }
 
@@ -71,7 +73,9 @@ impl Command {
             Command::Sync(config) => {
                 !config.ongoing && config.sources.iter().any(|path| is_stdin_path(path))
             }
-            Command::Create(_) | Command::Webgui(_) => false,
+            Command::Create(_) => false,
+            #[cfg(feature = "webgui")]
+            Command::Webgui(_) => false,
         }
     }
 
@@ -101,7 +105,9 @@ impl Command {
                 .iter()
                 .filter(|path| is_stdin_path(path))
                 .count(),
-            Command::Create(_) | Command::Webgui(_) => 0,
+            Command::Create(_) => 0,
+            #[cfg(feature = "webgui")]
+            Command::Webgui(_) => 0,
         }
     }
 }
@@ -241,6 +247,7 @@ pub enum TransportKind {
     Mdk,
 }
 
+#[cfg(feature = "webgui")]
 #[derive(Args, Debug, Clone)]
 pub struct WebguiConfig {
     /// Address to bind
