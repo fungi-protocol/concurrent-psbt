@@ -6,12 +6,20 @@ use crate::cli::SyncConfig;
 use crate::{Error, Result, io};
 
 pub(super) fn run(config: SyncConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
-    sync_sources(&config.sources, stdin)
+    sync_sources(&config.sources, config.state.as_deref(), stdin)
 }
 
-fn sync_sources(sources: &[PathBuf], stdin: Option<&[u8]>) -> Result<Psbt> {
+fn sync_sources(sources: &[PathBuf], state: Option<&Path>, stdin: Option<&[u8]>) -> Result<Psbt> {
     let stdin_psbt = stdin_source(sources, stdin)?;
-    let paths = psbt_paths_from_sources(sources)?;
+    let mut paths = psbt_paths_from_sources(sources)?;
+    if let Some(state) = state {
+        let state_exists = state
+            .try_exists()
+            .map_err(|error| Error::new(format!("checking {}: {error}", state.display())))?;
+        if state_exists && !paths.iter().any(|path| same_existing_path(path, state)) {
+            paths.insert(0, state.to_path_buf());
+        }
+    }
     let has_stdin_psbt = stdin_psbt.is_some();
     if paths.is_empty() && !has_stdin_psbt {
         return Err(Error::new("no PSBT sources provided"));
@@ -89,4 +97,14 @@ fn has_psbt_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("psbt"))
+}
+
+fn same_existing_path(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
 }

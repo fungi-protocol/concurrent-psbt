@@ -185,7 +185,6 @@ fn sync_state_writes_converged_output_file() {
         "sync",
         "--state",
         path_str(&state),
-        path_str(&state),
         path_str(&incoming),
     ])
     .unwrap();
@@ -194,6 +193,34 @@ fn sync_state_writes_converged_output_file() {
     let updated = decode_psbt(&std::fs::read_to_string(&state).unwrap());
     assert_eq!(updated.global.input_count, 2);
     assert_eq!(updated.global.output_count, 2);
+}
+
+#[test]
+fn sync_state_creates_missing_output_file_from_sources() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("session.psbt");
+    let incoming = write_psbt(temp.path(), "incoming.psbt", create_psbt(TXID, 0, 1, 50_000));
+
+    let cli = Cli::try_parse_from(["ptj", "sync", "--state", path_str(&state), path_str(&incoming)])
+        .unwrap();
+
+    assert_eq!(ptj::run_or_write(cli).unwrap(), None);
+    let updated = decode_psbt(&std::fs::read_to_string(&state).unwrap());
+    assert_eq!(updated.global.input_count, 1);
+    assert_eq!(updated.global.output_count, 1);
+}
+
+#[test]
+fn sync_state_accepts_existing_state_without_extra_sources() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = write_psbt(temp.path(), "session.psbt", create_psbt(TXID, 0, 1, 50_000));
+
+    let cli = Cli::try_parse_from(["ptj", "sync", "--state", path_str(&state)]).unwrap();
+
+    assert_eq!(ptj::run_or_write(cli).unwrap(), None);
+    let updated = decode_psbt(&std::fs::read_to_string(&state).unwrap());
+    assert_eq!(updated.global.input_count, 1);
+    assert_eq!(updated.global.output_count, 1);
 }
 
 #[test]
