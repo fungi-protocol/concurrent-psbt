@@ -69,11 +69,23 @@ fn handle_connection(mut stream: TcpStream) -> Result<()> {
     let request = std::str::from_utf8(&buffer[..read])
         .map_err(|error| Error::new(format!("HTTP request was not UTF-8: {error}")))?;
     let Some(request_line) = request.lines().next() else {
-        return write_response(&mut stream, 400, "Bad Request", "text/plain; charset=utf-8", b"bad request");
+        return write_response(
+            &mut stream,
+            400,
+            "Bad Request",
+            "text/plain; charset=utf-8",
+            b"bad request",
+        );
     };
     let parts = request_line.split_whitespace().collect::<Vec<_>>();
     if parts.len() < 3 {
-        return write_response(&mut stream, 400, "Bad Request", "text/plain; charset=utf-8", b"bad request");
+        return write_response(
+            &mut stream,
+            400,
+            "Bad Request",
+            "text/plain; charset=utf-8",
+            b"bad request",
+        );
     }
     let method = parts[0];
     let path = parts[1];
@@ -87,7 +99,13 @@ fn handle_connection(mut stream: TcpStream) -> Result<()> {
         );
     }
     let Some(asset) = asset(path) else {
-        return write_response(&mut stream, 404, "Not Found", "text/plain; charset=utf-8", b"not found");
+        return write_response(
+            &mut stream,
+            404,
+            "Not Found",
+            "text/plain; charset=utf-8",
+            b"not found",
+        );
     };
     write_response(
         &mut stream,

@@ -3,6 +3,7 @@ use std::io::Write as _;
 use std::path::Path;
 
 use concurrent_psbt::roles::constructor::dynamic;
+use psbt_v2::v0::bitcoin as bip174;
 use psbt_v2::v2::Psbt;
 
 use crate::{Error, Result};
@@ -62,8 +63,21 @@ pub(crate) fn read_psbt(path: &Path) -> Result<Psbt> {
     let raw = fs::read(path)
         .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
     let bytes = psbt_bytes(path, raw)?;
-    Psbt::deserialize(&bytes)
-        .map_err(|error| Error::new(format!("parsing {}: {error}", path.display())))
+    if bip174::Psbt::deserialize(&bytes).is_ok() {
+        return Err(Error::new(format!(
+            "{} is a BIP 174 PSBT; importing or upgrading BIP 174 inputs is not implemented yet",
+            path.display()
+        )));
+    }
+
+    match std::panic::catch_unwind(|| Psbt::deserialize(&bytes)) {
+        Ok(Ok(psbt)) => Ok(psbt),
+        Ok(Err(error)) => Err(Error::new(format!("parsing {}: {error}", path.display()))),
+        Err(_) => Err(Error::new(format!(
+            "parsing {}: unsupported or malformed PSBT",
+            path.display()
+        ))),
+    }
 }
 
 fn psbt_bytes(path: &Path, raw: Vec<u8>) -> Result<Vec<u8>> {
