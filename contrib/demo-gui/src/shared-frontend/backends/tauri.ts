@@ -42,7 +42,9 @@ export interface TauriBackendOptions {
 }
 
 export class TauriBackend implements Backend {
-  private readonly invoke?: TauriInvoke;
+  // `| undefined` (not `?`): the constructor assigns a possibly-undefined
+  // option, which exactOptionalPropertyTypes distinguishes from absence.
+  private readonly invoke: TauriInvoke | undefined;
 
   constructor(options: TauriBackendOptions = {}) {
     this.invoke = options.invoke;
