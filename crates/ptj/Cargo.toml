@@ -1,0 +1,76 @@
+[package]
+name = "ptj"
+version.workspace = true
+edition = "2024"
+
+[[bin]]
+name = "ptj"
+path = "src/main.rs"
+
+[features]
+default = ["webgui"]
+webgui = []
+# WIP: interactive terminal UI (`ptj tui`). NOT in the default set — the TUI
+# pulls a terminal stack (ratatui + crossterm) the plain CLI doesn't need.
+tui = ["dep:ratatui", "dep:crossterm"]
+iroh-sync = ["dep:transport-iroh", "transport-iroh/iroh"]
+arti = ["dep:transport-arti", "transport-arti/arti"]
+nym = ["dep:transport-nym", "transport-nym/nym"]
+emissary = ["dep:transport-emissary", "transport-emissary/emissary"]
+mdk = ["dep:transport-mdk", "transport-mdk/mdk"]
+# Browser-viable transports (PWA + webgui). Feature names match each crate's
+# own gate. The /api/sync handler and the CLI select them through the shared
+# `commands::sync::build_transport`; their feature-ON arms are not yet
+# selectable end to end (WebRTC needs out-of-band signaling and the directory
+# mailbox needs session parameters wired into SyncConfig — see
+# TODO(webgui-transport-wiring) in commands/sync.rs).
+str0m = ["dep:transport-str0m", "transport-str0m/str0m"]
+webrtc-rs = ["dep:transport-webrtc-rs", "transport-webrtc-rs/webrtc-rs"]
+payjoin-dir = ["dep:transport-payjoin-dir", "transport-payjoin-dir/payjoin-dir"]
+# TODO(transport-nostr): unauthored — do NOT add until the crate exists.
+# nostr = ["dep:transport-nostr", "transport-nostr/nostr"]
+all-transports = ["iroh-sync", "arti", "nym", "emissary", "mdk"]
+
+[dependencies]
+# Desugars the async `Transport` impl for `LocalTransport` to boxed futures.
+async-trait = "0.1"
+bitcoin = "0.32"
+chacha20poly1305 = "0.10"
+clap = { version = "4", features = ["derive"] }
+concurrent-psbt = { path = "../concurrent-psbt" }
+# Terminal backend + input events for the `tui` feature only (ratatui's
+# conventional pairing). Version grounded via `cargo add --dry-run` (2026-07).
+crossterm = { version = "0.29.0", optional = true }
+# Event-driven `--ongoing` sync: react to source/state file-change events
+# instead of a busy poll-sleep loop (a poll-interval fallback is retained).
+notify = "8"
+psbt-v2 = { version = "0.3.0", features = [
+    "base64",
+] }
+rand = "0.9"
+# Terminal UI framework for the `tui` feature only. Version grounded via
+# `cargo add --dry-run` (2026-07).
+ratatui = { version = "0.30.2", optional = true }
+serde_json = "1"
+# The single async runtime for the whole sync driver, created only at the `Sync`
+# command edge (`commands::sync::drive_async`). `rt` = current-thread runtime;
+# `time` = the peer-wait sleep. `main`/non-sync commands stay sync and never
+# touch it; no transport crate carries a runtime except iroh's own actor thread.
+tokio = { version = "1", features = ["rt", "time"] }
+transport-core = { path = "../transport-core" }
+transport-iroh = { path = "../transport-iroh", optional = true }
+transport-arti = { path = "../transport-arti", optional = true }
+transport-nym = { path = "../transport-nym", optional = true }
+transport-emissary = { path = "../transport-emissary", optional = true }
+transport-mdk = { path = "../transport-mdk", optional = true }
+transport-str0m = { path = "../transport-str0m", optional = true }
+transport-webrtc-rs = { path = "../transport-webrtc-rs", optional = true }
+transport-payjoin-dir = { path = "../transport-payjoin-dir", optional = true }
+# TODO(transport-nostr): unauthored — no such crate exists yet.
+# transport-nostr = { path = "../transport-nostr", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

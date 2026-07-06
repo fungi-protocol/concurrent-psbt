@@ -105,6 +105,222 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
   assert(explicit.value === "", "explicit ordering should clear any seed value");
   assert(explicit.generateDisabled, "explicit ordering should disable seed generation");
 
+  let createRequest = null;
+  await page.route("**/api/create", async (route) => {
+    createRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({
+        psbt: "backend-created-psbt",
+        inspect: {
+          ordering: "unordered",
+          input_count: 0,
+          output_count: 1,
+        },
+      }),
+    });
+  });
+  await page.evaluate(() => {
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        getData: () => "bitcoin:bcrt1qbackenddemo?amount=0.00001234&label=Backend",
+      },
+    });
+    document.querySelector("#pasteDropzone").dispatchEvent(event);
+  });
+  await page.waitForFunction(() => [...document.querySelectorAll("#eventLog li")]
+    .some((item) => /ptj backend created raw PSBT/i.test(item.textContent || "")));
+  assert(createRequest, "BIP 21 paste should call /api/create");
+  assert(createRequest.network === "regtest", `expected regtest network, got ${JSON.stringify(createRequest)}`);
+  assert(createRequest.ordering === "unset", `expected unset ordering, got ${JSON.stringify(createRequest)}`);
+  assert(Array.isArray(createRequest.inputs) && createRequest.inputs.length === 0, "payment requests should create output-only fragments");
+  assert(createRequest.outputs?.[0]?.address === "bcrt1qbackenddemo", `unexpected output address ${JSON.stringify(createRequest)}`);
+  assert(createRequest.outputs?.[0]?.amount_btc === "0.00001234", `unexpected output amount ${JSON.stringify(createRequest)}`);
+
+  let sortRequest = null;
+  await page.route("**/api/sort", async (route) => {
+    sortRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({
+        psbt: "backend-sorted-psbt",
+        inspect: {
+          ordering: "ordered",
+          input_count: 0,
+          output_count: 1,
+        },
+      }),
+    });
+  });
+  await page.waitForFunction(() => !document.querySelector("#orderSelected")?.hidden);
+  await page.click("#orderSelected");
+  await page.waitForFunction(() => [...document.querySelectorAll("#eventLog li")]
+    .some((item) => /ptj backend sorted raw PSBT/i.test(item.textContent || "")));
+  assert(sortRequest, "raw-backed Sort action should call /api/sort");
+  assert(JSON.stringify(sortRequest) === JSON.stringify({ psbt: "backend-created-psbt" }),
+    `unexpected sort request ${JSON.stringify(sortRequest)}`);
+
+  let makeUnorderedRequest = null;
+  await page.route("**/api/make-unordered", async (route) => {
+    makeUnorderedRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({
+        psbt: "backend-unordered-psbt",
+        inspect: {
+          ordering: "unordered",
+          input_count: 0,
+          output_count: 1,
+        },
+      }),
+    });
+  });
+  await page.waitForFunction(() => !document.querySelector("#convertSelected")?.hidden);
+  await page.click("#convertSelected");
+  await page.waitForFunction(() => [...document.querySelectorAll("#eventLog li")]
+    .some((item) => /ptj backend made raw PSBT unordered/i.test(item.textContent || "")));
+  assert(makeUnorderedRequest, "raw-backed Make unordered action should call /api/make-unordered");
+  assert(JSON.stringify(makeUnorderedRequest) === JSON.stringify({ psbt: "backend-sorted-psbt" }),
+    `unexpected make-unordered request ${JSON.stringify(makeUnorderedRequest)}`);
+
+  let atomizeRequest = null;
+  await page.route("**/api/atomize", async (route) => {
+    atomizeRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({
+        fragments: [
+          {
+            psbt: "backend-atom-input-psbt",
+            inspect: {
+              ordering: "unordered",
+              input_count: 1,
+              output_count: 0,
+            },
+          },
+          {
+            psbt: "backend-atom-output-psbt",
+            inspect: {
+              ordering: "unordered",
+              input_count: 0,
+              output_count: 1,
+            },
+          },
+        ],
+      }),
+    });
+  });
+  await page.evaluate(() => {
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        getData: () => "cHNidP8BAHECAwQFBgcICQ==",
+      },
+    });
+    document.querySelector("#pasteDropzone").dispatchEvent(event);
+  });
+  await page.waitForFunction(() => !document.querySelector("#atomizeSelected")?.hidden);
+  await page.click("#atomizeSelected");
+  await page.waitForFunction(() => [...document.querySelectorAll("#eventLog li")]
+    .some((item) => /ptj backend atomized raw PSBT/i.test(item.textContent || "")));
+  assert(atomizeRequest, "raw-backed Atomize PSBT action should call /api/atomize");
+  assert(JSON.stringify(atomizeRequest) === JSON.stringify({ psbt: "cHNidP8BAHECAwQFBgcICQ==" }),
+    `unexpected atomize request ${JSON.stringify(atomizeRequest)}`);
+
+  let joinRequest = null;
+  await page.route("**/api/join", async (route) => {
+    joinRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({
+        psbt: "backend-joined-psbt",
+        inspect: {
+          ordering: "unordered",
+          input_count: 0,
+          output_count: 2,
+        },
+      }),
+    });
+  });
+  for (const uri of [
+    "bitcoin:bcrt1qjoina?amount=0.00001000&label=JoinA",
+    "bitcoin:bcrt1qjoinb?amount=0.00002000&label=JoinB",
+  ]) {
+    const previousCreateLogs = await page.evaluate(() => [...document.querySelectorAll("#eventLog li")]
+      .filter((item) => /ptj backend created raw PSBT/i.test(item.textContent || "")).length);
+    await page.evaluate((text) => {
+      const event = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "clipboardData", {
+        value: {
+          getData: () => text,
+        },
+      });
+      document.querySelector("#pasteDropzone").dispatchEvent(event);
+    }, uri);
+    await page.waitForFunction((count) => [...document.querySelectorAll("#eventLog li")]
+      .filter((item) => /ptj backend created raw PSBT/i.test(item.textContent || "")).length > count, previousCreateLogs);
+    await page.waitForFunction((label) => Boolean([...document.querySelectorAll(".node.fragment")]
+      .find((node) => (node.getAttribute("aria-label") || "").includes(label))), uri.includes("JoinA") ? "JoinA" : "JoinB");
+  }
+  const wireResult = await page.evaluate(async () => {
+    const center = (node) => {
+      const graph = document.querySelector("#graph");
+      const graphRect = graph.getBoundingClientRect();
+      const [minX, minY, viewWidth, viewHeight] = graph.getAttribute("viewBox").split(" ").map(Number);
+      const transform = node.getAttribute("transform") || "";
+      const match = transform.match(/translate\(([-0-9.]+)\s+([-0-9.]+)\)/);
+      const body = node.querySelector(":scope > rect.node-body");
+      const svgX = Number(match?.[1] || 0) + Number(body?.getAttribute("width") || 0) / 2;
+      const svgY = Number(match?.[2] || 0) + Number(body?.getAttribute("height") || 0) / 2;
+      return {
+        x: graphRect.left + ((svgX - minX) / viewWidth) * graphRect.width,
+        y: graphRect.top + ((svgY - minY) / viewHeight) * graphRect.height,
+      };
+    };
+    const pointer = (target, type, point, buttons) => target.dispatchEvent(new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      pointerId: 17,
+      pointerType: "mouse",
+      button: 0,
+      buttons,
+      clientX: point.x,
+      clientY: point.y,
+    }));
+    const fragments = [...document.querySelectorAll(".node.fragment")];
+    const left = fragments.find((node) => (node.getAttribute("aria-label") || "").includes("JoinA"));
+    const right = fragments.find((node) => (node.getAttribute("aria-label") || "").includes("JoinB"));
+    const graph = document.querySelector("#graph");
+    if (!left || !right || !graph) return { ok: false, reason: "missing fragment or graph" };
+    const start = center(left);
+    const end = center(right);
+    pointer(left, "pointerdown", start, 1);
+    pointer(graph, "pointermove", { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 }, 1);
+    pointer(graph, "pointermove", end, 1);
+    pointer(graph, "pointerup", end, 0);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    return {
+      ok: true,
+      connectHidden: document.querySelector("#connectSelected")?.hidden ?? true,
+      summary: document.querySelector("#selectionSummary")?.textContent || "",
+      log: [...document.querySelectorAll("#eventLog li")].map((item) => item.textContent || "").slice(0, 4),
+    };
+  });
+  assert(wireResult.ok && !wireResult.connectHidden,
+    `expected JoinA/JoinB wire to enable Join, got ${JSON.stringify(wireResult)}`);
+  await page.click("#connectSelected");
+  await page.waitForFunction(() => [...document.querySelectorAll("#eventLog li")]
+    .some((item) => /ptj backend joined raw PSBTs/i.test(item.textContent || "")));
+  assert(joinRequest, "raw-backed Join action should call /api/join");
+  assert(JSON.stringify(joinRequest) === JSON.stringify({ psbts: ["backend-created-psbt", "backend-created-psbt"] }),
+    `unexpected join request ${JSON.stringify(joinRequest)}`);
+
   const descriptorOverlay = await page.evaluate(async () => {
     const settings = document.querySelector(".descriptor-settings");
     const summary = settings?.querySelector("summary");
@@ -186,6 +402,31 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
   );
   assert(Number(amountTone.scaleOpacity) < Number(amountTone.significantOpacity || 1), "expected muted leading zeros to use lower opacity");
 
+  const coloredAmountTone = await page.evaluate(() => {
+    const scale = document.querySelector(".psbt-balance-delta.deficit .amount-scale");
+    const significant = scale?.nextElementSibling;
+    const scaleStyle = scale ? getComputedStyle(scale) : null;
+    const significantStyle = significant ? getComputedStyle(significant) : null;
+    return {
+      scaleText: scale?.textContent || "",
+      significantText: significant?.textContent || "",
+      scaleFill: scaleStyle?.fill || "",
+      scaleOpacity: scaleStyle?.opacity || "",
+      significantFill: significantStyle?.fill || "",
+      significantOpacity: significantStyle?.opacity || "",
+    };
+  });
+  assert(coloredAmountTone.scaleText, "expected a colored deficit amount with muted leading zeros");
+  assert(coloredAmountTone.significantText, "expected significant deficit digits after muted leading zeros");
+  assert(
+    coloredAmountTone.scaleFill === coloredAmountTone.significantFill,
+    `expected colored muted leading zeros to inherit ${coloredAmountTone.significantFill}, got ${coloredAmountTone.scaleFill}`,
+  );
+  assert(
+    Number(coloredAmountTone.scaleOpacity) < Number(coloredAmountTone.significantOpacity || 1),
+    "expected colored muted leading zeros to use lower opacity only",
+  );
+
   const sizeUnitCycle = await page.evaluate(async () => {
     const before = [...document.querySelectorAll(".psbt-size-total")].map((node) => node.textContent.trim());
     const target = document.querySelector(".psbt-size-total");
@@ -220,8 +461,10 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
 
   const atomicFragmentActions = await page.evaluate(async () => {
     const fragment = [...document.querySelectorAll(".node.fragment")]
-      .find((node) => node.querySelectorAll(".coin-row").length === 1);
-    fragment?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+      .find((node) => (node.getAttribute("aria-label") || "").includes("paste PSBT input")) ||
+      [...document.querySelectorAll(".node.fragment")]
+        .find((node) => node.querySelectorAll(".coin-row").length === 1);
+    fragment?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, view: window }));
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const atomize = document.querySelector("#atomizeSelected");
     return {
@@ -269,23 +512,86 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
   assert(!expandedCoinSizing.details.some((line) => line.startsWith("label ")), "expected unlabeled inputs not to invent a label");
   assert(expandedCoinSizing.overflowMarkers.length === 0, "expanded details should fit without row overflow markers");
 
-  const explicitFeeSubtotalNotes = await page.evaluate(() => [...document.querySelectorAll(".psbt-explicit-fee-subtotal-note")].map((note) => {
-    const parent = note.parentElement;
-    const noteStyle = getComputedStyle(note);
-    const parentStyle = parent ? getComputedStyle(parent) : null;
-    return {
-      text: note.textContent?.trim() || "",
-      parentClass: parent?.getAttribute("class") || "",
-      noteFontSize: Number.parseFloat(noteStyle.fontSize || "0"),
-      parentFontSize: Number.parseFloat(parentStyle?.fontSize || "0"),
-    };
+  const explicitFeeSubtotalDisplay = await page.evaluate(() => ({
+    oldNotes: [...document.querySelectorAll(".psbt-explicit-fee-subtotal-note")].map((note) => note.textContent?.trim() || ""),
+    declaredFees: [...document.querySelectorAll(".node.session .psbt-declared-fee")].map((note) => note.textContent?.trim() || ""),
+    outputColumnAnnotations: [...document.querySelectorAll(".node.session .psbt-declared-fee")].every((note) => {
+      const rect = note.getBoundingClientRect();
+      const nodeRect = note.closest(".node")?.getBoundingClientRect();
+      return nodeRect ? (rect.left + rect.right) / 2 > (nodeRect.left + nodeRect.right) / 2 : false;
+    }),
   }));
-  assert(explicitFeeSubtotalNotes.length > 0, "expected output subtotals with explicit fee contributions to say '(incl. fees)'");
-  for (const note of explicitFeeSubtotalNotes) {
-    assert(note.text === "(incl. fees)", `expected explicit fee subtotal note text, got ${note.text}`);
-    assert(note.parentClass.includes("psbt-section-total"), `expected subtotal note to live in a subtotal amount, got ${note.parentClass}`);
-    assert(note.noteFontSize < note.parentFontSize, `expected note font ${note.noteFontSize} to be smaller than subtotal font ${note.parentFontSize}`);
+  assert(explicitFeeSubtotalDisplay.oldNotes.length === 0,
+    `expected explicit fee annotations not to use old subtotal notes, got ${JSON.stringify(explicitFeeSubtotalDisplay.oldNotes)}`);
+  assert(explicitFeeSubtotalDisplay.declaredFees.some((text) => text.startsWith("declared fees:")),
+    `expected declared fee annotation, got ${JSON.stringify(explicitFeeSubtotalDisplay.declaredFees)}`);
+  assert(explicitFeeSubtotalDisplay.outputColumnAnnotations, "expected declared fee annotations to sit in the output column");
+
+  const feeRateSignals = await page.evaluate(() => ({
+    labels: [...document.querySelectorAll(".node.session .psbt-balance-delta-label")].map((label) => label.textContent?.trim() || ""),
+    balances: [...document.querySelectorAll(".node.session .psbt-balance-delta")].map((label) => label.textContent?.trim() || ""),
+    signals: [...document.querySelectorAll(".node.session .fee-rate-signal")].map((signal) => ({
+      text: signal.textContent?.trim() || "",
+      sectionKind: signal.getAttribute("data-section-kind") || "",
+      descriptorId: signal.getAttribute("data-descriptor-id") || "",
+    })),
+  }));
+  assert(!feeRateSignals.labels.some((label) => /explicit|surplus|accounted|deficit/.test(label)),
+    `expected balance labels not to expose explicit/surplus/accounted terminology, got ${JSON.stringify(feeRateSignals.labels)}`);
+  assert(feeRateSignals.labels.every((label) => label === "balance:"),
+    `expected balance-only labels, got ${JSON.stringify(feeRateSignals.labels)}`);
+  assert(feeRateSignals.balances.some((text) => text.includes("-")),
+    `expected at least one signed negative balance, got ${JSON.stringify(feeRateSignals.balances)}`);
+  assert(feeRateSignals.signals.some((signal) => signal.sectionKind === "recognized" && signal.descriptorId !== "alice"),
+    `expected non-mine descriptor fee-rate signal, got ${JSON.stringify(feeRateSignals.signals)}`);
+  assert(feeRateSignals.signals.some((signal) => signal.sectionKind === "whole"),
+    `expected whole-transaction fee-rate signal, got ${JSON.stringify(feeRateSignals.signals)}`);
+
+  const balanceSheetRuleLayout = await page.evaluate(() => {
+    const deficitLines = [...document.querySelectorAll(".node.session .psbt-balance-delta-line.deficit")].map((line) => {
+      const node = line.closest(".node");
+      const sumLine = node?.querySelector(".psbt-sum-line");
+      return {
+        x1: Number(line.getAttribute("x1") || 0),
+        x2: Number(line.getAttribute("x2") || 0),
+        sumX1: Number(sumLine?.getAttribute("x1") || 0),
+        sumX2: Number(sumLine?.getAttribute("x2") || 0),
+      };
+    });
+    const textEntries = [...document.querySelectorAll(".node.session .psbt-section-total, .node.session .psbt-balance-delta, .node.session .fee-rate-signal, .node.session .psbt-declared-fee")]
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          text: element.textContent?.trim() || "",
+          isGrand: !element.closest(".psbt-subtxn"),
+          left: rect.left,
+          right: rect.right,
+          top: rect.top,
+          bottom: rect.bottom,
+          width: rect.width,
+          height: rect.height,
+        };
+      })
+      .filter((entry) => entry.text && entry.width > 0 && entry.height > 0);
+    const grandEntries = textEntries.filter((entry) => entry.isGrand);
+    const sectionEntries = textEntries.filter((entry) => !entry.isGrand);
+    const overlaps = [];
+    for (const section of sectionEntries) {
+      for (const grand of grandEntries) {
+        const width = Math.min(section.right, grand.right) - Math.max(section.left, grand.left);
+        const height = Math.min(section.bottom, grand.bottom) - Math.max(section.top, grand.top);
+        if (width > 1 && height > 1) overlaps.push({ section, grand, width, height });
+      }
+    }
+    return { deficitLines, overlaps };
+  });
+  assert(balanceSheetRuleLayout.deficitLines.length > 0, "expected at least one deficit balance rule");
+  for (const line of balanceSheetRuleLayout.deficitLines) {
+    assert(line.x1 <= line.sumX1 && line.x2 >= line.sumX2,
+      `expected deficit balance rule to span the transaction, got ${JSON.stringify(line)}`);
   }
+  assert(balanceSheetRuleLayout.overlaps.length === 0,
+    `expected last subsection and grand total not to overlap, got ${JSON.stringify(balanceSheetRuleLayout.overlaps.slice(0, 3))}`);
 
   const subtotalAndFeeOverlaps = await page.evaluate(() => {
     const selectors = [
@@ -293,7 +599,7 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
       ".psbt-balance-delta-label",
       ".psbt-balance-delta",
       ".fee-rate-signal",
-      ".fee-finalize-button text",
+      ".fee-add-button text",
     ].join(",");
     const entries = [...document.querySelectorAll(`.node.session ${selectors}, .node.fragment ${selectors}`)]
       .map((element, index) => {
@@ -361,7 +667,10 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
   }
 
   const initialFeePanel = await page.evaluate(async () => {
-    const button = document.querySelector(".fee-finalize-button");
+    const button = document.querySelector(".fee-add-button");
+    const buttonText = button?.textContent?.trim() || "";
+    const buttonRect = button?.getBoundingClientRect();
+    const nodeRect = button?.closest(".node")?.getBoundingClientRect();
     button?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const panel = document.querySelector("#feeContributionPanel");
@@ -371,39 +680,48 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
     const comparison = document.querySelector("#feeContributionComparison");
     const confirmRow = document.querySelector("#feeContributionConfirmRow");
     const confirm = document.querySelector("#feeContributionConfirm");
+    const finalize = document.querySelector("#feeContributionFinalize");
     const apply = document.querySelector("#feeContributionApply");
     return {
       buttonFound: Boolean(button),
+      buttonText,
+      buttonCenterRightOfNode: buttonRect && nodeRect ? (buttonRect.left + buttonRect.right) / 2 > (nodeRect.left + nodeRect.right) / 2 : false,
       hidden: panel?.hidden ?? true,
       panelClass: panel?.className || "",
-      sliderMin: slider?.min || "",
-      sliderMax: Number(slider?.max || 0),
-      sliderValue: Number(slider?.value || 0),
+      sliderPresent: Boolean(slider),
+      amountMin: amount?.min || "",
+      amountMax: Number(amount?.max || 0),
       amountValue: Number(amount?.value || 0),
       rateText: rate?.textContent?.trim() || "",
       comparisonText: comparison?.textContent?.trim() || "",
       confirmHidden: confirmRow?.hidden ?? true,
       confirmChecked: confirm?.checked ?? true,
+      finalizePresent: Boolean(finalize),
+      finalizeChecked: finalize?.checked ?? true,
       applyDisabled: apply?.disabled ?? false,
     };
   });
-  assert(initialFeePanel.buttonFound, "expected a finalize fee control in a mine descriptor section");
-  assert(!initialFeePanel.hidden, "finalize fee should open a fee contribution panel");
-  assert(initialFeePanel.sliderMin === "0", `expected slider min 0, got ${initialFeePanel.sliderMin}`);
-  assert(initialFeePanel.sliderMax > 0, "expected slider max to be the available surplus");
-  assert(initialFeePanel.sliderValue === initialFeePanel.sliderMax, "expected slider to default to the available surplus");
-  assert(initialFeePanel.amountValue === initialFeePanel.sliderValue, "expected numeric amount to mirror the slider");
+  assert(initialFeePanel.buttonFound, "expected an add fee control in a mine descriptor output section");
+  assert(initialFeePanel.buttonText === "Add fee", `expected add fee button text, got ${initialFeePanel.buttonText}`);
+  assert(initialFeePanel.buttonCenterRightOfNode, "expected add fee control to live on the output side");
+  assert(!initialFeePanel.hidden, "add fee should open a fee contribution panel");
+  assert(!initialFeePanel.sliderPresent, "small fee contributions should use a numeric amount input rather than a range slider");
+  assert(initialFeePanel.amountMin === "0", `expected amount min 0, got ${initialFeePanel.amountMin}`);
+  assert(initialFeePanel.amountMax > 0, "expected amount max to be the available surplus");
+  assert(initialFeePanel.amountValue > 0, "expected amount to default to a positive relay-fee-sized contribution");
+  assert(initialFeePanel.amountValue < initialFeePanel.amountMax, "expected amount to default below the whole surplus when possible");
   assert(initialFeePanel.rateText.includes("sat/vB"), `expected feerate readout, got ${initialFeePanel.rateText}`);
   assert(initialFeePanel.comparisonText.includes("overall"), `expected overall feerate comparison, got ${initialFeePanel.comparisonText}`);
-  assert(initialFeePanel.panelClass.includes("warning-confirm"), `expected mandatory confirmation warning class, got ${initialFeePanel.panelClass}`);
-  assert(!initialFeePanel.confirmHidden, "feerates above 1000 sat/vB should show mandatory confirmation");
-  assert(!initialFeePanel.confirmChecked, "mandatory confirmation should start unchecked");
-  assert(initialFeePanel.applyDisabled, "mandatory confirmation should disable apply until checked");
+  assert(!initialFeePanel.panelClass.includes("warning-confirm"), `expected relay-fee default not to require mandatory confirmation, got ${initialFeePanel.panelClass}`);
+  assert(initialFeePanel.confirmHidden, "relay-fee default should not require mandatory high-fee confirmation");
+  assert(!initialFeePanel.finalizeChecked, "fee finalization should be a separate opt-in checkbox");
+  assert(initialFeePanel.finalizePresent, "expected a fee finalization checkbox");
+  assert(!initialFeePanel.applyDisabled, "relay-fee default should be applyable without high-fee confirmation");
 
   const zeroFeePanel = await page.evaluate(async () => {
-    const slider = document.querySelector("#feeContributionSlider");
-    slider.value = "0";
-    slider.dispatchEvent(new Event("input", { bubbles: true }));
+    const amount = document.querySelector("#feeContributionAmount");
+    amount.value = "0";
+    amount.dispatchEvent(new Event("input", { bubbles: true }));
     await new Promise((resolve) => requestAnimationFrame(resolve));
     const panel = document.querySelector("#feeContributionPanel");
     const confirmRow = document.querySelector("#feeContributionConfirmRow");
