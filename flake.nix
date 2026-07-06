@@ -27,6 +27,7 @@
         ./nix/checks.nix
         ./nix/devshell.nix
         ./nix/package.nix
+        ./nix/ptj.nix
         ./nix/toolchain.nix
         ./nix/treefmt.nix
         ./nix/wasm.nix

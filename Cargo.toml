@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/concurrent-psbt", "crates/scrubber"]
+members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
