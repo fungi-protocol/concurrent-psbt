@@ -1,0 +1,48 @@
+name: Update flake.lock
+on:
+  schedule:
+    - cron: "23 7 * * 3"
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: flake-lock-update
+  cancel-in-progress: false
+jobs:
+  update:
+    name: Open flake.lock update PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Require CI-triggering service token
+        env:
+          GH_TOKEN_FOR_UPDATES: ${{ secrets.GH_TOKEN_FOR_UPDATES }}
+        run: |
+          if [[ -z "$GH_TOKEN_FOR_UPDATES" ]]; then
+            echo "GH_TOKEN_FOR_UPDATES must have Contents and Pull Requests read/write access." >&2
+            exit 1
+          fi
+      - name: Install Determinate Nix
+        uses: DeterminateSystems/determinate-nix-action@629b284231c2a82554b724e357e47fc6020833c8 # v3.21.2
+      - name: Update flake.lock and open pull request
+        uses: DeterminateSystems/update-flake-lock@834c491b2ece4de0bbd00d85214bb5e83b4da5c6 # v28
+        with:
+          token: ${{ secrets.GH_TOKEN_FOR_UPDATES }}
+          base: main
+          branch: auto/flake-update
+          commit-msg: "chore: update flake.lock"
+          pr-title: "chore: update flake.lock"
+          pr-body: |
+            Automated weekly flake input refresh.
+
+            The repository-scoped service token ensures the pull request triggers the normal CI workflows.
+      - name: Validate updated lock file
+        uses: DeterminateSystems/flake-checker-action@3164002371bc90729c68af0e24d5aacf20d7c9f6 # v12
+        with:
+          check-supported: "false"
+          ignore-missing-flake-lock: "false"
+          fail-mode: "true"
+          send-statistics: "false"
