@@ -2,6 +2,15 @@
 // The graph shell is an incremental TypeScript migration from the preview JS.
 // Pure PSBT/session model code is strictly checked in src/model.ts.
 const {
+  PtjBackendError,
+  atomizePsbt: atomizeBackendPsbt,
+  createPsbt: createBackendPsbt,
+  joinPsbts: joinBackendPsbts,
+  makeUnordered: makeBackendUnordered,
+  sortPsbt: sortBackendPsbt,
+} = await import("./backend.js?v=20260629-backend-client-v1");
+
+const {
   amountParts,
   accountingDeltaPresentation,
   balanceSheetFeeSignal,
@@ -646,6 +655,126 @@ function feeContributionPlan() {
   return descriptorFeeContributionPlan(feeContributionSignal(), state.feeDraft?.selectedSats || 0);
 }
 
+function satsToBtcAmount(valueSats) {
+  const sats = BigInt(Math.max(0, Math.trunc(Number(valueSats || 0))));
+  const whole = sats / 100_000_000n;
+  const fraction = String(sats % 100_000_000n).padStart(8, "0");
+  return `${whole}.${fraction}`;
+}
+
+function networkForAddress(address) {
+  const text = String(address || "").toLowerCase();
+  if (text.startsWith("bcrt")) return "regtest";
+  if (text.startsWith("tb") || text.startsWith("m") || text.startsWith("n") || text.startsWith("2")) return "testnet";
+  return "bitcoin";
+}
+
+async function hydratePaymentRequestFragment(fragment, parsed) {
+  try {
+    const response = await createBackendPsbt(window.fetch.bind(window), {
+      network: networkForAddress(parsed.address),
+      ordering: "unset",
+      inputs: [],
+      outputs: [{
+        address: parsed.address,
+        amountBtc: satsToBtcAmount(parsed.valueSats),
+      }],
+    });
+    if (byId(state.fragments, fragment.id) !== fragment) return;
+    fragment.raw = response.psbt;
+    fragment.inspect = response.inspect || null;
+    fragment.sourceDescription = parsed.message
+      ? `Raw one-output PSBT from ptj webgui /api/create for BIP 21/321 URI: ${parsed.message}`
+      : "Raw one-output PSBT from ptj webgui /api/create for a BIP 21/321 URI; origin metadata is not serialized into the PSBT.";
+    state.log.unshift(`ptj backend created raw PSBT for ${fragment.id}.`);
+    render();
+  } catch (error) {
+    if (error instanceof PtjBackendError) {
+      state.log.unshift(`ptj backend rejected payment request PSBT: ${error.message}`);
+      render();
+    }
+  }
+}
+
+async function hydrateSortedFragment(fragment, source) {
+  if (!source.raw) return;
+  try {
+    const response = await sortBackendPsbt(window.fetch.bind(window), source.raw);
+    if (byId(state.fragments, fragment.id) !== fragment) return;
+    fragment.raw = response.psbt;
+    fragment.inspect = response.inspect || null;
+    fragment.sourceDescription = `Raw sorter output from ptj webgui /api/sort for ${nodeDisplayLabel(source, nodeKind(source.id))}.`;
+    state.log.unshift(`ptj backend sorted raw PSBT for ${fragment.id}.`);
+    render();
+  } catch (error) {
+    if (error instanceof PtjBackendError) {
+      state.log.unshift(`ptj backend rejected sort request: ${error.message}`);
+      render();
+    }
+  }
+}
+
+async function hydrateUnorderedPsbt(node, previousRaw) {
+  if (!previousRaw) return;
+  try {
+    const response = await makeBackendUnordered(window.fetch.bind(window), previousRaw);
+    if (getNode(node.id) !== node) return;
+    node.raw = response.psbt;
+    node.inspect = response.inspect || null;
+    node.sourceDescription = `Raw unordered PSBT from ptj webgui /api/make-unordered for ${nodeDisplayLabel(node, nodeKind(node.id))}.`;
+    if (nodeKind(node.id) === "session") syncPeerViews(node);
+    state.log.unshift(`ptj backend made raw PSBT unordered for ${node.id}.`);
+    render();
+  } catch (error) {
+    if (error instanceof PtjBackendError) {
+      state.log.unshift(`ptj backend rejected make-unordered request: ${error.message}`);
+      render();
+    }
+  }
+}
+
+async function hydrateAtomizedFragments(atoms, previousRaw, sourceId) {
+  if (!previousRaw) return;
+  try {
+    const response = await atomizeBackendPsbt(window.fetch.bind(window), previousRaw);
+    const rawFragments = Array.isArray(response.fragments) ? response.fragments : [];
+    for (const [index, atom] of atoms.entries()) {
+      const rawFragment = rawFragments[index];
+      if (!rawFragment || byId(state.fragments, atom.id) !== atom) continue;
+      atom.raw = rawFragment.psbt;
+      atom.inspect = rawFragment.inspect || null;
+      atom.sourceDescription = `Raw atomic PSBT ${index + 1}/${rawFragments.length} from ptj webgui /api/atomize for ${sourceId}.`;
+    }
+    state.log.unshift(`ptj backend atomized raw PSBT for ${sourceId} into ${rawFragments.length} fragments.`);
+    render();
+  } catch (error) {
+    if (error instanceof PtjBackendError) {
+      state.log.unshift(`ptj backend rejected atomize request: ${error.message}`);
+      render();
+    }
+  }
+}
+
+async function hydrateJoinedPsbt(target, sources) {
+  const psbts = sources.map((source) => source.raw).filter(Boolean);
+  if (psbts.length !== sources.length) return;
+  try {
+    const response = await joinBackendPsbts(window.fetch.bind(window), psbts);
+    if (getNode(target.id) !== target) return;
+    target.raw = response.psbt;
+    target.inspect = response.inspect || null;
+    target.sourceDescription = `Raw PSBT LUB from ptj webgui /api/join for ${sources.map((source) => source.id).join(" + ")}.`;
+    if (nodeKind(target.id) === "session") syncPeerViews(target);
+    state.log.unshift(`ptj backend joined raw PSBTs into ${target.id}.`);
+    render();
+  } catch (error) {
+    if (error instanceof PtjBackendError) {
+      state.log.unshift(`ptj backend rejected join request: ${error.message}`);
+      render();
+    }
+  }
+}
+
 function parseBip321Uri(text) {
   const parsed = parseBitcoinUri(text);
   if (!parsed) return null;
@@ -705,6 +834,7 @@ function addBip321FragmentFromText(text, shouldRender = true) {
   rememberPaymentRequest(parsed, fragment.id);
   state.selected = [fragment.id];
   state.log.unshift(`Converted BIP 21/321 payment request into one-output PSBT ${fragment.id}.`);
+  void hydratePaymentRequestFragment(fragment, parsed);
   if (shouldRender) render();
   return fragment;
 }
@@ -1173,6 +1303,7 @@ function mergeFragments(leftId, rightId, shouldRender = true) {
   removeFragment(left.id, fragment.id);
   removeFragment(right.id, fragment.id);
   state.log.unshift(`Merged fragments ${left.id} and ${right.id}; replaced them with ${fragment.id}.`);
+  void hydrateJoinedPsbt(fragment, [left, right]);
   state.selected = [fragment.id];
   if (shouldRender) render();
   return fragment;
@@ -1191,6 +1322,7 @@ function absorbFragmentIntoSession(fragmentId, sessionId, shouldRender = true) {
   syncPeerViews(session);
   startConvergence(session, `absorbing ${fragment.id}`, session.peers, pendingPayloadRowKeys(fragment));
   state.log.unshift(`Absorbed fragment ${fragment.id} into ${session.label}; fragment vertex was removed.`);
+  void hydrateJoinedPsbt(session, [session, fragment]);
   state.selected = [session.id];
   if (shouldRender) render();
   return session;
@@ -1216,6 +1348,7 @@ function mergeSessions(leftId, rightId, shouldRender = true) {
   syncPeerViews(session);
   startConvergence(session, `merging ${left.id} and ${right.id}`);
     state.log.unshift(`Merged ${left.label} and ${right.label}; replaced them with ${session.label}.`);
+  void hydrateJoinedPsbt(session, [left, right]);
   state.selected = [session.id];
   if (shouldRender) render();
   return session;
@@ -1290,11 +1423,13 @@ function convertSelectedToUnordered() {
   if (node.format === "unordered") {
     state.log.unshift(`${node.id} is already unordered.`);
   } else {
+    const previousRaw = node.raw;
     node.format = "unordered";
     node.convertedFrom = "bip370";
     node.modifiable = undefined;
     if (nodeKind(node.id) === "session") syncPeerViews(node);
     state.log.unshift(`Shuffled ${node.id} from BIP 370 order into unordered form for session sharing.`);
+    void hydrateUnorderedPsbt(node, previousRaw);
   }
   render();
 }
@@ -1338,6 +1473,7 @@ function sortPsbtToBip370(nodeId, shouldRender = true) {
   state.log.unshift(kind === "session"
     ? `Fixed ${nodeDisplayLabel(node, kind)} input/output sets into an updater/signer PSBT candidate; the live session remains available.`
     : `Sorted ${nodeDisplayLabel(node, kind)} into a BIP 370 updater/signer PSBT candidate.`);
+  void hydrateSortedFragment(fragment, node);
   if (shouldRender) render();
   return fragment;
 }
@@ -1399,10 +1535,12 @@ function atomizeSelectedPsbt() {
     render();
     return;
   }
+  const previousRaw = node.raw;
   removeFragment(node.id);
   state.fragments.push(...atoms);
   state.selected = atoms.slice(0, 1).map((atom) => atom.id);
   state.log.unshift(`Atomized ${node.id} into ${atoms.length} unordered atomic fragment PSBTs.`);
+  void hydrateAtomizedFragments(atoms, previousRaw, node.id);
   render();
 }
 
@@ -1480,7 +1618,11 @@ function beginWireDraft(event, sourceId) {
     targetId: null,
     active: false,
   };
-  event.currentTarget.setPointerCapture?.(event.pointerId);
+  try {
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  } catch {
+    // Synthetic test events may not have an active browser pointer capture slot.
+  }
 }
 
 function updateWireDraft(event) {

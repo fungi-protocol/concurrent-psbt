@@ -126,3 +126,7 @@ export function concatenatePsbts(fetchImpl: FetchLike, psbts: string[]): Promise
 export function exportBip174(fetchImpl: FetchLike, psbt: string): Promise<ExportBip174Response> {
   return postJson(fetchImpl, "/api/export-bip174", { psbt });
 }
+
+export function importBip174(fetchImpl: FetchLike, psbt: string): Promise<PsbtResponse> {
+  return postJson(fetchImpl, "/api/import-bip174", { psbt });
+}

@@ -7,6 +7,7 @@ import {
   concatenatePsbts,
   createPsbt,
   exportBip174,
+  importBip174,
   inspectPsbt,
   joinPsbts,
   makeUnordered,
@@ -101,6 +102,11 @@ test("backend client exposes every offline PSBT transform endpoint", async () =>
   assert.deepEqual(await exportBip174(exported.fetch, "ordered"), { format: "bip174", psbt: "core" });
   assert.equal(exported.calls[0].path, "/api/export-bip174");
   assert.deepEqual(exported.calls[0].body, { psbt: "ordered" });
+
+  const imported = recordingFetch(jsonResponse(200, { psbt: "bip370", inspect: { format: "bip370" } }));
+  assert.deepEqual(await importBip174(imported.fetch, "core"), { psbt: "bip370", inspect: { format: "bip370" } });
+  assert.equal(imported.calls[0].path, "/api/import-bip174");
+  assert.deepEqual(imported.calls[0].body, { psbt: "core" });
 });
 
 test("backend client raises structured ptj errors", async () => {
