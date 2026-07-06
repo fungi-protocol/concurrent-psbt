@@ -336,6 +336,19 @@ fn export_bip174_rejects_unordered_psbts() {
 }
 
 #[test]
+fn commands_reject_bip174_inputs_explicitly_until_import_exists() {
+    let temp = tempfile::tempdir().unwrap();
+    let ordered = write_psbt(temp.path(), "ordered.psbt", sorted_psbt(TXID, 0, 1, 50_000));
+    let core_psbt = ptj::run(Cli::try_parse_from(["ptj", "export-bip174", path_str(&ordered)]).unwrap()).unwrap();
+    let core_path = temp.path().join("core.psbt");
+    std::fs::write(&core_path, core_psbt).unwrap();
+
+    let error = run_error(["ptj", "sort", path_str(&core_path)]);
+    assert!(error.to_string().contains("BIP 174"));
+    assert!(error.to_string().contains("import"));
+}
+
+#[test]
 fn run_or_write_atomically_writes_output_file() {
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("created.psbt");
