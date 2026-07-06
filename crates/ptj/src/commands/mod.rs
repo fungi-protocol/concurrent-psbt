@@ -8,7 +8,7 @@ pub(crate) mod join;
 pub(crate) mod make_unordered;
 pub(crate) mod negotiation;
 pub(crate) mod sort;
-mod sync;
+pub(crate) mod sync;
 
 use crate::cli::Command;
 use crate::{Error, Result};
@@ -47,6 +47,33 @@ pub(crate) fn run_with_stdin(command: Command, stdin: Option<&[u8]>) -> Result<S
             "webgui is an interactive command; call ptj::webgui::serve",
         )),
     }
+}
+
+/// Drive one convergence step over a file/dir transport that publishes the
+/// converged result to `publish_target` in `output_format`. The runner
+/// (`lib.rs`) wraps this in a file lock so collect+publish are atomic.
+pub(crate) fn run_sync_over_local(
+    config: &crate::cli::SyncConfig,
+    stdin: Option<&[u8]>,
+    publish_target: std::path::PathBuf,
+    output_format: crate::cli::OutputFileFormat,
+) -> Result<()> {
+    validate_stdin_shape(&Command::Sync(config.clone()), stdin)?;
+    let mut transport = sync::local_transport(config, stdin, Some(publish_target), output_format);
+    // Drive the async convergence step on the single sync-driver runtime edge.
+    sync::drive_async(sync::sync_once_over(&mut transport))?;
+    Ok(())
+}
+
+pub(crate) fn validate_ongoing_sync(
+    config: &crate::cli::SyncConfig,
+    stdin: Option<&[u8]>,
+) -> Result<()> {
+    sync::validate_ongoing(config, stdin)
+}
+
+pub(crate) fn sync_poll_interval(config: &crate::cli::SyncConfig) -> std::time::Duration {
+    sync::poll_interval(config)
 }
 
 fn validate_stdin_shape(command: &Command, stdin: Option<&[u8]>) -> Result<()> {

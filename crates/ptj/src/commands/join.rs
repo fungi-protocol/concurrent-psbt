@@ -15,6 +15,10 @@ pub(super) fn run(config: JoinConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
     join_sources(config.files.iter().map(std::path::PathBuf::as_path), stdin)
 }
 
+// Retained convenience wrapper: file paths -> join. `ptj sync` now gathers via
+// the LocalTransport (bytes), so this is no longer on the sync path, but it
+// stays as a direct file-join helper for callers/tests.
+#[allow(dead_code)]
 pub(crate) fn join_paths<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Result<Psbt> {
     let psbts = paths
         .into_iter()

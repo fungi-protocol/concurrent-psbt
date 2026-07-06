@@ -20,3 +20,14 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+// Bridge transport-core errors into the ptj error type. Foreign trait, foreign
+// source, LOCAL target — allowed by the orphan rule. This lets ptj code call
+// `transport.collect()?` / `Message::decode(..)?` (which return
+// `transport_core::Result`) and get a ptj `Error`. Map by message: transport
+// errors are already opaque strings.
+impl From<transport_core::Error> for Error {
+    fn from(error: transport_core::Error) -> Self {
+        Error::new(error.message())
+    }
+}

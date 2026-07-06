@@ -26,10 +26,16 @@
         strictDeps = true;
       };
 
-      cargoArtifactsRelease = craneLib.buildDepsOnly commonArgs;
       cargoArtifactsDev = craneLib.buildDepsOnly (commonArgs // { CARGO_PROFILE = "dev"; });
+      cargoArtifactsRelease = cargoArtifactsDev;
 
-      concurrent-psbt = craneLib.buildPackage (commonArgs // { cargoArtifacts = cargoArtifactsRelease; });
+      concurrent-psbt = craneLib.buildPackage (
+        commonArgs
+        // {
+          CARGO_PROFILE = "dev";
+          cargoArtifacts = cargoArtifactsDev;
+        }
+      );
     in
     {
       _module.args = {

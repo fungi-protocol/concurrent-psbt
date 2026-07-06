@@ -2,6 +2,8 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::str::FromStr as _;
 
+use crate::transport::message::Message;
+
 use crate::cli::{CreateConfig, NetworkArg, OrderingArg, OutPointArg, OutputArg, WebguiConfig};
 use crate::{Error, Result};
 
@@ -65,6 +67,7 @@ pub(crate) fn response_for(method: &str, path: &str, body: &[u8]) -> Response {
             "/api/join" => return join_response(body),
             "/api/make-unordered" => return make_unordered_response(body),
             "/api/sort" => return sort_response(body),
+            "/api/sync" => return sync_response(body),
             _ => {}
         }
     }
@@ -194,6 +197,121 @@ fn atomize_response_result(body: &[u8]) -> Result<Vec<u8>> {
     Ok(serde_json::json!({ "fragments": fragments })
         .to_string()
         .into_bytes())
+}
+
+fn sync_response(body: &[u8]) -> Response {
+    match sync_response_result(body) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/json; charset=utf-8",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+fn sync_response_result(body: &[u8]) -> Result<Vec<u8>> {
+    let request: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
+    let psbts = match request.get("psbts") {
+        None => Vec::new(),
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| Error::new("request JSON field `psbts` must be an array"))?
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let psbt = value.as_str().ok_or_else(|| {
+                    Error::new(format!("request psbts[{index}] must be a string"))
+                })?;
+                crate::io::parse_psbt_bytes(&format!("request psbts[{index}]"), psbt.as_bytes())
+            })
+            .collect::<Result<Vec<_>>>()?,
+    };
+    let local = if psbts.is_empty() {
+        None
+    } else {
+        Some(crate::commands::join::join_psbts(psbts)?)
+    };
+    let wait_ms = request
+        .get("iroh_wait_ms")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(5000);
+    match request
+        .get("iroh_ticket")
+        .and_then(serde_json::Value::as_str)
+    {
+        None => {
+            let joined =
+                local.ok_or_else(|| Error::new("request must contain `psbts` or `iroh_ticket`"))?;
+            sync_json(&joined, &[])
+        }
+        Some(ticket) => sync_over_iroh(ticket, wait_ms, local),
+    }
+}
+
+/// Serialize a sync result: converged PSBT plus any out-of-band negotiation
+/// messages (hex-encoded; payments and confirmations are opaque records).
+fn sync_json(joined: &psbt_v2::v2::Psbt, messages: &[Message]) -> Result<Vec<u8>> {
+    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let mut payments = Vec::new();
+    let mut confirmations = Vec::new();
+    for message in messages {
+        match message {
+            Message::Payment(value) => payments.push(hex(value)),
+            Message::Confirmation(value) => confirmations.push(hex(value)),
+            Message::Psbt(_) => {}
+        }
+    }
+    Ok(serde_json::json!({
+        "psbt": crate::io::encode_psbt(joined),
+        "inspect": crate::commands::inspect::inspect_psbt(joined),
+        "payments": payments,
+        "confirmations": confirmations,
+    })
+    .to_string()
+    .into_bytes())
+}
+
+/// Each transport is feature-gated in this crate: the iroh arm only exists
+/// when built with `iroh-sync`, mirroring the CLI.
+#[cfg(feature = "iroh-sync")]
+fn sync_over_iroh(ticket: &str, wait_ms: u64, local: Option<psbt_v2::v2::Psbt>) -> Result<Vec<u8>> {
+    use std::str::FromStr as _;
+
+    use transport_core::Transport as _;
+    use transport_iroh::{DocTicket, IrohChannel};
+
+    let ticket = DocTicket::from_str(ticket.trim())
+        .map_err(|error| Error::new(format!("parsing iroh ticket: {error}")))?;
+    // IrohChannel is attributable; wrap it in `Attributed` for the plain seam.
+    let mut transport = transport_core::Attributed::new(IrohChannel::join(ticket)?);
+    // The webgui's own async→sync edge: the interactive server handler is sync,
+    // so it drives the async publish + sync_step on the shared sync-driver
+    // runtime (`commands::sync::drive_async`). No `block_on` lives in a transport
+    // crate; the iroh backend awaits its actor on its own runtime.
+    let (joined, messages) = crate::commands::sync::drive_async(async move {
+        if let Some(local) = local {
+            transport
+                .publish(Message::Psbt(crate::io::encode_psbt(&local).into_bytes()).encode())
+                .await?;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
+        crate::commands::sync::sync_step(&mut transport).await
+    })?;
+    sync_json(&joined, &messages)
+}
+
+#[cfg(not(feature = "iroh-sync"))]
+fn sync_over_iroh(
+    _ticket: &str,
+    _wait_ms: u64,
+    _local: Option<psbt_v2::v2::Psbt>,
+) -> Result<Vec<u8>> {
+    Err(Error::new(
+        "ptj webgui was built without iroh sync support; rebuild with feature `iroh-sync`",
+    ))
 }
 
 fn join_response(body: &[u8]) -> Response {
@@ -1239,5 +1357,49 @@ mod tests {
 
     fn btc_value(amount_sats: u64) -> String {
         bitcoin::Amount::from_sat(amount_sats).to_btc().to_string()
+    }
+    #[test]
+    fn sync_endpoint_folds_psbts_locally() {
+        let empty = crate::commands::create::create_psbt(crate::cli::CreateConfig {
+            inputs: vec![],
+            outputs: vec![],
+            ordering: crate::cli::OrderingArg::Unset,
+            seed: None,
+            network: crate::cli::NetworkArg(bitcoin::Network::Regtest),
+        })
+        .expect("empty create");
+        let encoded = crate::io::encode_psbt(&empty);
+        let request = serde_json::json!({ "psbts": [encoded, encoded] }).to_string();
+        let response = response_for("POST", "/api/sync", request.as_bytes());
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(
+            value
+                .get("psbt")
+                .and_then(serde_json::Value::as_str)
+                .is_some()
+        );
+        assert_eq!(value["payments"], serde_json::json!([]));
+        assert_eq!(value["confirmations"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn sync_endpoint_requires_input() {
+        let response = response_for("POST", "/api/sync", b"{}");
+        assert_eq!(response.status, 400);
+    }
+
+    #[cfg(not(feature = "iroh-sync"))]
+    #[test]
+    fn sync_endpoint_iroh_gated() {
+        let request = serde_json::json!({ "iroh_ticket": "doc..." }).to_string();
+        let response = response_for("POST", "/api/sync", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(String::from_utf8_lossy(&response.body).contains("iroh-sync"));
     }
 }
