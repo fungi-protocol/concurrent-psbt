@@ -265,6 +265,7 @@ export interface DisplaySubtransaction {
   inputAccountingTotalSats: number;
   outputAccountingTotalSats: number;
   implicitFeeSats: number;
+  estimatedVbytes: number;
 }
 
 export interface BalanceSheetTotalRow {
@@ -282,6 +283,7 @@ export interface BalanceSheetTotalRow {
   inputAccountingTotalSats: number;
   outputAccountingTotalSats: number;
   implicitFeeSats: number;
+  estimatedVbytes: number;
 }
 
 export interface AccountingDeltaPresentation {
@@ -333,6 +335,7 @@ export interface UnorderedPsbtDisplay {
   outputs: DisplaySection[];
   subtransactions: DisplaySubtransaction[];
   explicitFeeSats: number;
+  estimatedVbytes: number;
   whole: TransactionBalance;
 }
 
@@ -896,6 +899,7 @@ export function unorderedPsbtDisplay(payload: Payload): UnorderedPsbtDisplay {
     outputs,
     subtransactions: displaySubtransactions(inputs, outputs),
     explicitFeeSats: whole.fee.explicit,
+    estimatedVbytes: payloadSizeEstimate(payload).totalVbytes,
     whole,
   };
 }
@@ -961,6 +965,8 @@ function displaySubtransactions(inputs: DisplaySection[], outputs: DisplaySectio
     const inputAccountingTotal = inputSection.totalSats;
     const outputAccountingTotal = outputSection.totalSats + explicitFee;
     const implicitFee = inputAccountingTotal - outputAccountingTotal;
+    const estimatedVbytes =
+      estimatedRowsVbytes(inputSection.rows, "input") + estimatedRowsVbytes(outputSection.rows, "output");
     return {
       kind: template.kind,
       label: template.label,
@@ -978,6 +984,7 @@ function displaySubtransactions(inputs: DisplaySection[], outputs: DisplaySectio
       inputAccountingTotalSats: inputAccountingTotal,
       outputAccountingTotalSats: outputAccountingTotal,
       implicitFeeSats: implicitFee,
+      estimatedVbytes,
     };
   });
 }
@@ -1085,6 +1092,7 @@ export function unorderedBalanceSheetTotalRows(display: UnorderedPsbtDisplay): B
       inputAccountingTotalSats: section.inputAccountingTotalSats,
       outputAccountingTotalSats: section.outputAccountingTotalSats,
       implicitFeeSats: section.implicitFeeSats,
+      estimatedVbytes: section.estimatedVbytes,
     })),
     {
       kind: "whole",
@@ -1098,6 +1106,7 @@ export function unorderedBalanceSheetTotalRows(display: UnorderedPsbtDisplay): B
       inputAccountingTotalSats: display.whole.inputs,
       outputAccountingTotalSats: display.whole.outputs + display.whole.fee.explicit,
       implicitFeeSats: display.whole.fee.implicit,
+      estimatedVbytes: display.estimatedVbytes,
     },
   ];
 }
@@ -1120,7 +1129,7 @@ export function accountingDeltaPresentation(section: BalanceSheetTotalRow | Disp
       totalSats,
       explicitFeeSats: explicitFee,
       implicitFeeSats: implicitFee,
-      label: explicitFee > 0 ? "explicit / surplus" : "surplus",
+      label: explicitFee > 0 ? "accounted / surplus" : "surplus",
       separator: explicitFee > 0 ? " / " : null,
       amountA: explicitFee > 0 ? explicitFee : totalSats,
       amountB: explicitFee > 0 ? totalSats : null,
@@ -1135,7 +1144,7 @@ export function accountingDeltaPresentation(section: BalanceSheetTotalRow | Disp
       totalSats,
       explicitFeeSats: explicitFee,
       implicitFeeSats: implicitFee,
-      label: explicitFee > 0 ? "deficit + explicit" : "deficit",
+      label: explicitFee > 0 ? "deficit + accounted" : "deficit",
       separator: explicitFee > 0 ? " + " : null,
       amountA: totalSats,
       amountB: explicitFee > 0 ? explicitFee : null,
@@ -1160,13 +1169,11 @@ export function shouldShowGrandTotal(display: UnorderedPsbtDisplay): boolean {
   return display.subtransactions.length > 1;
 }
 
-export function descriptorFeeSignal(payload: Payload, descriptorId: string): DescriptorFeeSignal | null {
-  const display = unorderedPsbtDisplay(payload);
-  const section = display.subtransactions.find((candidate) => candidate.descriptorId === descriptorId);
-  if (!section) return null;
-  const estimatedVbytes = estimatedRowsVbytes(section.inputs.rows, "input") + estimatedRowsVbytes(section.outputs.rows, "output");
-  const wholeVbytes =
-    estimatedRowsVbytes(payload.inputs, "input") + estimatedRowsVbytes(payload.outputs, "output");
+export function balanceSheetFeeSignal(
+  section: BalanceSheetTotalRow | DisplaySubtransaction,
+  averageFeeRateSatsPerVbyte: number,
+): DescriptorFeeSignal {
+  const estimatedVbytes = section.estimatedVbytes;
   return {
     descriptorId: section.descriptorId,
     descriptorLabel: section.label,
@@ -1175,9 +1182,20 @@ export function descriptorFeeSignal(payload: Payload, descriptorId: string): Des
     totalFeeSats: section.feeSats,
     estimatedVbytes,
     feeRateSatsPerVbyte: section.feeSats / Math.max(1, estimatedVbytes),
-    averageFeeRateSatsPerVbyte: display.whole.fee.total / Math.max(1, wholeVbytes),
-    canFinalizeExplicitFee: section.descriptorMine === true && section.implicitFeeSats > 0 && section.inputs.rows.length > 0,
+    averageFeeRateSatsPerVbyte,
+    canFinalizeExplicitFee: Boolean(section.descriptorId) &&
+      section.descriptorMine === true &&
+      section.implicitFeeSats > 0 &&
+      "inputs" in section &&
+      section.inputs.rows.length > 0,
   };
+}
+
+export function descriptorFeeSignal(payload: Payload, descriptorId: string): DescriptorFeeSignal | null {
+  const display = unorderedPsbtDisplay(payload);
+  const section = display.subtransactions.find((candidate) => candidate.descriptorId === descriptorId);
+  if (!section) return null;
+  return balanceSheetFeeSignal(section, display.whole.fee.total / Math.max(1, display.estimatedVbytes));
 }
 
 export function descriptorFeeContributionPlan(signal: DescriptorFeeSignal | null, selectedSats: number): DescriptorFeeContributionPlan | null {
