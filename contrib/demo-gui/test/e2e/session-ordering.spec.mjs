@@ -105,6 +105,222 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
   assert(explicit.value === "", "explicit ordering should clear any seed value");
   assert(explicit.generateDisabled, "explicit ordering should disable seed generation");
 
+  let createRequest = null;
+  await page.route("**/api/create", async (route) => {
+    createRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({
+        psbt: "backend-created-psbt",
+        inspect: {
+          ordering: "unordered",
+          input_count: 0,
+          output_count: 1,
+        },
+      }),
+    });
+  });
+  await page.evaluate(() => {
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        getData: () => "bitcoin:bcrt1qbackenddemo?amount=0.00001234&label=Backend",
+      },
+    });
+    document.querySelector("#pasteDropzone").dispatchEvent(event);
+  });
+  await page.waitForFunction(() => [...document.querySelectorAll("#eventLog li")]
+    .some((item) => /ptj backend created raw PSBT/i.test(item.textContent || "")));
+  assert(createRequest, "BIP 21 paste should call /api/create");
+  assert(createRequest.network === "regtest", `expected regtest network, got ${JSON.stringify(createRequest)}`);
+  assert(createRequest.ordering === "unset", `expected unset ordering, got ${JSON.stringify(createRequest)}`);
+  assert(Array.isArray(createRequest.inputs) && createRequest.inputs.length === 0, "payment requests should create output-only fragments");
+  assert(createRequest.outputs?.[0]?.address === "bcrt1qbackenddemo", `unexpected output address ${JSON.stringify(createRequest)}`);
+  assert(createRequest.outputs?.[0]?.amount_btc === "0.00001234", `unexpected output amount ${JSON.stringify(createRequest)}`);
+
+  let sortRequest = null;
+  await page.route("**/api/sort", async (route) => {
+    sortRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({
+        psbt: "backend-sorted-psbt",
+        inspect: {
+          ordering: "ordered",
+          input_count: 0,
+          output_count: 1,
+        },
+      }),
+    });
+  });
+  await page.waitForFunction(() => !document.querySelector("#orderSelected")?.hidden);
+  await page.click("#orderSelected");
+  await page.waitForFunction(() => [...document.querySelectorAll("#eventLog li")]
+    .some((item) => /ptj backend sorted raw PSBT/i.test(item.textContent || "")));
+  assert(sortRequest, "raw-backed Sort action should call /api/sort");
+  assert(JSON.stringify(sortRequest) === JSON.stringify({ psbt: "backend-created-psbt" }),
+    `unexpected sort request ${JSON.stringify(sortRequest)}`);
+
+  let makeUnorderedRequest = null;
+  await page.route("**/api/make-unordered", async (route) => {
+    makeUnorderedRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({
+        psbt: "backend-unordered-psbt",
+        inspect: {
+          ordering: "unordered",
+          input_count: 0,
+          output_count: 1,
+        },
+      }),
+    });
+  });
+  await page.waitForFunction(() => !document.querySelector("#convertSelected")?.hidden);
+  await page.click("#convertSelected");
+  await page.waitForFunction(() => [...document.querySelectorAll("#eventLog li")]
+    .some((item) => /ptj backend made raw PSBT unordered/i.test(item.textContent || "")));
+  assert(makeUnorderedRequest, "raw-backed Make unordered action should call /api/make-unordered");
+  assert(JSON.stringify(makeUnorderedRequest) === JSON.stringify({ psbt: "backend-sorted-psbt" }),
+    `unexpected make-unordered request ${JSON.stringify(makeUnorderedRequest)}`);
+
+  let atomizeRequest = null;
+  await page.route("**/api/atomize", async (route) => {
+    atomizeRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({
+        fragments: [
+          {
+            psbt: "backend-atom-input-psbt",
+            inspect: {
+              ordering: "unordered",
+              input_count: 1,
+              output_count: 0,
+            },
+          },
+          {
+            psbt: "backend-atom-output-psbt",
+            inspect: {
+              ordering: "unordered",
+              input_count: 0,
+              output_count: 1,
+            },
+          },
+        ],
+      }),
+    });
+  });
+  await page.evaluate(() => {
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        getData: () => "cHNidP8BAHECAwQFBgcICQ==",
+      },
+    });
+    document.querySelector("#pasteDropzone").dispatchEvent(event);
+  });
+  await page.waitForFunction(() => !document.querySelector("#atomizeSelected")?.hidden);
+  await page.click("#atomizeSelected");
+  await page.waitForFunction(() => [...document.querySelectorAll("#eventLog li")]
+    .some((item) => /ptj backend atomized raw PSBT/i.test(item.textContent || "")));
+  assert(atomizeRequest, "raw-backed Atomize PSBT action should call /api/atomize");
+  assert(JSON.stringify(atomizeRequest) === JSON.stringify({ psbt: "cHNidP8BAHECAwQFBgcICQ==" }),
+    `unexpected atomize request ${JSON.stringify(atomizeRequest)}`);
+
+  let joinRequest = null;
+  await page.route("**/api/join", async (route) => {
+    joinRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({
+        psbt: "backend-joined-psbt",
+        inspect: {
+          ordering: "unordered",
+          input_count: 0,
+          output_count: 2,
+        },
+      }),
+    });
+  });
+  for (const uri of [
+    "bitcoin:bcrt1qjoina?amount=0.00001000&label=JoinA",
+    "bitcoin:bcrt1qjoinb?amount=0.00002000&label=JoinB",
+  ]) {
+    const previousCreateLogs = await page.evaluate(() => [...document.querySelectorAll("#eventLog li")]
+      .filter((item) => /ptj backend created raw PSBT/i.test(item.textContent || "")).length);
+    await page.evaluate((text) => {
+      const event = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "clipboardData", {
+        value: {
+          getData: () => text,
+        },
+      });
+      document.querySelector("#pasteDropzone").dispatchEvent(event);
+    }, uri);
+    await page.waitForFunction((count) => [...document.querySelectorAll("#eventLog li")]
+      .filter((item) => /ptj backend created raw PSBT/i.test(item.textContent || "")).length > count, previousCreateLogs);
+    await page.waitForFunction((label) => Boolean([...document.querySelectorAll(".node.fragment")]
+      .find((node) => (node.getAttribute("aria-label") || "").includes(label))), uri.includes("JoinA") ? "JoinA" : "JoinB");
+  }
+  const wireResult = await page.evaluate(async () => {
+    const center = (node) => {
+      const graph = document.querySelector("#graph");
+      const graphRect = graph.getBoundingClientRect();
+      const [minX, minY, viewWidth, viewHeight] = graph.getAttribute("viewBox").split(" ").map(Number);
+      const transform = node.getAttribute("transform") || "";
+      const match = transform.match(/translate\(([-0-9.]+)\s+([-0-9.]+)\)/);
+      const body = node.querySelector(":scope > rect.node-body");
+      const svgX = Number(match?.[1] || 0) + Number(body?.getAttribute("width") || 0) / 2;
+      const svgY = Number(match?.[2] || 0) + Number(body?.getAttribute("height") || 0) / 2;
+      return {
+        x: graphRect.left + ((svgX - minX) / viewWidth) * graphRect.width,
+        y: graphRect.top + ((svgY - minY) / viewHeight) * graphRect.height,
+      };
+    };
+    const pointer = (target, type, point, buttons) => target.dispatchEvent(new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      pointerId: 17,
+      pointerType: "mouse",
+      button: 0,
+      buttons,
+      clientX: point.x,
+      clientY: point.y,
+    }));
+    const fragments = [...document.querySelectorAll(".node.fragment")];
+    const left = fragments.find((node) => (node.getAttribute("aria-label") || "").includes("JoinA"));
+    const right = fragments.find((node) => (node.getAttribute("aria-label") || "").includes("JoinB"));
+    const graph = document.querySelector("#graph");
+    if (!left || !right || !graph) return { ok: false, reason: "missing fragment or graph" };
+    const start = center(left);
+    const end = center(right);
+    pointer(left, "pointerdown", start, 1);
+    pointer(graph, "pointermove", { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 }, 1);
+    pointer(graph, "pointermove", end, 1);
+    pointer(graph, "pointerup", end, 0);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    return {
+      ok: true,
+      connectHidden: document.querySelector("#connectSelected")?.hidden ?? true,
+      summary: document.querySelector("#selectionSummary")?.textContent || "",
+      log: [...document.querySelectorAll("#eventLog li")].map((item) => item.textContent || "").slice(0, 4),
+    };
+  });
+  assert(wireResult.ok && !wireResult.connectHidden,
+    `expected JoinA/JoinB wire to enable Join, got ${JSON.stringify(wireResult)}`);
+  await page.click("#connectSelected");
+  await page.waitForFunction(() => [...document.querySelectorAll("#eventLog li")]
+    .some((item) => /ptj backend joined raw PSBTs/i.test(item.textContent || "")));
+  assert(joinRequest, "raw-backed Join action should call /api/join");
+  assert(JSON.stringify(joinRequest) === JSON.stringify({ psbts: ["backend-created-psbt", "backend-created-psbt"] }),
+    `unexpected join request ${JSON.stringify(joinRequest)}`);
+
   const descriptorOverlay = await page.evaluate(async () => {
     const settings = document.querySelector(".descriptor-settings");
     const summary = settings?.querySelector("summary");
@@ -186,6 +402,31 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
   );
   assert(Number(amountTone.scaleOpacity) < Number(amountTone.significantOpacity || 1), "expected muted leading zeros to use lower opacity");
 
+  const coloredAmountTone = await page.evaluate(() => {
+    const scale = document.querySelector(".psbt-balance-delta.deficit .amount-scale");
+    const significant = scale?.nextElementSibling;
+    const scaleStyle = scale ? getComputedStyle(scale) : null;
+    const significantStyle = significant ? getComputedStyle(significant) : null;
+    return {
+      scaleText: scale?.textContent || "",
+      significantText: significant?.textContent || "",
+      scaleFill: scaleStyle?.fill || "",
+      scaleOpacity: scaleStyle?.opacity || "",
+      significantFill: significantStyle?.fill || "",
+      significantOpacity: significantStyle?.opacity || "",
+    };
+  });
+  assert(coloredAmountTone.scaleText, "expected a colored deficit amount with muted leading zeros");
+  assert(coloredAmountTone.significantText, "expected significant deficit digits after muted leading zeros");
+  assert(
+    coloredAmountTone.scaleFill === coloredAmountTone.significantFill,
+    `expected colored muted leading zeros to inherit ${coloredAmountTone.significantFill}, got ${coloredAmountTone.scaleFill}`,
+  );
+  assert(
+    Number(coloredAmountTone.scaleOpacity) < Number(coloredAmountTone.significantOpacity || 1),
+    "expected colored muted leading zeros to use lower opacity only",
+  );
+
   const sizeUnitCycle = await page.evaluate(async () => {
     const before = [...document.querySelectorAll(".psbt-size-total")].map((node) => node.textContent.trim());
     const target = document.querySelector(".psbt-size-total");
@@ -220,8 +461,10 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
 
   const atomicFragmentActions = await page.evaluate(async () => {
     const fragment = [...document.querySelectorAll(".node.fragment")]
-      .find((node) => node.querySelectorAll(".coin-row").length === 1);
-    fragment?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+      .find((node) => (node.getAttribute("aria-label") || "").includes("paste PSBT input")) ||
+      [...document.querySelectorAll(".node.fragment")]
+        .find((node) => node.querySelectorAll(".coin-row").length === 1);
+    fragment?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, view: window }));
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const atomize = document.querySelector("#atomizeSelected");
     return {
@@ -286,6 +529,21 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
     assert(note.parentClass.includes("psbt-section-total"), `expected subtotal note to live in a subtotal amount, got ${note.parentClass}`);
     assert(note.noteFontSize < note.parentFontSize, `expected note font ${note.noteFontSize} to be smaller than subtotal font ${note.parentFontSize}`);
   }
+
+  const feeRateSignals = await page.evaluate(() => ({
+    labels: [...document.querySelectorAll(".node.session .psbt-balance-delta-label")].map((label) => label.textContent?.trim() || ""),
+    signals: [...document.querySelectorAll(".node.session .fee-rate-signal")].map((signal) => ({
+      text: signal.textContent?.trim() || "",
+      sectionKind: signal.getAttribute("data-section-kind") || "",
+      descriptorId: signal.getAttribute("data-descriptor-id") || "",
+    })),
+  }));
+  assert(!feeRateSignals.labels.includes("explicit / surplus"), "surplus label should describe accounted fees, not expose the raw field name");
+  assert(feeRateSignals.labels.includes("accounted / surplus"), "expected clearer accounted/surplus label");
+  assert(feeRateSignals.signals.some((signal) => signal.sectionKind === "recognized" && signal.descriptorId !== "alice"),
+    `expected non-mine descriptor fee-rate signal, got ${JSON.stringify(feeRateSignals.signals)}`);
+  assert(feeRateSignals.signals.some((signal) => signal.sectionKind === "whole"),
+    `expected whole-transaction fee-rate signal, got ${JSON.stringify(feeRateSignals.signals)}`);
 
   const subtotalAndFeeOverlaps = await page.evaluate(() => {
     const selectors = [

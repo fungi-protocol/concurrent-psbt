@@ -28,6 +28,8 @@ pub enum Command {
     /// Export an ordered BIP 370 PSBT as Bitcoin Core-compatible BIP 174
     #[command(alias = "to-bip174")]
     ExportBip174(ExportBip174Config),
+    /// Import a Bitcoin Core-compatible BIP 174 PSBT as ordered BIP 370
+    ImportBip174(ImportBip174Config),
     /// Inspect a PSBT without transforming it
     Inspect(InspectConfig),
     /// Mark a safe BIP 370 constructor PSBT unordered for lattice joining
@@ -82,6 +84,12 @@ pub struct ConcatenateConfig {
 #[derive(Args, Debug, Clone)]
 pub struct ExportBip174Config {
     /// Ordered PSBT file to export
+    pub file: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ImportBip174Config {
+    /// BIP 174 PSBT file to import
     pub file: PathBuf,
 }
 

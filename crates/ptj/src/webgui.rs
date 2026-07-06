@@ -8,6 +8,7 @@ use crate::{Error, Result};
 const INDEX_HTML: &[u8] = include_bytes!("../../../contrib/demo-gui/index.html");
 const STYLES_CSS: &[u8] = include_bytes!("../../../contrib/demo-gui/styles.css");
 const APP_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/app.js");
+const BACKEND_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/backend.js");
 const MODEL_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/model.js");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +40,10 @@ pub fn asset(path: &str) -> Option<Asset> {
             content_type: "text/javascript; charset=utf-8",
             body: APP_JS,
         }),
+        "/dist/backend.js" => Some(Asset {
+            content_type: "text/javascript; charset=utf-8",
+            body: BACKEND_JS,
+        }),
         "/dist/model.js" => Some(Asset {
             content_type: "text/javascript; charset=utf-8",
             body: MODEL_JS,
@@ -55,6 +60,7 @@ pub(crate) fn response_for(method: &str, path: &str, body: &[u8]) -> Response {
             "/api/concatenate" => return concatenate_response(body),
             "/api/create" => return create_response(body),
             "/api/export-bip174" => return export_bip174_response(body),
+            "/api/import-bip174" => return import_bip174_response(body),
             "/api/inspect" => return inspect_response(body),
             "/api/join" => return join_response(body),
             "/api/make-unordered" => return make_unordered_response(body),
@@ -449,6 +455,35 @@ fn export_bip174_response_result(body: &[u8]) -> Result<Vec<u8>> {
     .into_bytes())
 }
 
+fn import_bip174_response(body: &[u8]) -> Response {
+    match import_bip174_response_result(body) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/json; charset=utf-8",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+fn import_bip174_response_result(body: &[u8]) -> Result<Vec<u8>> {
+    let request: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
+    let psbt = request
+        .get("psbt")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Error::new("request JSON must contain string field `psbt`"))?;
+    let psbt = crate::io::parse_bip174_bytes("request psbt", psbt.as_bytes())?;
+    let imported = crate::commands::import_bip174::import_bip174_psbt(psbt)?;
+    Ok(serde_json::json!({
+        "psbt": crate::io::encode_psbt(&imported),
+        "inspect": crate::commands::inspect::inspect_psbt(&imported),
+    })
+    .to_string()
+    .into_bytes())
+}
+
 fn sort_response(body: &[u8]) -> Response {
     match sort_response_result(body) {
         Ok(body) => Response {
@@ -634,6 +669,20 @@ mod tests {
         assert_eq!(index.status, 200);
         assert_eq!(index.content_type, "text/html; charset=utf-8");
         assert!(!index.body.is_empty());
+
+        let app = response_for("GET", "/dist/app.js?v=cache-busted", b"");
+        assert_eq!(app.status, 200);
+        assert_eq!(app.content_type, "text/javascript; charset=utf-8");
+        assert!(String::from_utf8(app.body).unwrap().contains("backend.js"));
+
+        let backend = response_for("GET", "/dist/backend.js?v=cache-busted", b"");
+        assert_eq!(backend.status, 200);
+        assert_eq!(backend.content_type, "text/javascript; charset=utf-8");
+        assert!(
+            String::from_utf8(backend.body)
+                .unwrap()
+                .contains("export function joinPsbts")
+        );
 
         let head = response_for("HEAD", "/dist/app.js?v=cache-busted", b"");
         assert_eq!(head.status, 200);
@@ -1032,6 +1081,52 @@ mod tests {
             String::from_utf8(response.body)
                 .unwrap()
                 .contains("run `ptj sort` first")
+        );
+    }
+
+    #[test]
+    fn import_bip174_endpoint_returns_ordered_bip370_psbt_and_inspection() {
+        let exported = crate::commands::export_bip174::export_bip174_psbt(
+            crate::io::parse_psbt_bytes("fixture psbt", encoded_ordered_psbt().as_bytes()).unwrap(),
+        )
+        .unwrap();
+        let request = serde_json::json!({ "psbt": exported }).to_string();
+
+        let response = response_for("POST", "/api/import-bip174", request.as_bytes());
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let imported = crate::io::parse_psbt_bytes(
+            "imported response psbt",
+            body["psbt"].as_str().unwrap().as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(imported.global.input_count, 1);
+        assert_eq!(imported.global.output_count, 1);
+        assert!(!concurrent_psbt::global::GlobalSortExt::is_unordered(
+            &imported.global
+        ));
+        assert_eq!(imported.global.tx_modifiable_flags, 0);
+        assert_eq!(body["inspect"]["format"], "bip370");
+        assert_eq!(body["inspect"]["ordering"], "ordered");
+        assert_eq!(body["inspect"]["input_count"], 1);
+        assert_eq!(body["inspect"]["output_count"], 1);
+    }
+
+    #[test]
+    fn import_bip174_endpoint_reports_json_errors() {
+        let missing = response_for("POST", "/api/import-bip174", b"{}");
+        assert_eq!(missing.status, 400);
+        assert!(String::from_utf8(missing.body).unwrap().contains("`psbt`"));
+
+        let bip370 = serde_json::json!({ "psbt": encoded_ordered_psbt() }).to_string();
+        let response = response_for("POST", "/api/import-bip174", bip370.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("parsing BIP 174")
         );
     }
 

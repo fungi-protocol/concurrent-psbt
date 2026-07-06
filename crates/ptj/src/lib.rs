@@ -34,7 +34,7 @@ fn reject_destructive_output_alias(output: &std::path::Path, command: &cli::Comm
         }
         cli::Command::ExportBip174(config) if same_existing_path(output, &config.file) => {
             Err(Error::new(
-                "refusing to overwrite export-bip174 input: BIP 174 import is not implemented, so choose a distinct --output-file",
+                "refusing to overwrite export-bip174 input: export changes the PSBT file format, so choose a distinct --output-file",
             ))
         }
         _ => Ok(()),
