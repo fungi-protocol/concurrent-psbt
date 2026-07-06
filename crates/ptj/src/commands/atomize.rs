@@ -5,10 +5,10 @@ use psbt_v2::v2::{Global, Psbt};
 use crate::cli::AtomizeConfig;
 use crate::{Error, Result, io};
 
-pub(super) fn run(config: AtomizeConfig) -> Result<String> {
-    let psbt = io::read_psbt(&config.file)?;
+pub(super) fn run(config: AtomizeConfig, stdin: Option<&[u8]>) -> Result<String> {
+    let psbt = io::read_psbt_source(&config.file, stdin)?;
     let atoms = atomize_psbt(psbt)
-        .map_err(|error| Error::new(format!("{}: {error}", config.file.display())))?;
+        .map_err(|error| Error::new(format!("{}: {error}", io::source_label(&config.file))))?;
     Ok(atoms
         .iter()
         .map(io::encode_psbt)

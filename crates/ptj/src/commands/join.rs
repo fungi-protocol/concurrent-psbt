@@ -11,14 +11,25 @@ use psbt_v2::v2::Psbt;
 use crate::cli::JoinConfig;
 use crate::{Error, Result, io};
 
-pub(super) fn run(config: JoinConfig) -> Result<Psbt> {
-    join_paths(config.files.iter().map(std::path::PathBuf::as_path))
+pub(super) fn run(config: JoinConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
+    join_sources(config.files.iter().map(std::path::PathBuf::as_path), stdin)
 }
 
 pub(crate) fn join_paths<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Result<Psbt> {
     let psbts = paths
         .into_iter()
         .map(io::read_psbt)
+        .collect::<Result<Vec<_>>>()?;
+    join_psbts(psbts)
+}
+
+pub(crate) fn join_sources<'a>(
+    paths: impl IntoIterator<Item = &'a Path>,
+    stdin: Option<&[u8]>,
+) -> Result<Psbt> {
+    let psbts = paths
+        .into_iter()
+        .map(|path| io::read_psbt_source(path, stdin))
         .collect::<Result<Vec<_>>>()?;
     join_psbts(psbts)
 }

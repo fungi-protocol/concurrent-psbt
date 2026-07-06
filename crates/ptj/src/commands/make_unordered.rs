@@ -5,10 +5,10 @@ use psbt_v2::v2::Psbt;
 use crate::cli::MakeUnorderedConfig;
 use crate::{Error, Result, io};
 
-pub(super) fn run(config: MakeUnorderedConfig) -> Result<Psbt> {
-    let psbt = io::read_psbt(&config.file)?;
+pub(super) fn run(config: MakeUnorderedConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
+    let psbt = io::read_psbt_source(&config.file, stdin)?;
     make_unordered_psbt(psbt)
-        .map_err(|error| Error::new(format!("{}: {error}", config.file.display())))
+        .map_err(|error| Error::new(format!("{}: {error}", io::source_label(&config.file))))
 }
 
 pub(crate) fn make_unordered_psbt(mut psbt: Psbt) -> Result<Psbt> {
