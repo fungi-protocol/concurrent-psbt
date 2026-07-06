@@ -14,5 +14,8 @@ concurrent-psbt = { path = "../concurrent-psbt" }
 psbt-v2 = { version = "0.3.0", features = ["base64"] }
 rand = "0.9"
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true

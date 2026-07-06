@@ -492,6 +492,7 @@ dependencies = [
  "concurrent-psbt",
  "psbt-v2",
  "rand",
+ "tempfile",
 ]
 
 [[package]]
