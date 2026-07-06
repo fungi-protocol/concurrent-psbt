@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use concurrent_psbt::Join;
 use psbt_v2::v2::Psbt;
 
@@ -5,14 +7,17 @@ use crate::cli::JoinConfig;
 use crate::{Error, Result, io};
 
 pub(super) fn run(config: JoinConfig) -> Result<Psbt> {
-    let result = config
-        .files
-        .iter()
+    join_paths(config.files.iter().map(std::path::PathBuf::as_path))
+}
+
+pub(crate) fn join_paths<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Result<Psbt> {
+    let result = paths
+        .into_iter()
         .map(|path| io::read_modifiable(path).map(io::wrap_constructor))
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .reduce(|left, right| left.join(right))
-        .ok_or_else(|| Error::new("join expects at least two PSBT files"))?;
+        .ok_or_else(|| Error::new("join expects at least one PSBT file"))?;
 
     if !result.is_ok() {
         let mut details = vec![
