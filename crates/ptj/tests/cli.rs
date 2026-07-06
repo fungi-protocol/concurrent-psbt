@@ -83,6 +83,12 @@ fn join_and_sort_commands_parse_to_config_types() {
     };
     assert_eq!(config.file, PathBuf::from("transaction.psbt"));
 
+    let import = Cli::try_parse_from(["ptj", "import-bip174", "core.psbt"]).unwrap();
+    let Command::ImportBip174(config) = import.command else {
+        panic!("expected import-bip174 command");
+    };
+    assert_eq!(config.file, PathBuf::from("core.psbt"));
+
     let make_unordered = Cli::try_parse_from(["ptj", "make-unordered", "ordered.psbt"]).unwrap();
     let Command::MakeUnordered(config) = make_unordered.command else {
         panic!("expected make-unordered command");
@@ -619,7 +625,7 @@ fn export_bip174_rejects_unordered_psbts() {
 }
 
 #[test]
-fn commands_reject_bip174_inputs_explicitly_until_import_exists() {
+fn bip370_operations_reject_bip174_inputs_and_point_to_import() {
     let temp = tempfile::tempdir().unwrap();
     let ordered = write_psbt(temp.path(), "ordered.psbt", sorted_psbt(TXID, 0, 1, 50_000));
     let core_psbt =
@@ -631,6 +637,34 @@ fn commands_reject_bip174_inputs_explicitly_until_import_exists() {
     let error = run_error(["ptj", "sort", path_str(&core_path)]);
     assert!(error.to_string().contains("BIP 174"));
     assert!(error.to_string().contains("import"));
+}
+
+#[test]
+fn import_bip174_upgrades_core_psbt_to_ordered_bip370() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut ordered = sorted_psbt(TXID, 0, 1, 50_000);
+    ordered.inputs[0].sequence = Some(bitcoin::Sequence(0xffff_fffd));
+    ordered.inputs[0].witness_utxo = Some(bitcoin::TxOut {
+        value: bitcoin::Amount::from_sat(90_000),
+        script_pubkey: bitcoin::ScriptBuf::new(),
+    });
+    let ordered = write_psbt(temp.path(), "ordered.psbt", ordered);
+    let core_psbt = ptj::run(Cli::try_parse_from(["ptj", "export-bip174", path_str(&ordered)]).unwrap()).unwrap();
+    let core_path = temp.path().join("core.psbt");
+    std::fs::write(&core_path, core_psbt).unwrap();
+
+    let upgraded = run_to_psbt(["ptj", "import-bip174", path_str(&core_path)]);
+
+    assert_eq!(upgraded.global.input_count, 1);
+    assert_eq!(upgraded.global.output_count, 1);
+    assert!(!upgraded.global.is_unordered());
+    assert_eq!(upgraded.global.tx_modifiable_flags, 0);
+    assert_eq!(upgraded.inputs[0].previous_txid.to_string(), TXID);
+    assert_eq!(upgraded.inputs[0].spent_output_index, 0);
+    assert_eq!(upgraded.inputs[0].sequence, Some(bitcoin::Sequence(0xffff_fffd)));
+    assert_eq!(upgraded.inputs[0].witness_utxo.as_ref().unwrap().value, bitcoin::Amount::from_sat(90_000));
+    assert_eq!(upgraded.outputs[0].amount, bitcoin::Amount::from_sat(50_000));
+    assert!(upgraded.outputs[0].has_unique_id());
 }
 
 #[test]
