@@ -136,6 +136,67 @@ fn join_and_sort_commands_parse_to_config_types() {
         ]
     );
 
+    let ongoing = Cli::try_parse_from([
+        "ptj",
+        "sync",
+        "--ongoing",
+        "--poll-interval-ms",
+        "25",
+        "--state",
+        "state.psbt",
+        "usb-drop",
+    ])
+    .unwrap();
+    let Command::Sync(config) = ongoing.command else {
+        panic!("expected sync command");
+    };
+    assert!(config.ongoing);
+    assert_eq!(config.poll_interval_ms, 25);
+    assert_eq!(config.state, Some(PathBuf::from("state.psbt")));
+    assert_eq!(config.sources, vec![PathBuf::from("usb-drop")]);
+
+    let iroh = Cli::try_parse_from([
+        "ptj",
+        "sync",
+        "--iroh-ticket-out",
+        "session.ticket",
+        "--iroh-wait-ms",
+        "2500",
+        "alice.psbt",
+    ])
+    .unwrap();
+    let Command::Sync(config) = iroh.command else {
+        panic!("expected sync command");
+    };
+    assert_eq!(
+        config.iroh_ticket_out,
+        Some(PathBuf::from("session.ticket"))
+    );
+    assert_eq!(config.iroh_ticket, None);
+    assert_eq!(config.iroh_wait_ms, 2500);
+    assert_eq!(config.sources, vec![PathBuf::from("alice.psbt")]);
+
+    let iroh_join =
+        Cli::try_parse_from(["ptj", "sync", "--iroh-ticket", "session.ticket", "bob.psbt"])
+            .unwrap();
+    let Command::Sync(config) = iroh_join.command else {
+        panic!("expected sync command");
+    };
+    assert_eq!(config.iroh_ticket, Some(PathBuf::from("session.ticket")));
+    assert_eq!(config.iroh_ticket_out, None);
+    assert_eq!(config.iroh_wait_ms, 5000);
+    assert_eq!(config.sources, vec![PathBuf::from("bob.psbt")]);
+
+    let ongoing_stdin =
+        Cli::try_parse_from(["ptj", "sync", "--ongoing", "--state", "state.psbt", "-"]).unwrap();
+    assert!(!ongoing_stdin.command.reads_stdin());
+    let error = ptj::run_or_write(ongoing_stdin).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("ongoing sync cannot use '-' because stdin is a one-shot source")
+    );
+
     let webgui =
         Cli::try_parse_from(["ptj", "webgui", "--host", "127.0.0.1", "--port", "8035"]).unwrap();
     let Command::Webgui(config) = webgui.command else {
@@ -177,7 +238,12 @@ fn sync_state_writes_converged_output_file() {
     let incoming = write_psbt(
         temp.path(),
         "incoming.psbt",
-        create_psbt("0000000000000000000000000000000000000000000000000000000000000002", 1, 2, 70_000),
+        create_psbt(
+            "0000000000000000000000000000000000000000000000000000000000000002",
+            1,
+            2,
+            70_000,
+        ),
     );
 
     let cli = Cli::try_parse_from([
@@ -199,10 +265,20 @@ fn sync_state_writes_converged_output_file() {
 fn sync_state_creates_missing_output_file_from_sources() {
     let temp = tempfile::tempdir().unwrap();
     let state = temp.path().join("session.psbt");
-    let incoming = write_psbt(temp.path(), "incoming.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let incoming = write_psbt(
+        temp.path(),
+        "incoming.psbt",
+        create_psbt(TXID, 0, 1, 50_000),
+    );
 
-    let cli = Cli::try_parse_from(["ptj", "sync", "--state", path_str(&state), path_str(&incoming)])
-        .unwrap();
+    let cli = Cli::try_parse_from([
+        "ptj",
+        "sync",
+        "--state",
+        path_str(&state),
+        path_str(&incoming),
+    ])
+    .unwrap();
 
     assert_eq!(ptj::run_or_write(cli).unwrap(), None);
     let updated = decode_psbt(&std::fs::read_to_string(&state).unwrap());
@@ -240,6 +316,31 @@ fn sync_state_rejects_global_output_alias() {
 
     assert!(error.to_string().contains("--output-file"));
     assert!(error.to_string().contains("--state"));
+}
+
+#[cfg(not(feature = "iroh-sync"))]
+#[test]
+fn iroh_sync_requires_feature_even_with_output_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = temp.path().join("joined.psbt");
+    let ticket = temp.path().join("session.ticket");
+
+    let error = ptj::run_or_write(
+        Cli::try_parse_from([
+            "ptj",
+            "--output-file",
+            path_str(&output),
+            "sync",
+            "--iroh-ticket-out",
+            path_str(&ticket),
+        ])
+        .unwrap(),
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("without iroh sync support"));
+    assert!(!output.exists());
+    assert!(!ticket.exists());
 }
 
 #[test]
@@ -695,10 +796,7 @@ fn sync_reads_stdin_psbt_source_marker() {
 fn commands_reject_multiple_stdin_psbt_sources() {
     let incoming = create_psbt(TXID, 0, 1, 50_000);
 
-    let error = run_with_stdin_error(
-        ["ptj", "join", "-", "-"],
-        encode_psbt(&incoming).as_bytes(),
-    );
+    let error = run_with_stdin_error(["ptj", "join", "-", "-"], encode_psbt(&incoming).as_bytes());
 
     assert!(error.to_string().contains("stdin"));
     assert!(error.to_string().contains("one PSBT source"));
@@ -776,13 +874,55 @@ fn sync_joins_psbt_files_from_directories() {
 }
 
 #[test]
+fn sync_ongoing_can_run_a_bounded_poll_and_update_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let inbox = temp.path().join("usb-drop");
+    std::fs::create_dir(&inbox).unwrap();
+    let state = write_psbt(temp.path(), "session.psbt", create_psbt(TXID, 0, 1, 50_000));
+    write_psbt(
+        &inbox,
+        "incoming.psbt",
+        create_psbt(
+            "0000000000000000000000000000000000000000000000000000000000000002",
+            1,
+            2,
+            70_000,
+        ),
+    );
+
+    let cli = Cli::try_parse_from([
+        "ptj",
+        "sync",
+        "--ongoing",
+        "--max-iterations",
+        "1",
+        "--poll-interval-ms",
+        "1",
+        "--state",
+        path_str(&state),
+        path_str(&inbox),
+    ])
+    .unwrap();
+
+    assert_eq!(ptj::run_or_write(cli).unwrap(), None);
+    let updated = decode_psbt(&std::fs::read_to_string(&state).unwrap());
+    assert_eq!(updated.global.input_count, 2);
+    assert_eq!(updated.global.output_count, 2);
+}
+
+#[test]
 fn sync_output_can_replace_a_source_file_after_joining() {
     let temp = tempfile::tempdir().unwrap();
     let state = write_psbt(temp.path(), "session.psbt", create_psbt(TXID, 0, 1, 50_000));
     let incoming = write_psbt(
         temp.path(),
         "incoming.psbt",
-        create_psbt("0000000000000000000000000000000000000000000000000000000000000002", 1, 2, 70_000),
+        create_psbt(
+            "0000000000000000000000000000000000000000000000000000000000000002",
+            1,
+            2,
+            70_000,
+        ),
     );
 
     let cli = Cli::try_parse_from([
@@ -808,7 +948,12 @@ fn sync_output_waits_for_transient_lock() {
     let incoming = write_psbt(
         temp.path(),
         "incoming.psbt",
-        create_psbt("0000000000000000000000000000000000000000000000000000000000000002", 1, 2, 70_000),
+        create_psbt(
+            "0000000000000000000000000000000000000000000000000000000000000002",
+            1,
+            2,
+            70_000,
+        ),
     );
     let lock = temp.path().join(".session.psbt.lock");
     std::fs::write(&lock, "held by another sync").unwrap();
@@ -862,7 +1007,12 @@ fn sync_failed_join_preserves_output_source_file() {
     let incoming = write_psbt(
         temp.path(),
         "incoming.psbt",
-        create_psbt("0000000000000000000000000000000000000000000000000000000000000002", 1, 2, 70_000),
+        create_psbt(
+            "0000000000000000000000000000000000000000000000000000000000000002",
+            1,
+            2,
+            70_000,
+        ),
     );
     let synced = run_to_psbt(["ptj", "sync", path_str(&state), path_str(&incoming)]);
     assert_eq!(synced.global.input_count, 2);
@@ -1426,14 +1576,8 @@ fn run_or_write_rejects_in_place_atomize() {
     let temp = tempfile::tempdir().unwrap();
     let target = write_psbt(temp.path(), "target.psbt", sorted_psbt(TXID, 0, 1, 50_000));
 
-    let cli = Cli::try_parse_from([
-        "ptj",
-        "-o",
-        path_str(&target),
-        "atomize",
-        path_str(&target),
-    ])
-    .unwrap();
+    let cli = Cli::try_parse_from(["ptj", "-o", path_str(&target), "atomize", path_str(&target)])
+        .unwrap();
 
     let error = ptj::run_or_write(cli).unwrap_err();
     assert!(error.to_string().contains("refusing to overwrite"));

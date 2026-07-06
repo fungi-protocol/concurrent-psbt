@@ -7,14 +7,41 @@ edition = "2024"
 name = "ptj"
 path = "src/main.rs"
 
+[features]
+default = []
+iroh-sync = ["dep:transport-iroh", "transport-iroh/iroh"]
+arti = ["dep:transport-arti", "transport-arti/arti"]
+nym = ["dep:transport-nym", "transport-nym/nym"]
+emissary = ["dep:transport-emissary", "transport-emissary/emissary"]
+mdk = ["dep:transport-mdk", "transport-mdk/mdk"]
+all-transports = ["iroh-sync", "arti", "nym", "emissary", "mdk"]
+
 [dependencies]
+# Desugars the async `Transport` impl for `LocalTransport` to boxed futures.
+async-trait = "0.1"
 bitcoin = "0.32"
 chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive"] }
 concurrent-psbt = { path = "../concurrent-psbt" }
-psbt-v2 = { version = "0.3.0", features = ["base64"] }
+# Event-driven `--ongoing` sync: react to source/state file-change events
+# instead of a busy poll-sleep loop (a poll-interval fallback is retained).
+notify = "8"
+psbt-v2 = { version = "0.3.0", features = [
+    "base64",
+] }
 rand = "0.9"
 serde_json = "1"
+# The single async runtime for the whole sync driver, created only at the `Sync`
+# command edge (`commands::sync::drive_async`). `rt` = current-thread runtime;
+# `time` = the peer-wait sleep. `main`/non-sync commands stay sync and never
+# touch it; no transport crate carries a runtime except iroh's own actor thread.
+tokio = { version = "1", features = ["rt", "time"] }
+transport-core = { path = "../transport-core" }
+transport-iroh = { path = "../transport-iroh", optional = true }
+transport-arti = { path = "../transport-arti", optional = true }
+transport-nym = { path = "../transport-nym", optional = true }
+transport-emissary = { path = "../transport-emissary", optional = true }
+transport-mdk = { path = "../transport-mdk", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

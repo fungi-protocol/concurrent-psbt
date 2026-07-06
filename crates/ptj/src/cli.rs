@@ -68,7 +68,9 @@ impl Command {
             Command::Confirm(config) => is_stdin_path(&config.file),
             Command::Payments(config) => is_stdin_path(&config.file),
             Command::Sort(config) => is_stdin_path(&config.file),
-            Command::Sync(config) => config.sources.iter().any(|path| is_stdin_path(path)),
+            Command::Sync(config) => {
+                !config.ongoing && config.sources.iter().any(|path| is_stdin_path(path))
+            }
             Command::Create(_) | Command::Webgui(_) => false,
         }
     }
@@ -182,11 +184,61 @@ pub struct SortConfig {
 
 #[derive(Args, Debug, Clone)]
 pub struct SyncConfig {
+    /// Transport backend to sync over
+    #[arg(long = "transport", value_enum, default_value_t = TransportKind::Local)]
+    pub transport: TransportKind,
     /// State PSBT file to update atomically with the converged result
     #[arg(long = "state")]
     pub state: Option<PathBuf>,
+    /// Import an iroh-docs write ticket from this file and sync through that document
+    #[arg(long = "iroh-ticket")]
+    pub iroh_ticket: Option<PathBuf>,
+    /// Create an iroh-docs document and write its ticket to this file
+    #[arg(long = "iroh-ticket-out")]
+    pub iroh_ticket_out: Option<PathBuf>,
+    /// Milliseconds to wait for iroh peers before joining visible document entries
+    #[arg(long = "iroh-wait-ms", default_value_t = 5000)]
+    pub iroh_wait_ms: u64,
+    /// Keep polling local sources and updating the state PSBT
+    #[arg(long, alias = "continual")]
+    pub ongoing: bool,
+    /// Milliseconds to wait between ongoing sync polls
+    #[arg(long = "poll-interval-ms", default_value_t = 1000)]
+    pub poll_interval_ms: u64,
+    /// Stop ongoing sync after this many polls
+    #[arg(long = "max-iterations", hide = true)]
+    pub max_iterations: Option<usize>,
     /// PSBT files or directories of .psbt files to join
     pub sources: Vec<PathBuf>,
+}
+
+impl SyncConfig {
+    /// Whether this sync runs over a real network transport (anything other than
+    /// the default file/dir `local` transport). Network syncs go through
+    /// `commands::sync::build_transport` rather than the plain local file path.
+    pub(crate) fn uses_network(&self) -> bool {
+        self.transport != TransportKind::Local
+    }
+}
+
+/// Which transport backend `ptj sync` moves bytes over. Every non-`local`
+/// variant is behind an optional cargo feature that pulls the standalone
+/// `transport-<name>` crate; selecting one without its feature yields a clear
+/// "rebuild with --features <name>" error at runtime.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportKind {
+    /// File/dir transport: positional PSBT sources plus `--state` (the default).
+    Local,
+    /// iroh-docs collaborative document (feature `iroh-sync`).
+    Iroh,
+    /// Tor onion-service transport (feature `arti`).
+    Arti,
+    /// Nym mixnet transport (feature `nym`).
+    Nym,
+    /// I2P transport via emissary (feature `emissary`).
+    Emissary,
+    /// Nostr-MLS (MDK) transport (feature `mdk`).
+    Mdk,
 }
 
 #[derive(Args, Debug, Clone)]

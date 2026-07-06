@@ -119,7 +119,7 @@
                 "$out"
             '';
 
-        build = toolchains.nightly.buildPackage (checkArgs // { cargoArtifacts = cargoArtifactsRelease; });
+        build = toolchains.nightly.buildPackage (checkArgs // { cargoArtifacts = cargoArtifactsDev; });
 
         demo-gui =
           pkgs.runCommand "demo-gui-${rev}"
