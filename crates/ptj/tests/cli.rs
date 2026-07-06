@@ -99,6 +99,17 @@ fn join_and_sort_commands_parse_to_config_types() {
         Some(&[0xab, 0xcd][..])
     );
 
+    let sync = Cli::try_parse_from(["ptj", "sync", "--state", "session.psbt", "a.psbt", "b.psbt"])
+        .unwrap();
+    let Command::Sync(config) = sync.command else {
+        panic!("expected sync command");
+    };
+    assert_eq!(config.state, PathBuf::from("session.psbt"));
+    assert_eq!(
+        config.files,
+        vec![PathBuf::from("a.psbt"), PathBuf::from("b.psbt")]
+    );
+
     let webgui =
         Cli::try_parse_from(["ptj", "webgui", "--host", "127.0.0.1", "--port", "8035"]).unwrap();
     let Command::Webgui(config) = webgui.command else {
@@ -148,7 +159,11 @@ fn create_emits_real_unordered_psbt_bytes() {
 #[test]
 fn inspect_reports_psbt_state_as_json() {
     let temp = tempfile::tempdir().unwrap();
-    let psbt = write_psbt(temp.path(), "created.psbt", create_psbt(TXID, 7, 1, 123_456));
+    let psbt = write_psbt(
+        temp.path(),
+        "created.psbt",
+        create_psbt(TXID, 7, 1, 123_456),
+    );
 
     let inspected = inspect_json(&psbt);
 
@@ -175,8 +190,48 @@ fn inspect_reports_psbt_state_as_json() {
     let explicit = write_psbt(temp.path(), "explicit.psbt", explicit);
     assert_eq!(inspect_json(&explicit)["sort"]["mode"], "explicit");
 
-    let ordered = write_psbt(temp.path(), "ordered.psbt", sorted_psbt(TXID, 10, 4, 456_789));
+    let ordered = write_psbt(
+        temp.path(),
+        "ordered.psbt",
+        sorted_psbt(TXID, 10, 4, 456_789),
+    );
     assert_eq!(inspect_json(&ordered)["ordering"], "ordered");
+}
+
+#[test]
+fn inspect_reports_transaction_details_and_totals() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut psbt = create_psbt(TXID, 7, 1, 123_456);
+    psbt.inputs[0].sequence = Some(bitcoin::Sequence(0xffff_fffd));
+    psbt.inputs[0].witness_utxo = Some(bitcoin::TxOut {
+        value: bitcoin::Amount::from_sat(200_000),
+        script_pubkey: bitcoin::ScriptBuf::new(),
+    });
+    let path = write_psbt(temp.path(), "details.psbt", psbt);
+
+    let inspected = inspect_json(&path);
+
+    assert_eq!(inspected["inputs"][0]["outpoint"], format!("{TXID}:7"));
+    assert_eq!(inspected["inputs"][0]["sequence"], "0xfffffffd");
+    assert_eq!(inspected["inputs"][0]["witness_utxo_sats"], 200_000);
+    assert_eq!(inspected["inputs"][0]["has_non_witness_utxo"], false);
+    assert_eq!(inspected["outputs"][0]["amount_sats"], 123_456);
+    assert!(
+        inspected["outputs"][0]["script_pubkey_hex"]
+            .as_str()
+            .unwrap()
+            .starts_with("0014")
+    );
+    assert_eq!(
+        inspected["outputs"][0]["unique_id_hex"]
+            .as_str()
+            .unwrap()
+            .len(),
+        32
+    );
+    assert_eq!(inspected["totals"]["known_input_sats"], 200_000);
+    assert_eq!(inspected["totals"]["output_sats"], 123_456);
+    assert_eq!(inspected["totals"]["fee_sats_if_inputs_known"], 76_544);
 }
 
 #[test]
@@ -257,6 +312,86 @@ fn sort_makes_join_paths_byte_identical() {
 }
 
 #[test]
+fn sync_converges_state_file_and_prints_same_lub() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = write_psbt(temp.path(), "session.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let incoming = write_psbt(
+        temp.path(),
+        "incoming.psbt",
+        create_psbt(
+            "0000000000000000000000000000000000000000000000000000000000000002",
+            1,
+            2,
+            70_000,
+        ),
+    );
+
+    let synced = run_to_psbt([
+        "ptj",
+        "sync",
+        "--state",
+        path_str(&state),
+        path_str(&incoming),
+    ]);
+    let stored = decode_psbt(&std::fs::read_to_string(&state).unwrap());
+
+    assert_eq!(synced.global.input_count, 2);
+    assert_eq!(synced.global.output_count, 2);
+    assert_eq!(psbt_bytes(&stored), psbt_bytes(&synced));
+
+    let repeated = run_to_psbt([
+        "ptj",
+        "sync",
+        "--state",
+        path_str(&state),
+        path_str(&incoming),
+    ]);
+    assert_eq!(repeated.global.input_count, 2);
+    assert_eq!(repeated.global.output_count, 2);
+}
+
+#[test]
+fn sync_creates_missing_state_from_inputs() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("missing-session.psbt");
+    let a = write_psbt(temp.path(), "a.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let b = write_psbt(
+        temp.path(),
+        "b.psbt",
+        create_psbt(
+            "0000000000000000000000000000000000000000000000000000000000000002",
+            1,
+            2,
+            70_000,
+        ),
+    );
+
+    let synced = run_to_psbt([
+        "ptj",
+        "sync",
+        "--state",
+        path_str(&state),
+        path_str(&a),
+        path_str(&b),
+    ]);
+    let stored = decode_psbt(&std::fs::read_to_string(&state).unwrap());
+
+    assert_eq!(synced.global.input_count, 2);
+    assert_eq!(synced.global.output_count, 2);
+    assert_eq!(psbt_bytes(&stored), psbt_bytes(&synced));
+}
+
+#[test]
+fn sync_rejects_empty_missing_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("missing-session.psbt");
+
+    let error = run_error(["ptj", "sync", "--state", path_str(&state)]);
+
+    assert!(error.to_string().contains("no existing state"));
+}
+
+#[test]
 fn make_unordered_marks_sorted_bip370_as_joinable_again() {
     let temp = tempfile::tempdir().unwrap();
     let ordered = write_psbt(temp.path(), "ordered.psbt", sorted_psbt(TXID, 0, 1, 50_000));
@@ -303,7 +438,11 @@ fn atomize_emits_joinable_unordered_fragments() {
 
     assert_eq!(atoms.len(), 2);
     assert!(atoms.iter().all(|atom| atom.global.is_unordered()));
-    assert!(atoms.iter().all(|atom| atom.global.tx_modifiable_flags & 0x03 == 0x03));
+    assert!(
+        atoms
+            .iter()
+            .all(|atom| atom.global.tx_modifiable_flags & 0x03 == 0x03)
+    );
     assert_eq!(
         atoms
             .iter()
@@ -483,7 +622,9 @@ fn export_bip174_rejects_unordered_psbts() {
 fn commands_reject_bip174_inputs_explicitly_until_import_exists() {
     let temp = tempfile::tempdir().unwrap();
     let ordered = write_psbt(temp.path(), "ordered.psbt", sorted_psbt(TXID, 0, 1, 50_000));
-    let core_psbt = ptj::run(Cli::try_parse_from(["ptj", "export-bip174", path_str(&ordered)]).unwrap()).unwrap();
+    let core_psbt =
+        ptj::run(Cli::try_parse_from(["ptj", "export-bip174", path_str(&ordered)]).unwrap())
+            .unwrap();
     let core_path = temp.path().join("core.psbt");
     std::fs::write(&core_path, core_psbt).unwrap();
 
@@ -569,7 +710,11 @@ fn run_or_write_rejects_in_place_export_bip174() {
     let error = ptj::run_or_write(cli).unwrap_err();
     assert!(error.to_string().contains("refusing to overwrite"));
     assert!(error.to_string().contains("export-bip174"));
-    assert!(!decode_psbt(&std::fs::read_to_string(&target).unwrap()).global.is_unordered());
+    assert!(
+        !decode_psbt(&std::fs::read_to_string(&target).unwrap())
+            .global
+            .is_unordered()
+    );
 }
 
 #[test]
@@ -589,7 +734,12 @@ fn run_or_write_rejects_in_place_atomize() {
     let error = ptj::run_or_write(cli).unwrap_err();
     assert!(error.to_string().contains("refusing to overwrite"));
     assert!(error.to_string().contains("atomize"));
-    assert_eq!(decode_psbt(&std::fs::read_to_string(&target).unwrap()).global.input_count, 1);
+    assert_eq!(
+        decode_psbt(&std::fs::read_to_string(&target).unwrap())
+            .global
+            .input_count,
+        1
+    );
 }
 
 #[test]
@@ -656,7 +806,12 @@ fn create_psbt(txid: &str, vout: u32, address_seed: u8, amount_sats: u64) -> psb
     ])
 }
 
-fn create_psbt_without_seed(txid: &str, vout: u32, address_seed: u8, amount_sats: u64) -> psbt_v2::v2::Psbt {
+fn create_psbt_without_seed(
+    txid: &str,
+    vout: u32,
+    address_seed: u8,
+    amount_sats: u64,
+) -> psbt_v2::v2::Psbt {
     run_to_psbt([
         "ptj",
         "create",
@@ -665,7 +820,11 @@ fn create_psbt_without_seed(txid: &str, vout: u32, address_seed: u8, amount_sats
         "--input",
         &format!("{txid}:{vout}"),
         "--output",
-        &format!("{}:{}", regtest_address(address_seed), btc_value(amount_sats)),
+        &format!(
+            "{}:{}",
+            regtest_address(address_seed),
+            btc_value(amount_sats)
+        ),
     ])
 }
 
@@ -693,7 +852,10 @@ fn sorted_psbt(txid: &str, vout: u32, address_seed: u8, amount_sats: u64) -> psb
 }
 
 fn inspect_json(path: &std::path::Path) -> serde_json::Value {
-    serde_json::from_str(&ptj::run(Cli::try_parse_from(["ptj", "inspect", path_str(path)]).unwrap()).unwrap()).unwrap()
+    serde_json::from_str(
+        &ptj::run(Cli::try_parse_from(["ptj", "inspect", path_str(path)]).unwrap()).unwrap(),
+    )
+    .unwrap()
 }
 
 fn write_psbt(dir: &std::path::Path, name: &str, psbt: psbt_v2::v2::Psbt) -> PathBuf {

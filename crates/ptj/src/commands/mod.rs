@@ -2,10 +2,11 @@ mod atomize;
 mod concatenate;
 mod create;
 mod export_bip174;
-mod inspect;
+pub(crate) mod inspect;
 mod join;
 mod make_unordered;
 mod sort;
+mod sync;
 
 use crate::Result;
 use crate::cli::Command;
@@ -24,6 +25,7 @@ pub(crate) fn run(command: Command) -> Result<String> {
             make_unordered::run(config).map(|psbt| crate::io::encode_psbt(&psbt))
         }
         Command::Sort(config) => sort::run(config).map(|psbt| crate::io::encode_psbt(&psbt)),
+        Command::Sync(config) => sync::run(config).map(|psbt| crate::io::encode_psbt(&psbt)),
         Command::Webgui(_) => Err(crate::Error::new(
             "webgui is an interactive command; call ptj::webgui::serve",
         )),
