@@ -15,6 +15,8 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Command {
+    /// Split a constructor PSBT into atomic unordered fragments
+    Atomize(AtomizeConfig),
     /// Create a new PSBT with inputs and outputs
     Create(CreateConfig),
     /// Join two or more PSBTs
@@ -27,8 +29,16 @@ pub enum Command {
     ExportBip174(ExportBip174Config),
     /// Inspect a PSBT without transforming it
     Inspect(InspectConfig),
+    /// Mark a safe BIP 370 constructor PSBT unordered for lattice joining
+    MakeUnordered(MakeUnorderedConfig),
     /// Sort a PSBT into BIP 370 order
     Sort(SortConfig),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct AtomizeConfig {
+    /// PSBT file to atomize
+    pub file: PathBuf,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -70,6 +80,12 @@ pub struct ExportBip174Config {
 #[derive(Args, Debug, Clone)]
 pub struct InspectConfig {
     /// PSBT file to inspect
+    pub file: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct MakeUnorderedConfig {
+    /// PSBT file to mark unordered
     pub file: PathBuf,
 }
 
