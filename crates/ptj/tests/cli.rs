@@ -168,6 +168,31 @@ fn inspect_reports_psbt_state_as_json() {
 }
 
 #[test]
+fn inspect_reports_transaction_details_and_totals() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut psbt = create_psbt(TXID, 7, 1, 123_456);
+    psbt.inputs[0].sequence = Some(bitcoin::Sequence(0xffff_fffd));
+    psbt.inputs[0].witness_utxo = Some(bitcoin::TxOut {
+        value: bitcoin::Amount::from_sat(200_000),
+        script_pubkey: bitcoin::ScriptBuf::new(),
+    });
+    let path = write_psbt(temp.path(), "details.psbt", psbt);
+
+    let inspected = inspect_json(&path);
+
+    assert_eq!(inspected["inputs"][0]["outpoint"], format!("{TXID}:7"));
+    assert_eq!(inspected["inputs"][0]["sequence"], "0xfffffffd");
+    assert_eq!(inspected["inputs"][0]["witness_utxo_sats"], 200_000);
+    assert_eq!(inspected["inputs"][0]["has_non_witness_utxo"], false);
+    assert_eq!(inspected["outputs"][0]["amount_sats"], 123_456);
+    assert!(inspected["outputs"][0]["script_pubkey_hex"].as_str().unwrap().starts_with("0014"));
+    assert_eq!(inspected["outputs"][0]["unique_id_hex"].as_str().unwrap().len(), 32);
+    assert_eq!(inspected["totals"]["known_input_sats"], 200_000);
+    assert_eq!(inspected["totals"]["output_sats"], 123_456);
+    assert_eq!(inspected["totals"]["fee_sats_if_inputs_known"], 76_544);
+}
+
+#[test]
 fn join_is_idempotent_on_real_psbt_files() {
     let temp = tempfile::tempdir().unwrap();
     let a = write_psbt(temp.path(), "a.psbt", create_psbt(TXID, 0, 1, 50_000));
