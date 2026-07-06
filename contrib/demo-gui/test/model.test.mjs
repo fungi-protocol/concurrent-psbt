@@ -7,6 +7,7 @@ import {
   compactBase64,
   coinDetailLines,
   accountingDeltaPresentation,
+  balanceSheetFeeSignal,
   descriptorLooksPrivate,
   descriptorDrawerItems,
   descriptorMenuState,
@@ -919,10 +920,10 @@ test("balance sheet delta presentation places deficits and surplus on opposite c
     totalSats: 30,
     explicitFeeSats: 20,
     implicitFeeSats: 10,
-    label: "explicit / surplus",
-    separator: " / ",
-    amountA: 20,
-    amountB: 30,
+    label: "balance:",
+    separator: null,
+    amountA: 30,
+    amountB: null,
   });
 
   assert.deepEqual(accountingDeltaPresentation({
@@ -945,10 +946,10 @@ test("balance sheet delta presentation places deficits and surplus on opposite c
     totalSats: 25,
     explicitFeeSats: 5,
     implicitFeeSats: -30,
-    label: "deficit + explicit",
-    separator: " + ",
-    amountA: 25,
-    amountB: 5,
+    label: "balance:",
+    separator: null,
+    amountA: -25,
+    amountB: null,
   });
 
   assert.deepEqual(accountingDeltaPresentation({
@@ -963,7 +964,7 @@ test("balance sheet delta presentation places deficits and surplus on opposite c
     inputAccountingTotalSats: 50,
     outputAccountingTotalSats: 40,
     implicitFeeSats: 10,
-  }).label, "surplus");
+  }).label, "balance:");
 
   assert.deepEqual(accountingDeltaPresentation({
     kind: "recognized",
@@ -977,7 +978,7 @@ test("balance sheet delta presentation places deficits and surplus on opposite c
     inputAccountingTotalSats: 40,
     outputAccountingTotalSats: 50,
     implicitFeeSats: -10,
-  }).label, "deficit");
+  }).label, "balance:");
 
   assert.deepEqual(accountingDeltaPresentation({
     kind: "recognized",
@@ -1028,8 +1029,10 @@ test("balance sheet delta presentation places deficits and surplus on opposite c
 });
 
 test("descriptor fee signal can finalize mine surplus into explicit fee", () => {
+  assert.equal(typeof balanceSheetFeeSignal, "function");
   assert.equal(typeof model.descriptorFeeSignal, "function");
   assert.equal(typeof model.descriptorFeeContributionPlan, "function");
+  assert.equal(typeof model.defaultFeeContributionSats, "function");
   assert.equal(typeof model.finalizeDescriptorExplicitFee, "function");
   const payload = {
     inputs: [
@@ -1058,6 +1061,43 @@ test("descriptor fee signal can finalize mine surplus into explicit fee", () => 
     canFinalizeExplicitFee: true,
   });
 
+  const display = unorderedPsbtDisplay({
+    inputs: [
+      { id: "alice-in", valueSats: 1000, descriptorId: "alice", descriptorLabel: "Alice", descriptorMine: true, explicitFeeSats: 20, estimatedVbytes: 80 },
+      { id: "bob-in", valueSats: 500, descriptorId: "bob", descriptorLabel: "Bob", descriptorMine: false, estimatedVbytes: 100 },
+    ],
+    outputs: [
+      { id: "alice-out", valueSats: 970, descriptorId: "alice", descriptorLabel: "Alice", descriptorMine: true, estimatedVbytes: 40 },
+      { id: "bob-out", valueSats: 480, descriptorId: "bob", descriptorLabel: "Bob", descriptorMine: false, vbytes: 30 },
+    ],
+    conflicts: [],
+  });
+  const averageFeeRate = 50 / 250;
+  const bobSection = display.subtransactions.find((section) => section.descriptorId === "bob");
+  const totalRow = unorderedBalanceSheetTotalRows(display).at(-1);
+  assert.deepEqual(balanceSheetFeeSignal(bobSection, averageFeeRate), {
+    descriptorId: "bob",
+    descriptorLabel: "Bob",
+    explicitFeeSats: 0,
+    implicitFeeSats: 20,
+    totalFeeSats: 20,
+    estimatedVbytes: 130,
+    feeRateSatsPerVbyte: 20 / 130,
+    averageFeeRateSatsPerVbyte: averageFeeRate,
+    canFinalizeExplicitFee: false,
+  });
+  assert.deepEqual(balanceSheetFeeSignal(totalRow, averageFeeRate), {
+    descriptorId: undefined,
+    descriptorLabel: "total",
+    explicitFeeSats: 20,
+    implicitFeeSats: 30,
+    totalFeeSats: 50,
+    estimatedVbytes: 250,
+    feeRateSatsPerVbyte: averageFeeRate,
+    averageFeeRateSatsPerVbyte: averageFeeRate,
+    canFinalizeExplicitFee: false,
+  });
+
   const finalized = model.finalizeDescriptorExplicitFee(payload, "alice");
   assert.notEqual(finalized, payload);
   assert.equal(payload.inputs[0].explicitFeeSats, 20);
@@ -1068,6 +1108,10 @@ test("descriptor fee signal can finalize mine surplus into explicit fee", () => 
   const partial = model.finalizeDescriptorExplicitFee(payload, "alice", 5);
   assert.equal(partial.inputs[0].explicitFeeSats, 25);
   assert.equal(model.descriptorFeeSignal(partial, "alice").implicitFeeSats, 5);
+  const partialAndClosed = model.finalizeDescriptorExplicitFee(payload, "alice", 5, { feeFinalized: true });
+  assert.equal(partialAndClosed.inputs[0].explicitFeeSats, 25);
+  assert.equal(partialAndClosed.inputs[0].feeFinalized, true);
+  assert.equal(model.descriptorFeeSignal(partialAndClosed, "alice").canFinalizeExplicitFee, false);
   const clamped = model.finalizeDescriptorExplicitFee(payload, "alice", 50);
   assert.equal(clamped.inputs[0].explicitFeeSats, 30);
   const unchanged = model.finalizeDescriptorExplicitFee(payload, "alice", -1);
@@ -1122,6 +1166,12 @@ test("descriptor fee signal can finalize mine surplus into explicit fee", () => 
     averageFeeRateSatsPerVbyte: 9,
     canFinalizeExplicitFee: true,
   };
+  assert.equal(model.defaultFeeContributionSats(null), 0);
+  assert.equal(model.defaultFeeContributionSats(baseSignal), 100);
+  assert.equal(model.defaultFeeContributionSats({ ...baseSignal, implicitFeeSats: 0 }), 0);
+  assert.equal(model.defaultFeeContributionSats({ ...baseSignal, implicitFeeSats: 25 }), 25);
+  assert.equal(model.defaultFeeContributionSats({ ...baseSignal, estimatedVbytes: 0 }), 1);
+  assert.equal(model.descriptorFeeContributionPlan(baseSignal).selectedSats, 100);
   assert.deepEqual(model.descriptorFeeContributionPlan(baseSignal, -7), {
     descriptorId: "alice",
     descriptorLabel: "Alice",
@@ -1145,7 +1195,8 @@ test("descriptor fee signal can finalize mine surplus into explicit fee", () => 
   assert.equal(model.descriptorFeeContributionPlan({ ...baseSignal, averageFeeRateSatsPerVbyte: 30 }, 6100).relativeWarningLevel, "red");
   assert.equal(model.descriptorFeeContributionPlan({ ...baseSignal, averageFeeRateSatsPerVbyte: 20 }, 21000).relativeWarningLevel, "confirm");
   assert.equal(model.descriptorFeeContributionPlan({ ...baseSignal, implicitFeeSats: 5 }, 10).selectedSats, 5);
-  assert.equal(model.descriptorFeeContributionPlan({ ...baseSignal, averageFeeRateSatsPerVbyte: 0 }, 1).relativeFeeRateRatio, Number.POSITIVE_INFINITY);
+  assert.equal(model.descriptorFeeContributionPlan({ ...baseSignal, averageFeeRateSatsPerVbyte: 0 }, 1).relativeFeeRateRatio, 0);
+  assert.equal(model.descriptorFeeContributionPlan({ ...baseSignal, averageFeeRateSatsPerVbyte: 0 }, 1).relativeWarningLevel, "none");
   assert.equal(model.descriptorFeeContributionPlan({ ...baseSignal, averageFeeRateSatsPerVbyte: 0 }, 0).relativeFeeRateRatio, 0);
   assert.equal(model.descriptorFeeContributionPlan(baseSignal, Number.NaN).selectedSats, 0);
   assert.equal(model.descriptorFeeContributionPlan(null, 1), null);

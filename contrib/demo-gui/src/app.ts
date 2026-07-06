@@ -2,8 +2,21 @@
 // The graph shell is an incremental TypeScript migration from the preview JS.
 // Pure PSBT/session model code is strictly checked in src/model.ts.
 const {
+  PtjBackendError,
+  atomizePsbt: atomizeBackendPsbt,
+  createPsbt: createBackendPsbt,
+  importBip174: importBackendBip174,
+  inspectPsbt: inspectBackendPsbt,
+  joinPsbts: joinBackendPsbts,
+  makeUnordered: makeBackendUnordered,
+  sortPsbt: sortBackendPsbt,
+  syncPsbts: syncBackendPsbts,
+} = await import("./backend.js?v=20260705-iroh-sync-v1");
+
+const {
   amountParts,
   accountingDeltaPresentation,
+  balanceSheetFeeSignal,
   coinDetailLines,
   compactBase64,
   descriptorFeeContributionPlan,
@@ -572,16 +585,17 @@ function openDescriptorFeeDialog(nodeId, descriptorId) {
   if (!node || !descriptorId) return;
   const signal = descriptorFeeSignal(node, descriptorId);
   if (!signal?.canFinalizeExplicitFee) {
-    state.log.unshift(`No positive mine surplus to finalize for ${signal?.descriptorLabel || "that descriptor"}.`);
+    state.log.unshift(`No positive mine surplus to add as explicit fee for ${signal?.descriptorLabel || "that descriptor"}.`);
     render();
     return;
   }
-  const plan = descriptorFeeContributionPlan(signal, signal.implicitFeeSats);
+  const plan = descriptorFeeContributionPlan(signal);
   state.feeDraft = {
     nodeId,
     descriptorId,
     selectedSats: plan?.selectedSats || 0,
     confirmed: false,
+    feeFinalized: false,
   };
   renderFeeContributionPanel();
 }
@@ -605,6 +619,12 @@ function setFeeContributionConfirmed(confirmed) {
   renderFeeContributionPanel();
 }
 
+function setFeeContributionFinalized(feeFinalized) {
+  if (!state.feeDraft) return;
+  state.feeDraft.feeFinalized = Boolean(feeFinalized);
+  renderFeeContributionPanel();
+}
+
 function closeFeeContributionPanel() {
   state.feeDraft = null;
   renderFeeContributionPanel();
@@ -624,14 +644,16 @@ function applyFeeContribution() {
     renderFeeContributionPanel();
     return;
   }
-  const updated = finalizeDescriptorExplicitFee(node, draft.descriptorId, plan.selectedSats);
+  const updated = finalizeDescriptorExplicitFee(node, draft.descriptorId, plan.selectedSats, {
+    feeFinalized: draft.feeFinalized,
+  });
   applyPayload(node, updated);
   if (nodeKind(node.id) === "session") {
     syncPeerViews(node);
     startConvergence(node, `explicit fee updated for ${plan.descriptorLabel}`, node.peers, pendingPayloadRowKeys(updated));
   }
   state.feeDraft = null;
-  state.log.unshift(`Set ${formatSatAmount(plan.selectedSats)} additional explicit fee for ${plan.descriptorLabel}.`);
+  state.log.unshift(`${draft.feeFinalized ? "Finalized" : "Added"} ${formatSatAmount(plan.selectedSats)} explicit fee for ${plan.descriptorLabel}.`);
   render();
 }
 
@@ -643,6 +665,126 @@ function feeContributionSignal() {
 
 function feeContributionPlan() {
   return descriptorFeeContributionPlan(feeContributionSignal(), state.feeDraft?.selectedSats || 0);
+}
+
+function satsToBtcAmount(valueSats) {
+  const sats = BigInt(Math.max(0, Math.trunc(Number(valueSats || 0))));
+  const whole = sats / 100_000_000n;
+  const fraction = String(sats % 100_000_000n).padStart(8, "0");
+  return `${whole}.${fraction}`;
+}
+
+function networkForAddress(address) {
+  const text = String(address || "").toLowerCase();
+  if (text.startsWith("bcrt")) return "regtest";
+  if (text.startsWith("tb") || text.startsWith("m") || text.startsWith("n") || text.startsWith("2")) return "testnet";
+  return "bitcoin";
+}
+
+async function hydratePaymentRequestFragment(fragment, parsed) {
+  try {
+    const response = await createBackendPsbt(window.fetch.bind(window), {
+      network: networkForAddress(parsed.address),
+      ordering: "unset",
+      inputs: [],
+      outputs: [{
+        address: parsed.address,
+        amountBtc: satsToBtcAmount(parsed.valueSats),
+      }],
+    });
+    if (byId(state.fragments, fragment.id) !== fragment) return;
+    fragment.raw = response.psbt;
+    fragment.inspect = response.inspect || null;
+    fragment.sourceDescription = parsed.message
+      ? `Raw one-output PSBT from ptj webgui /api/create for BIP 21/321 URI: ${parsed.message}`
+      : "Raw one-output PSBT from ptj webgui /api/create for a BIP 21/321 URI; origin metadata is not serialized into the PSBT.";
+    state.log.unshift(`ptj backend created raw PSBT for ${fragment.id}.`);
+    render();
+  } catch (error) {
+    if (error instanceof PtjBackendError) {
+      state.log.unshift(`ptj backend rejected payment request PSBT: ${error.message}`);
+      render();
+    }
+  }
+}
+
+async function hydrateSortedFragment(fragment, source) {
+  if (!source.raw) return;
+  try {
+    const response = await sortBackendPsbt(window.fetch.bind(window), source.raw);
+    if (byId(state.fragments, fragment.id) !== fragment) return;
+    fragment.raw = response.psbt;
+    fragment.inspect = response.inspect || null;
+    fragment.sourceDescription = `Raw sorter output from ptj webgui /api/sort for ${nodeDisplayLabel(source, nodeKind(source.id))}.`;
+    state.log.unshift(`ptj backend sorted raw PSBT for ${fragment.id}.`);
+    render();
+  } catch (error) {
+    if (error instanceof PtjBackendError) {
+      state.log.unshift(`ptj backend rejected sort request: ${error.message}`);
+      render();
+    }
+  }
+}
+
+async function hydrateUnorderedPsbt(node, previousRaw) {
+  if (!previousRaw) return;
+  try {
+    const response = await makeBackendUnordered(window.fetch.bind(window), previousRaw);
+    if (getNode(node.id) !== node) return;
+    node.raw = response.psbt;
+    node.inspect = response.inspect || null;
+    node.sourceDescription = `Raw unordered PSBT from ptj webgui /api/make-unordered for ${nodeDisplayLabel(node, nodeKind(node.id))}.`;
+    if (nodeKind(node.id) === "session") syncPeerViews(node);
+    state.log.unshift(`ptj backend made raw PSBT unordered for ${node.id}.`);
+    render();
+  } catch (error) {
+    if (error instanceof PtjBackendError) {
+      state.log.unshift(`ptj backend rejected make-unordered request: ${error.message}`);
+      render();
+    }
+  }
+}
+
+async function hydrateAtomizedFragments(atoms, previousRaw, sourceId) {
+  if (!previousRaw) return;
+  try {
+    const response = await atomizeBackendPsbt(window.fetch.bind(window), previousRaw);
+    const rawFragments = Array.isArray(response.fragments) ? response.fragments : [];
+    for (const [index, atom] of atoms.entries()) {
+      const rawFragment = rawFragments[index];
+      if (!rawFragment || byId(state.fragments, atom.id) !== atom) continue;
+      atom.raw = rawFragment.psbt;
+      atom.inspect = rawFragment.inspect || null;
+      atom.sourceDescription = `Raw atomic PSBT ${index + 1}/${rawFragments.length} from ptj webgui /api/atomize for ${sourceId}.`;
+    }
+    state.log.unshift(`ptj backend atomized raw PSBT for ${sourceId} into ${rawFragments.length} fragments.`);
+    render();
+  } catch (error) {
+    if (error instanceof PtjBackendError) {
+      state.log.unshift(`ptj backend rejected atomize request: ${error.message}`);
+      render();
+    }
+  }
+}
+
+async function hydrateJoinedPsbt(target, sources) {
+  const psbts = sources.map((source) => source.raw).filter(Boolean);
+  if (psbts.length !== sources.length) return;
+  try {
+    const response = await joinBackendPsbts(window.fetch.bind(window), psbts);
+    if (getNode(target.id) !== target) return;
+    target.raw = response.psbt;
+    target.inspect = response.inspect || null;
+    target.sourceDescription = `Raw PSBT LUB from ptj webgui /api/join for ${sources.map((source) => source.id).join(" + ")}.`;
+    if (nodeKind(target.id) === "session") syncPeerViews(target);
+    state.log.unshift(`ptj backend joined raw PSBTs into ${target.id}.`);
+    render();
+  } catch (error) {
+    if (error instanceof PtjBackendError) {
+      state.log.unshift(`ptj backend rejected join request: ${error.message}`);
+      render();
+    }
+  }
 }
 
 function parseBip321Uri(text) {
@@ -704,6 +846,7 @@ function addBip321FragmentFromText(text, shouldRender = true) {
   rememberPaymentRequest(parsed, fragment.id);
   state.selected = [fragment.id];
   state.log.unshift(`Converted BIP 21/321 payment request into one-output PSBT ${fragment.id}.`);
+  void hydratePaymentRequestFragment(fragment, parsed);
   if (shouldRender) render();
   return fragment;
 }
@@ -725,6 +868,62 @@ function addPsbtFragmentFromRaw(label, raw, sourceDescription, shouldRender = tr
   state.log.unshift(`Imported ${fragment.id} from pasted or dropped PSBT bytes.`);
   if (shouldRender) render();
   return fragment;
+}
+
+async function hydrateIrohSync(ticket) {
+  const psbts = state.fragments.map((fragment) => fragment.raw).filter(Boolean);
+  state.log.unshift(`Syncing ${psbts.length} raw PSBT(s) over iroh…`);
+  render();
+  try {
+    const response = await syncBackendPsbts(window.fetch.bind(window), {
+      psbts,
+      irohTicket: ticket,
+    });
+    const fragment = addPsbtFragmentFromRaw("iroh sync PSBT", response.psbt, "Converged PSBT from ptj webgui /api/sync over the iroh transport.", false);
+    fragment.inspect = response.inspect || null;
+    state.log.unshift(`ptj backend synced over iroh into ${fragment.id}.`);
+    for (const payment of response.payments || []) {
+      state.log.unshift(`iroh sync delivered an out-of-band payment message (${payment.length / 2} bytes).`);
+    }
+    for (const confirmation of response.confirmations || []) {
+      state.log.unshift(`iroh sync delivered an out-of-band confirmation message (${confirmation.length / 2} bytes).`);
+    }
+    render();
+  } catch (error) {
+    if (!(error instanceof PtjBackendError)) throw error;
+    state.log.unshift(`ptj backend rejected iroh sync: ${error.message}`);
+    render();
+  }
+}
+
+async function hydratePastedPsbtFragment(fragment) {
+  const fetchImpl = window.fetch.bind(window);
+  try {
+    const inspect = await inspectBackendPsbt(fetchImpl, fragment.raw);
+    if (byId(state.fragments, fragment.id) !== fragment) return;
+    fragment.inspect = inspect || null;
+    fragment.sourceDescription = "Raw PSBT from paste; fields inspected via ptj webgui /api/inspect.";
+    state.log.unshift(`ptj backend inspected pasted PSBT for ${fragment.id}.`);
+    render();
+    return;
+  } catch (error) {
+    if (!(error instanceof PtjBackendError)) throw error;
+  }
+  try {
+    const response = await importBackendBip174(fetchImpl, fragment.raw);
+    if (byId(state.fragments, fragment.id) !== fragment) return;
+    fragment.raw = response.psbt;
+    fragment.inspect = response.inspect || null;
+    fragment.sourceDescription = "BIP 174 PSBT from paste; upgraded via ptj webgui /api/import-bip174.";
+    state.log.unshift(`ptj backend upgraded pasted BIP 174 PSBT for ${fragment.id}.`);
+    render();
+  } catch (error) {
+    if (!(error instanceof PtjBackendError)) throw error;
+    if (byId(state.fragments, fragment.id) !== fragment) return;
+    fragment.sourceDescription = "Pasted PSBT was rejected by the ptj backend; kept as opaque bytes.";
+    state.log.unshift(`ptj backend rejected pasted PSBT: ${error.message}`);
+    render();
+  }
 }
 
 function handlePastedText(text, source = "paste") {
@@ -755,6 +954,12 @@ function handlePastedCandidate(value, source, shouldRender = true) {
     addConnectivityPeer(contactPeerLabel("relay", relay), "relay", relay, shouldRender);
     return true;
   }
+  const irohTicket = value.match(/\bdoc[a-z2-7]{40,}\b/i)?.[0];
+  if (irohTicket) {
+    addConnectivityPeer(contactPeerLabel("iroh", irohTicket), "iroh", irohTicket, shouldRender);
+    void hydrateIrohSync(irohTicket);
+    return true;
+  }
   const wormhole = value.match(/\b\d{1,4}-[a-z0-9]+(?:-[a-z0-9]+){1,}\b/i)?.[0];
   if (wormhole) {
     addConnectivityPeer(contactPeerLabel("wormhole", wormhole), "wormhole", wormhole, shouldRender);
@@ -770,7 +975,8 @@ function handlePastedCandidate(value, source, shouldRender = true) {
     return true;
   }
   if (looksLikeBase64Psbt(value)) {
-    addPsbtFragmentFromRaw(`${source} PSBT`, compactBase64(value), "PSBT bytes imported from paste; this mock keeps only elided counts.", shouldRender);
+    const fragment = addPsbtFragmentFromRaw(`${source} PSBT`, compactBase64(value), "PSBT bytes imported from paste; awaiting ptj backend inspection.", shouldRender);
+    void hydratePastedPsbtFragment(fragment);
     return true;
   }
   if (looksLikeDescriptor(value)) {
@@ -1172,6 +1378,7 @@ function mergeFragments(leftId, rightId, shouldRender = true) {
   removeFragment(left.id, fragment.id);
   removeFragment(right.id, fragment.id);
   state.log.unshift(`Merged fragments ${left.id} and ${right.id}; replaced them with ${fragment.id}.`);
+  void hydrateJoinedPsbt(fragment, [left, right]);
   state.selected = [fragment.id];
   if (shouldRender) render();
   return fragment;
@@ -1190,6 +1397,7 @@ function absorbFragmentIntoSession(fragmentId, sessionId, shouldRender = true) {
   syncPeerViews(session);
   startConvergence(session, `absorbing ${fragment.id}`, session.peers, pendingPayloadRowKeys(fragment));
   state.log.unshift(`Absorbed fragment ${fragment.id} into ${session.label}; fragment vertex was removed.`);
+  void hydrateJoinedPsbt(session, [session, fragment]);
   state.selected = [session.id];
   if (shouldRender) render();
   return session;
@@ -1215,6 +1423,7 @@ function mergeSessions(leftId, rightId, shouldRender = true) {
   syncPeerViews(session);
   startConvergence(session, `merging ${left.id} and ${right.id}`);
     state.log.unshift(`Merged ${left.label} and ${right.label}; replaced them with ${session.label}.`);
+  void hydrateJoinedPsbt(session, [left, right]);
   state.selected = [session.id];
   if (shouldRender) render();
   return session;
@@ -1289,11 +1498,13 @@ function convertSelectedToUnordered() {
   if (node.format === "unordered") {
     state.log.unshift(`${node.id} is already unordered.`);
   } else {
+    const previousRaw = node.raw;
     node.format = "unordered";
     node.convertedFrom = "bip370";
     node.modifiable = undefined;
     if (nodeKind(node.id) === "session") syncPeerViews(node);
     state.log.unshift(`Shuffled ${node.id} from BIP 370 order into unordered form for session sharing.`);
+    void hydrateUnorderedPsbt(node, previousRaw);
   }
   render();
 }
@@ -1337,6 +1548,7 @@ function sortPsbtToBip370(nodeId, shouldRender = true) {
   state.log.unshift(kind === "session"
     ? `Fixed ${nodeDisplayLabel(node, kind)} input/output sets into an updater/signer PSBT candidate; the live session remains available.`
     : `Sorted ${nodeDisplayLabel(node, kind)} into a BIP 370 updater/signer PSBT candidate.`);
+  void hydrateSortedFragment(fragment, node);
   if (shouldRender) render();
   return fragment;
 }
@@ -1398,10 +1610,12 @@ function atomizeSelectedPsbt() {
     render();
     return;
   }
+  const previousRaw = node.raw;
   removeFragment(node.id);
   state.fragments.push(...atoms);
   state.selected = atoms.slice(0, 1).map((atom) => atom.id);
   state.log.unshift(`Atomized ${node.id} into ${atoms.length} unordered atomic fragment PSBTs.`);
+  void hydrateAtomizedFragments(atoms, previousRaw, node.id);
   render();
 }
 
@@ -1479,7 +1693,11 @@ function beginWireDraft(event, sourceId) {
     targetId: null,
     active: false,
   };
-  event.currentTarget.setPointerCapture?.(event.pointerId);
+  try {
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  } catch {
+    // Synthetic test events may not have an active browser pointer capture slot.
+  }
 }
 
 function updateWireDraft(event) {
@@ -1952,6 +2170,10 @@ function renderDescriptorDrawer(parent, descriptorId) {
 
   const body = document.createElement("div");
   body.className = "descriptor-drawer-body";
+  summary.addEventListener("click", (event) => {
+    event.stopPropagation();
+    positionDescriptorDrawer(summary, body);
+  });
   if (!items.length) {
     const empty = document.createElement("div");
     empty.className = "descriptor-drawer-empty";
@@ -2149,22 +2371,18 @@ function renderFeeContributionPanel() {
     return;
   }
   const context = document.querySelector("#feeContributionContext");
-  const slider = document.querySelector("#feeContributionSlider");
   const amount = document.querySelector("#feeContributionAmount");
   const rate = document.querySelector("#feeContributionRate");
   const comparison = document.querySelector("#feeContributionComparison");
   const warning = document.querySelector("#feeContributionWarning");
   const confirmRow = document.querySelector("#feeContributionConfirmRow");
   const confirm = document.querySelector("#feeContributionConfirm");
+  const finalize = document.querySelector("#feeContributionFinalize");
   const apply = document.querySelector("#feeContributionApply");
 
   panel.hidden = false;
   panel.className = `fee-panel warning-${plan.warningLevel}`;
   context.textContent = `${plan.descriptorLabel}: choose additional explicit fee from ${formatSatAmount(0)} to ${formatSatAmount(plan.availableSats)}.`;
-  slider.min = "0";
-  slider.max = String(plan.availableSats);
-  slider.step = "1";
-  slider.value = String(plan.selectedSats);
   amount.min = "0";
   amount.max = String(plan.availableSats);
   amount.step = "1";
@@ -2174,6 +2392,7 @@ function renderFeeContributionPanel() {
   warning.textContent = feeContributionWarningText(plan);
   confirmRow.hidden = !plan.confirmationRequired;
   confirm.checked = Boolean(state.feeDraft.confirmed);
+  finalize.checked = Boolean(state.feeDraft.feeFinalized);
   apply.disabled = plan.confirmationRequired && !state.feeDraft.confirmed;
 }
 
@@ -2899,19 +3118,19 @@ function drawUnorderedPsbtBalanceSheet(group, node, display, pendingRows, box, p
   const totalRows = unorderedBalanceSheetTotalRows(display);
   const sectionTotals = totalRows.slice(0, -1);
   const grandTotal = shouldShowGrandTotal(display) ? totalRows.at(-1) : null;
+  const averageFeeRate = display.whole.fee.total / Math.max(1, display.estimatedVbytes);
   const grandTotalHeight = grandTotal ? sectionSubtotalHeight(grandTotal) : 0;
   const grandTotalY = grandTotal ? Math.max(96, maxY - grandTotalHeight) : maxY;
-  const sectionMaxY = grandTotal ? grandTotalY - 4 : maxY;
+  const sectionMaxY = grandTotal ? grandTotalY - 18 : maxY;
   let cursor = startY;
   let rendered = 0;
   group.appendChild(svgText(leftX, cursor, "inputs", "psbt-column-heading"));
   group.appendChild(svgText(rightX, cursor, "outputs", "psbt-column-heading"));
   cursor += 15;
   for (const [sectionIndex, section] of display.subtransactions.entries()) {
-    const sectionTotal = sectionTotals[sectionIndex] || section;
     const remainingMinY = remainingBalanceSectionMinimum(display.subtransactions, sectionTotals, sectionIndex + 1);
     const sectionLimitY = Math.max(cursor, sectionMaxY - remainingMinY);
-    if (cursor + sectionSubtotalHeight(sectionTotal) > sectionLimitY && rendered > 0) break;
+    if (cursor + sectionSubtotalHeight(section) > sectionLimitY && rendered > 0) break;
     if (sectionIndex > 0 && cursor + 8 <= sectionLimitY) {
       group.appendChild(svgEl("line", {
         class: "psbt-section-divider",
@@ -2934,7 +3153,7 @@ function drawUnorderedPsbtBalanceSheet(group, node, display, pendingRows, box, p
       cursor += 16;
     }
     const rowCount = Math.max(section.inputs.rows.length, section.outputs.rows.length);
-    const subtotalHeight = sectionSubtotalHeight(sectionTotal);
+    const subtotalHeight = sectionSubtotalHeight(section);
     const rowLimitY = Math.max(cursor, sectionLimitY - subtotalHeight - 4);
     let renderedRows = 0;
     for (let index = 0; index < rowCount; index += 1) {
@@ -2959,7 +3178,7 @@ function drawUnorderedPsbtBalanceSheet(group, node, display, pendingRows, box, p
       cursor += 14;
     }
     if (cursor + subtotalHeight > sectionLimitY) cursor = Math.max(cursor, sectionLimitY - subtotalHeight);
-    drawSectionSubtotal(sectionGroup, sectionTotal, leftX, rightX, cursor, columnWidth, node);
+    drawSectionSubtotal(sectionGroup, section, leftX, rightX, cursor, columnWidth, node, averageFeeRate);
     cursor += subtotalHeight + 4;
     if (section.descriptorMine) {
       sectionGroup.insertBefore(svgEl("rect", {
@@ -2987,19 +3206,20 @@ function drawUnorderedPsbtBalanceSheet(group, node, display, pendingRows, box, p
         y2: grandTotalY - 7,
       }));
     }
-    drawSectionSubtotal(group, grandTotal, leftX, rightX, grandTotalY, columnWidth);
+    drawSectionSubtotal(group, grandTotal, leftX, rightX, grandTotalY, columnWidth, node, averageFeeRate);
   }
 }
 
 function sectionSubtotalHeight(section) {
   const presentation = accountingDeltaPresentation(section);
-  return (presentation.showTotals ? 18 : 0) +
+  return (hasDeclaredFeeAnnotation(section) ? 14 : 0) +
+    (presentation.showTotals ? 18 : hasDeclaredFeeAnnotation(section) ? 8 : 0) +
     (presentation.kind !== "balanced" ? 28 : 0) +
-    (hasMineFeeSignal(section) ? 20 : 0);
+    (hasBalanceFeeSignal(section) ? 20 : 0);
 }
 
-function hasMineFeeSignal(section) {
-  return section.descriptorMine === true && Boolean(section.descriptorId);
+function hasBalanceFeeSignal(section) {
+  return Number(section.estimatedVbytes || 0) > 0 && Number(section.feeSats || 0) !== 0;
 }
 
 function minimumBalanceSectionHeight(section, total, includeDivider = true) {
@@ -3014,12 +3234,17 @@ function remainingBalanceSectionMinimum(sections, totals, startIndex) {
   return total;
 }
 
-function drawSectionSubtotal(group, section, leftX, rightX, y, columnWidth, node = null) {
+function drawSectionSubtotal(group, section, leftX, rightX, y, columnWidth, node = null, averageFeeRate = 0) {
   const sectionClass = "psbt-section-total";
   const presentation = accountingDeltaPresentation(section);
+  const declaredFee = hasDeclaredFeeAnnotation(section);
   let cursor = y;
   let lastFigureY = y;
-  if (presentation.showTotals) {
+  if (declaredFee || presentation.showTotals) {
+    if (declaredFee) {
+      group.appendChild(svgDeclaredFeeText(rightX + columnWidth, cursor + 9, section.explicitFeeSats, "end"));
+      cursor += 14;
+    }
     const lineY = cursor + 1;
     const totalY = cursor + 13;
     group.appendChild(svgEl("line", {
@@ -3030,10 +3255,17 @@ function drawSectionSubtotal(group, section, leftX, rightX, y, columnWidth, node
       y2: lineY,
       ...(section.descriptorColor ? { style: `stroke:${section.descriptorColor}` } : {}),
     }));
-    group.appendChild(svgAmountText(leftX + columnWidth, totalY, section.inputAccountingTotalSats ?? section.inputTotalSats, sectionClass, "end"));
-    group.appendChild(svgOutputSubtotalText(rightX + columnWidth, totalY, section, sectionClass, "end"));
-    cursor += 18;
-    lastFigureY = totalY;
+    if (presentation.showTotals) {
+      group.appendChild(svgAmountText(leftX + columnWidth, totalY, section.inputAccountingTotalSats ?? section.inputTotalSats, sectionClass, "end"));
+      if (!outputSubtotalElidedByDeclaredFees(section)) {
+        group.appendChild(svgOutputSubtotalText(rightX + columnWidth, totalY, section, sectionClass, "end"));
+      }
+      cursor += 18;
+      lastFigureY = totalY;
+    } else {
+      cursor += 8;
+      lastFigureY = lineY;
+    }
   }
   if (presentation.kind !== "balanced") {
     const deltaLineY = cursor + 1;
@@ -3043,45 +3275,49 @@ function drawSectionSubtotal(group, section, leftX, rightX, y, columnWidth, node
     const deltaEndX = deltaX + columnWidth;
     group.appendChild(svgEl("line", {
       class: `psbt-sum-line psbt-balance-delta-line ${presentation.kind}`,
-      x1: deltaX,
+      x1: leftX,
       y1: deltaLineY,
-      x2: deltaEndX,
+      x2: rightX + columnWidth,
       y2: deltaLineY,
     }));
     group.appendChild(svgText(deltaX, deltaLabelY, presentation.label, `psbt-balance-delta-label ${presentation.kind}`));
     const deltaClass = `${sectionClass} psbt-balance-delta ${presentation.kind}`;
-    if (presentation.amountB === null) {
-      group.appendChild(svgAmountText(deltaEndX, deltaY, presentation.amountA, deltaClass, "end"));
-    } else {
-      group.appendChild(svgAmountPairText(deltaEndX, deltaY, presentation.amountA, presentation.amountB, presentation.separator, deltaClass, "end"));
-    }
+    group.appendChild(svgSignedAmountText(deltaEndX, deltaY, presentation.amountA, deltaClass, "end"));
     cursor += 28;
     lastFigureY = deltaY;
-    if (node && hasMineFeeSignal(section)) {
-      const feeX = presentation.oppositeColumn === "input" ? leftX : rightX;
-      drawDescriptorFeeSignal(group, node, section, feeX, deltaY, columnWidth);
-      return;
-    }
   }
-  if (node && hasMineFeeSignal(section)) {
-    drawDescriptorFeeSignal(group, node, section, leftX, lastFigureY + 19, columnWidth);
+  if (hasBalanceFeeSignal(section)) {
+    const signal = balanceSheetFeeSignal(section, averageFeeRate);
+    const feeX = node && signal.canFinalizeExplicitFee
+      ? rightX
+      : presentation.kind !== "balanced" && presentation.oppositeColumn === "output" ? rightX : leftX;
+    drawBalanceSheetFeeSignal(group, node, section, feeX, lastFigureY + 19, columnWidth, averageFeeRate);
   }
 }
 
-function drawDescriptorFeeSignal(group, node, section, x, y, columnWidth) {
-  const signal = descriptorFeeSignal(node, section.descriptorId);
-  if (!signal) return;
+function hasDeclaredFeeAnnotation(section) {
+  return Number(section.explicitFeeSats || 0) > 0 &&
+    (section.kind === "whole" || outputSubtotalElidedByDeclaredFees(section));
+}
+
+function outputSubtotalElidedByDeclaredFees(section) {
+  const explicitFee = Number(section.explicitFeeSats || 0);
+  return explicitFee > 0 && Number(section.outputAccountingTotalSats || 0) === explicitFee;
+}
+
+function drawBalanceSheetFeeSignal(group, node, section, x, y, columnWidth, averageFeeRate) {
+  const signal = balanceSheetFeeSignal(section, averageFeeRate);
   const label = `~${formatFeeRate(signal.feeRateSatsPerVbyte)} sat/vB · avg ${formatFeeRate(signal.averageFeeRateSatsPerVbyte)}`;
-  if (signal.canFinalizeExplicitFee) {
+  if (node && signal.canFinalizeExplicitFee) {
     const button = svgEl("g", {
-      class: "fee-finalize-button",
+      class: "fee-add-button",
       transform: `translate(${x} ${y - 14})`,
       tabindex: "0",
       role: "button",
-      "aria-label": `Finalize explicit fee for ${signal.descriptorLabel}`,
+      "aria-label": `Add explicit fee for ${signal.descriptorLabel}`,
     });
-    button.appendChild(svgEl("rect", { width: 86, height: 18, rx: 9 }));
-    const text = svgText(43, 13, "Finalize fee");
+    button.appendChild(svgEl("rect", { width: 64, height: 18, rx: 9 }));
+    const text = svgText(32, 13, "Add fee");
     text.setAttribute("text-anchor", "middle");
     button.appendChild(text);
     button.addEventListener("pointerdown", (event) => event.stopPropagation());
@@ -3097,10 +3333,17 @@ function drawDescriptorFeeSignal(group, node, section, x, y, columnWidth) {
       }
     });
     group.appendChild(button);
-    group.appendChild(svgText(x + 92, y, short(label, Math.max(16, Math.floor((columnWidth - 96) / 5.5))), "fee-rate-signal"));
+    group.appendChild(feeRateSignalText(section, x + 70, y, short(label, Math.max(16, Math.floor((columnWidth - 74) / 5.5)))));
     return;
   }
-  group.appendChild(svgText(x, y, short(label, Math.max(18, Math.floor(columnWidth / 5.5))), "fee-rate-signal"));
+  group.appendChild(feeRateSignalText(section, x, y, short(label, Math.max(18, Math.floor(columnWidth / 5.5)))));
+}
+
+function feeRateSignalText(section, x, y, label) {
+  const text = svgText(x, y, label, "fee-rate-signal");
+  text.setAttribute("data-section-kind", section.kind);
+  if (section.descriptorId) text.setAttribute("data-descriptor-id", section.descriptorId);
+  return text;
 }
 
 function drawPayloadSizeTotal(group, node, leftX, y, rightX) {
@@ -3369,19 +3612,18 @@ function svgAmountPairText(x, y, leftSats, rightSats, separator, className, anch
   return element;
 }
 
-function svgOutputSubtotalText(x, y, section, className, anchor = "start") {
-  const element = svgEl("text", { x, y, "text-anchor": anchor });
-  if (className) element.setAttribute("class", className);
-  if (subtotalIncludesExplicitFees(section)) {
-    element.appendChild(svgTspan("(incl. fees)", "psbt-explicit-fee-subtotal-note"));
-    element.appendChild(svgTspan(" "));
-  }
-  appendAmountTspans(element, section.outputAccountingTotalSats ?? section.outputTotalSats);
+function svgDeclaredFeeText(x, y, valueSats, anchor = "start") {
+  const element = svgEl("text", { x, y, "text-anchor": anchor, class: "psbt-declared-fee" });
+  element.appendChild(svgTspan("declared fees: ", "psbt-declared-fee-label"));
+  appendAmountTspans(element, valueSats);
   return element;
 }
 
-function subtotalIncludesExplicitFees(section) {
-  return section.kind !== "whole" && Number(section.explicitFeeSats || 0) !== 0;
+function svgOutputSubtotalText(x, y, section, className, anchor = "start") {
+  const element = svgEl("text", { x, y, "text-anchor": anchor });
+  if (className) element.setAttribute("class", className);
+  appendAmountTspans(element, section.outputAccountingTotalSats ?? section.outputTotalSats);
+  return element;
 }
 
 function svgSignedAmountText(x, y, valueSats, className, anchor = "start") {
@@ -3575,12 +3817,12 @@ function bindForms() {
     createInitialState();
     render();
   });
-  const feeSlider = document.querySelector("#feeContributionSlider");
   const feeAmount = document.querySelector("#feeContributionAmount");
   const feeConfirm = document.querySelector("#feeContributionConfirm");
-  feeSlider?.addEventListener("input", () => updateFeeContributionAmount(feeSlider.value));
+  const feeFinalize = document.querySelector("#feeContributionFinalize");
   feeAmount?.addEventListener("input", () => updateFeeContributionAmount(feeAmount.value));
   feeConfirm?.addEventListener("change", () => setFeeContributionConfirmed(feeConfirm.checked));
+  feeFinalize?.addEventListener("change", () => setFeeContributionFinalized(feeFinalize.checked));
   const graph = document.querySelector("#graph");
   graph.addEventListener("pointermove", updateWireDraft);
   graph.addEventListener("pointerup", finishWireDraft);

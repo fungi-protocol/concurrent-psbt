@@ -1,0 +1,44 @@
+[package]
+name = "transport-emissary"
+version.workspace = true
+edition = "2024"
+
+# transport-emissary — the I2P transport in the transport-<name> family.
+#
+# Kind: AnonymousChannel only. I2P delivers received stream bytes with no
+# sender identity attached, so there is nothing to hand back as a SenderId;
+# this crate implements exactly `AnonymousChannel` and nothing else.
+#
+# Anonymity, when present, is a property of the upstream I2P stack (emissary) —
+# this crate just *uses* it to move opaque bytes. It contains zero security /
+# threat-model reasoning.
+#
+# Like transport-arti's in-process Tor client, emissary-core is an EMBEDDED I2P
+# router: it runs inside our process. There is NO separate i2pd/Java-router
+# daemon and NO SAMv3 bridge to reach — we bring the router up ourselves.
+#
+# ALL external-network dependency usage is gated behind the `emissary` feature,
+# mirroring how the ptj CLI gates iroh-sync. With the feature OFF the crate
+# still builds as a skeleton: every network entry point returns a clear
+# "built without the `emissary` feature" error, and the channel-trait
+# satisfaction + framing roundtrip tests run with no router and no SDK.
+
+[features]
+# Off by default: the skeleton compiles with transport-core + std only.
+default = []
+# Pulls in the embedded I2P router and its async runtime, and lights up the real
+# network send/recv path.
+emissary = []
+
+[dependencies]
+# TODO(ground-deps): defer the network SDK until pinned to a resolvable
+# crate/version (emissary-core). The `emissary` feature is declared but empty so the
+# default skeleton (channel trait + framing) compiles; the feature-on network
+# path in the crate source stays authored-but-unverified until then.
+transport-core = { path = "../transport-core" }
+# Desugars the async `AnonymousChannel` impl to boxed futures so the seam stays
+# dyn-compatible. Proc-macro only — no runtime, no network SDK.
+async-trait = "0.1"
+
+[lints]
+workspace = true
