@@ -10,7 +10,8 @@ export function assert(condition, message) {
   }
 }
 
-async function loadChromium() {
+// Exported: the e2e-oblivious suite reuses this Chromium loader verbatim.
+export async function loadChromium() {
   const corePath = process.env.PLAYWRIGHT_CORE;
   assert(corePath && existsSync(corePath), `PLAYWRIGHT_CORE must point at playwright-core (got: ${corePath})`);
   const { chromium } = await import(pathToFileURL(corePath).href);
@@ -24,7 +25,8 @@ function contentType(filePath) {
   return "application/octet-stream";
 }
 
-async function startStaticServer(root) {
+// Exported: the e2e-oblivious suite reuses this static server verbatim.
+export async function startStaticServer(root) {
   const server = http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url || "/", "http://127.0.0.1");
