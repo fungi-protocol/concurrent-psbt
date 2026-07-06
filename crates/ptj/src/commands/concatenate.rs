@@ -5,22 +5,36 @@ use crate::cli::ConcatenateConfig;
 use crate::{Error, Result, io};
 
 pub(super) fn run(config: ConcatenateConfig) -> Result<Psbt> {
-    let mut files = config.files.into_iter();
-    let first_path = files
-        .next()
-        .ok_or_else(|| Error::new("concatenate expects at least two ordered PSBT files"))?;
-    let mut result = read_ordered(&first_path)?;
+    let psbts = config
+        .files
+        .into_iter()
+        .map(|path| io::read_psbt(&path).map(|psbt| (path.display().to_string(), psbt)))
+        .collect::<Result<Vec<_>>>()?;
+    concatenate_psbts(psbts)
+}
 
-    for path in files {
-        let psbt = read_ordered(&path)?;
+pub(crate) fn concatenate_psbts(psbts: Vec<(String, Psbt)>) -> Result<Psbt> {
+    let mut psbts = psbts.into_iter();
+    let (first_label, mut result) = psbts
+        .next()
+        .ok_or_else(|| Error::new("concatenate expects at least two ordered PSBTs"))?;
+    validate_ordered(&first_label, &result)?;
+
+    let mut count = 1;
+    for (label, psbt) in psbts {
+        validate_ordered(&label, &psbt)?;
         if !same_global_context(&result.global, &psbt.global) {
             return Err(Error::new(format!(
-                "{} has global fields that differ from the first PSBT; concatenate would discard or reorder global information",
-                path.display()
+                "{label} has global fields that differ from the first PSBT; concatenate would discard or reorder global information",
             )));
         }
         result.inputs.extend(psbt.inputs);
         result.outputs.extend(psbt.outputs);
+        count += 1;
+    }
+
+    if count < 2 {
+        return Err(Error::new("concatenate expects at least two ordered PSBTs"));
     }
 
     result.global.input_count = result.inputs.len();
@@ -28,15 +42,13 @@ pub(super) fn run(config: ConcatenateConfig) -> Result<Psbt> {
     Ok(result)
 }
 
-fn read_ordered(path: &std::path::Path) -> Result<Psbt> {
-    let psbt = io::read_psbt(path)?;
+fn validate_ordered(label: &str, psbt: &Psbt) -> Result<()> {
     if psbt.global.is_unordered() {
         return Err(Error::new(format!(
-            "{} is unordered; concatenate only appends ordered PSBTs. Use `ptj join` for unordered lattice merges.",
-            path.display()
+            "{label} is unordered; concatenate only appends ordered PSBTs. Use `ptj join` for unordered lattice merges.",
         )));
     }
-    Ok(psbt)
+    Ok(())
 }
 
 fn same_global_context(left: &Global, right: &Global) -> bool {

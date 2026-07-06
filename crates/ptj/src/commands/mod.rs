@@ -1,11 +1,11 @@
-mod atomize;
-mod concatenate;
-mod create;
-mod export_bip174;
+pub(crate) mod atomize;
+pub(crate) mod concatenate;
+pub(crate) mod create;
+pub(crate) mod export_bip174;
 pub(crate) mod inspect;
-mod join;
-mod make_unordered;
-mod sort;
+pub(crate) mod join;
+pub(crate) mod make_unordered;
+pub(crate) mod sort;
 mod sync;
 
 use crate::Result;
