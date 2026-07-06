@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Partial Transaction Joiner</title>
-  <link rel="stylesheet" href="styles.css?v=20260629-size-total-v1">
+  <link rel="stylesheet" href="styles.css?v=20260629-balance-sheet-v1">
   </head>
   <body>
     <header class="app-header">
@@ -122,31 +122,31 @@
       </nav>
     </main>
 
-    <section id="feeContributionPanel" class="fee-panel warning-none" aria-label="Finalize explicit fee contribution" hidden>
+    <section id="feeContributionPanel" class="fee-panel warning-none" aria-label="Add explicit fee contribution" hidden>
       <div class="fee-panel-card">
         <div class="fee-panel-heading">
-          <h2>Finalize explicit fee</h2>
+          <h2>Add explicit fee</h2>
           <button id="feeContributionCancel" type="button" aria-label="Close fee contribution panel">×</button>
         </div>
         <p id="feeContributionContext" class="fee-panel-context"></p>
-        <label class="field-label" for="feeContributionSlider">
-          Additional explicit fee
-          <input id="feeContributionSlider" type="range" min="0" value="0" step="1">
-        </label>
         <label class="field-label" for="feeContributionAmount">
-          Amount
+          Additional explicit fee
           <input id="feeContributionAmount" type="number" min="0" value="0" step="1">
         </label>
         <div class="fee-panel-readout">
           <strong id="feeContributionRate">0.00 sat/vB</strong>
           <span id="feeContributionComparison">overall 0.00 sat/vB · 0.00x overall</span>
         </div>
+        <label class="fee-confirm-row" for="feeContributionFinalize">
+          <input id="feeContributionFinalize" type="checkbox">
+          Finalize fee after this addition.
+        </label>
         <p id="feeContributionWarning" class="fee-panel-warning">No elevated fee warning for this explicit contribution.</p>
         <label id="feeContributionConfirmRow" class="fee-confirm-row" for="feeContributionConfirm" hidden>
           <input id="feeContributionConfirm" type="checkbox">
           Confirm this unusually high fee contribution.
         </label>
-        <button id="feeContributionApply" type="button" class="primary">Apply fee</button>
+        <button id="feeContributionApply" type="button" class="primary">Add fee</button>
       </div>
     </section>
 
@@ -201,6 +201,6 @@
       <div id="descriptorDockRail" class="descriptor-dock-rail"></div>
     </section>
 
-  <script type="module" src="dist/app.js?v=20260629-size-total-v1"></script>
+  <script type="module" src="dist/app.js?v=20260629-balance-sheet-v1"></script>
 </body>
 </html>

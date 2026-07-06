@@ -582,16 +582,17 @@ function openDescriptorFeeDialog(nodeId, descriptorId) {
   if (!node || !descriptorId) return;
   const signal = descriptorFeeSignal(node, descriptorId);
   if (!signal?.canFinalizeExplicitFee) {
-    state.log.unshift(`No positive mine surplus to finalize for ${signal?.descriptorLabel || "that descriptor"}.`);
+    state.log.unshift(`No positive mine surplus to add as explicit fee for ${signal?.descriptorLabel || "that descriptor"}.`);
     render();
     return;
   }
-  const plan = descriptorFeeContributionPlan(signal, signal.implicitFeeSats);
+  const plan = descriptorFeeContributionPlan(signal);
   state.feeDraft = {
     nodeId,
     descriptorId,
     selectedSats: plan?.selectedSats || 0,
     confirmed: false,
+    feeFinalized: false,
   };
   renderFeeContributionPanel();
 }
@@ -615,6 +616,12 @@ function setFeeContributionConfirmed(confirmed) {
   renderFeeContributionPanel();
 }
 
+function setFeeContributionFinalized(feeFinalized) {
+  if (!state.feeDraft) return;
+  state.feeDraft.feeFinalized = Boolean(feeFinalized);
+  renderFeeContributionPanel();
+}
+
 function closeFeeContributionPanel() {
   state.feeDraft = null;
   renderFeeContributionPanel();
@@ -634,14 +641,16 @@ function applyFeeContribution() {
     renderFeeContributionPanel();
     return;
   }
-  const updated = finalizeDescriptorExplicitFee(node, draft.descriptorId, plan.selectedSats);
+  const updated = finalizeDescriptorExplicitFee(node, draft.descriptorId, plan.selectedSats, {
+    feeFinalized: draft.feeFinalized,
+  });
   applyPayload(node, updated);
   if (nodeKind(node.id) === "session") {
     syncPeerViews(node);
     startConvergence(node, `explicit fee updated for ${plan.descriptorLabel}`, node.peers, pendingPayloadRowKeys(updated));
   }
   state.feeDraft = null;
-  state.log.unshift(`Set ${formatSatAmount(plan.selectedSats)} additional explicit fee for ${plan.descriptorLabel}.`);
+  state.log.unshift(`${draft.feeFinalized ? "Finalized" : "Added"} ${formatSatAmount(plan.selectedSats)} explicit fee for ${plan.descriptorLabel}.`);
   render();
 }
 
@@ -2095,6 +2104,10 @@ function renderDescriptorDrawer(parent, descriptorId) {
 
   const body = document.createElement("div");
   body.className = "descriptor-drawer-body";
+  summary.addEventListener("click", (event) => {
+    event.stopPropagation();
+    positionDescriptorDrawer(summary, body);
+  });
   if (!items.length) {
     const empty = document.createElement("div");
     empty.className = "descriptor-drawer-empty";
@@ -2292,22 +2305,18 @@ function renderFeeContributionPanel() {
     return;
   }
   const context = document.querySelector("#feeContributionContext");
-  const slider = document.querySelector("#feeContributionSlider");
   const amount = document.querySelector("#feeContributionAmount");
   const rate = document.querySelector("#feeContributionRate");
   const comparison = document.querySelector("#feeContributionComparison");
   const warning = document.querySelector("#feeContributionWarning");
   const confirmRow = document.querySelector("#feeContributionConfirmRow");
   const confirm = document.querySelector("#feeContributionConfirm");
+  const finalize = document.querySelector("#feeContributionFinalize");
   const apply = document.querySelector("#feeContributionApply");
 
   panel.hidden = false;
   panel.className = `fee-panel warning-${plan.warningLevel}`;
   context.textContent = `${plan.descriptorLabel}: choose additional explicit fee from ${formatSatAmount(0)} to ${formatSatAmount(plan.availableSats)}.`;
-  slider.min = "0";
-  slider.max = String(plan.availableSats);
-  slider.step = "1";
-  slider.value = String(plan.selectedSats);
   amount.min = "0";
   amount.max = String(plan.availableSats);
   amount.step = "1";
@@ -2317,6 +2326,7 @@ function renderFeeContributionPanel() {
   warning.textContent = feeContributionWarningText(plan);
   confirmRow.hidden = !plan.confirmationRequired;
   confirm.checked = Boolean(state.feeDraft.confirmed);
+  finalize.checked = Boolean(state.feeDraft.feeFinalized);
   apply.disabled = plan.confirmationRequired && !state.feeDraft.confirmed;
 }
 
@@ -3045,7 +3055,7 @@ function drawUnorderedPsbtBalanceSheet(group, node, display, pendingRows, box, p
   const averageFeeRate = display.whole.fee.total / Math.max(1, display.estimatedVbytes);
   const grandTotalHeight = grandTotal ? sectionSubtotalHeight(grandTotal) : 0;
   const grandTotalY = grandTotal ? Math.max(96, maxY - grandTotalHeight) : maxY;
-  const sectionMaxY = grandTotal ? grandTotalY - 4 : maxY;
+  const sectionMaxY = grandTotal ? grandTotalY - 18 : maxY;
   let cursor = startY;
   let rendered = 0;
   group.appendChild(svgText(leftX, cursor, "inputs", "psbt-column-heading"));
@@ -3136,7 +3146,8 @@ function drawUnorderedPsbtBalanceSheet(group, node, display, pendingRows, box, p
 
 function sectionSubtotalHeight(section) {
   const presentation = accountingDeltaPresentation(section);
-  return (presentation.showTotals ? 18 : 0) +
+  return (hasDeclaredFeeAnnotation(section) ? 14 : 0) +
+    (presentation.showTotals ? 18 : hasDeclaredFeeAnnotation(section) ? 8 : 0) +
     (presentation.kind !== "balanced" ? 28 : 0) +
     (hasBalanceFeeSignal(section) ? 20 : 0);
 }
@@ -3160,9 +3171,14 @@ function remainingBalanceSectionMinimum(sections, totals, startIndex) {
 function drawSectionSubtotal(group, section, leftX, rightX, y, columnWidth, node = null, averageFeeRate = 0) {
   const sectionClass = "psbt-section-total";
   const presentation = accountingDeltaPresentation(section);
+  const declaredFee = hasDeclaredFeeAnnotation(section);
   let cursor = y;
   let lastFigureY = y;
-  if (presentation.showTotals) {
+  if (declaredFee || presentation.showTotals) {
+    if (declaredFee) {
+      group.appendChild(svgDeclaredFeeText(rightX + columnWidth, cursor + 9, section.explicitFeeSats, "end"));
+      cursor += 14;
+    }
     const lineY = cursor + 1;
     const totalY = cursor + 13;
     group.appendChild(svgEl("line", {
@@ -3173,10 +3189,17 @@ function drawSectionSubtotal(group, section, leftX, rightX, y, columnWidth, node
       y2: lineY,
       ...(section.descriptorColor ? { style: `stroke:${section.descriptorColor}` } : {}),
     }));
-    group.appendChild(svgAmountText(leftX + columnWidth, totalY, section.inputAccountingTotalSats ?? section.inputTotalSats, sectionClass, "end"));
-    group.appendChild(svgOutputSubtotalText(rightX + columnWidth, totalY, section, sectionClass, "end"));
-    cursor += 18;
-    lastFigureY = totalY;
+    if (presentation.showTotals) {
+      group.appendChild(svgAmountText(leftX + columnWidth, totalY, section.inputAccountingTotalSats ?? section.inputTotalSats, sectionClass, "end"));
+      if (!outputSubtotalElidedByDeclaredFees(section)) {
+        group.appendChild(svgOutputSubtotalText(rightX + columnWidth, totalY, section, sectionClass, "end"));
+      }
+      cursor += 18;
+      lastFigureY = totalY;
+    } else {
+      cursor += 8;
+      lastFigureY = lineY;
+    }
   }
   if (presentation.kind !== "balanced") {
     const deltaLineY = cursor + 1;
@@ -3186,25 +3209,34 @@ function drawSectionSubtotal(group, section, leftX, rightX, y, columnWidth, node
     const deltaEndX = deltaX + columnWidth;
     group.appendChild(svgEl("line", {
       class: `psbt-sum-line psbt-balance-delta-line ${presentation.kind}`,
-      x1: deltaX,
+      x1: leftX,
       y1: deltaLineY,
-      x2: deltaEndX,
+      x2: rightX + columnWidth,
       y2: deltaLineY,
     }));
     group.appendChild(svgText(deltaX, deltaLabelY, presentation.label, `psbt-balance-delta-label ${presentation.kind}`));
     const deltaClass = `${sectionClass} psbt-balance-delta ${presentation.kind}`;
-    if (presentation.amountB === null) {
-      group.appendChild(svgAmountText(deltaEndX, deltaY, presentation.amountA, deltaClass, "end"));
-    } else {
-      group.appendChild(svgAmountPairText(deltaEndX, deltaY, presentation.amountA, presentation.amountB, presentation.separator, deltaClass, "end"));
-    }
+    group.appendChild(svgSignedAmountText(deltaEndX, deltaY, presentation.amountA, deltaClass, "end"));
     cursor += 28;
     lastFigureY = deltaY;
   }
   if (hasBalanceFeeSignal(section)) {
-    const feeX = presentation.kind !== "balanced" && presentation.oppositeColumn === "output" ? rightX : leftX;
+    const signal = balanceSheetFeeSignal(section, averageFeeRate);
+    const feeX = node && signal.canFinalizeExplicitFee
+      ? rightX
+      : presentation.kind !== "balanced" && presentation.oppositeColumn === "output" ? rightX : leftX;
     drawBalanceSheetFeeSignal(group, node, section, feeX, lastFigureY + 19, columnWidth, averageFeeRate);
   }
+}
+
+function hasDeclaredFeeAnnotation(section) {
+  return Number(section.explicitFeeSats || 0) > 0 &&
+    (section.kind === "whole" || outputSubtotalElidedByDeclaredFees(section));
+}
+
+function outputSubtotalElidedByDeclaredFees(section) {
+  const explicitFee = Number(section.explicitFeeSats || 0);
+  return explicitFee > 0 && Number(section.outputAccountingTotalSats || 0) === explicitFee;
 }
 
 function drawBalanceSheetFeeSignal(group, node, section, x, y, columnWidth, averageFeeRate) {
@@ -3212,14 +3244,14 @@ function drawBalanceSheetFeeSignal(group, node, section, x, y, columnWidth, aver
   const label = `~${formatFeeRate(signal.feeRateSatsPerVbyte)} sat/vB · avg ${formatFeeRate(signal.averageFeeRateSatsPerVbyte)}`;
   if (node && signal.canFinalizeExplicitFee) {
     const button = svgEl("g", {
-      class: "fee-finalize-button",
+      class: "fee-add-button",
       transform: `translate(${x} ${y - 14})`,
       tabindex: "0",
       role: "button",
-      "aria-label": `Finalize explicit fee for ${signal.descriptorLabel}`,
+      "aria-label": `Add explicit fee for ${signal.descriptorLabel}`,
     });
-    button.appendChild(svgEl("rect", { width: 86, height: 18, rx: 9 }));
-    const text = svgText(43, 13, "Finalize fee");
+    button.appendChild(svgEl("rect", { width: 64, height: 18, rx: 9 }));
+    const text = svgText(32, 13, "Add fee");
     text.setAttribute("text-anchor", "middle");
     button.appendChild(text);
     button.addEventListener("pointerdown", (event) => event.stopPropagation());
@@ -3235,7 +3267,7 @@ function drawBalanceSheetFeeSignal(group, node, section, x, y, columnWidth, aver
       }
     });
     group.appendChild(button);
-    group.appendChild(feeRateSignalText(section, x + 92, y, short(label, Math.max(16, Math.floor((columnWidth - 96) / 5.5)))));
+    group.appendChild(feeRateSignalText(section, x + 70, y, short(label, Math.max(16, Math.floor((columnWidth - 74) / 5.5)))));
     return;
   }
   group.appendChild(feeRateSignalText(section, x, y, short(label, Math.max(18, Math.floor(columnWidth / 5.5)))));
@@ -3514,19 +3546,18 @@ function svgAmountPairText(x, y, leftSats, rightSats, separator, className, anch
   return element;
 }
 
-function svgOutputSubtotalText(x, y, section, className, anchor = "start") {
-  const element = svgEl("text", { x, y, "text-anchor": anchor });
-  if (className) element.setAttribute("class", className);
-  if (subtotalIncludesExplicitFees(section)) {
-    element.appendChild(svgTspan("(incl. fees)", "psbt-explicit-fee-subtotal-note"));
-    element.appendChild(svgTspan(" "));
-  }
-  appendAmountTspans(element, section.outputAccountingTotalSats ?? section.outputTotalSats);
+function svgDeclaredFeeText(x, y, valueSats, anchor = "start") {
+  const element = svgEl("text", { x, y, "text-anchor": anchor, class: "psbt-declared-fee" });
+  element.appendChild(svgTspan("declared fees: ", "psbt-declared-fee-label"));
+  appendAmountTspans(element, valueSats);
   return element;
 }
 
-function subtotalIncludesExplicitFees(section) {
-  return section.kind !== "whole" && Number(section.explicitFeeSats || 0) !== 0;
+function svgOutputSubtotalText(x, y, section, className, anchor = "start") {
+  const element = svgEl("text", { x, y, "text-anchor": anchor });
+  if (className) element.setAttribute("class", className);
+  appendAmountTspans(element, section.outputAccountingTotalSats ?? section.outputTotalSats);
+  return element;
 }
 
 function svgSignedAmountText(x, y, valueSats, className, anchor = "start") {
@@ -3720,12 +3751,12 @@ function bindForms() {
     createInitialState();
     render();
   });
-  const feeSlider = document.querySelector("#feeContributionSlider");
   const feeAmount = document.querySelector("#feeContributionAmount");
   const feeConfirm = document.querySelector("#feeContributionConfirm");
-  feeSlider?.addEventListener("input", () => updateFeeContributionAmount(feeSlider.value));
+  const feeFinalize = document.querySelector("#feeContributionFinalize");
   feeAmount?.addEventListener("input", () => updateFeeContributionAmount(feeAmount.value));
   feeConfirm?.addEventListener("change", () => setFeeContributionConfirmed(feeConfirm.checked));
+  feeFinalize?.addEventListener("change", () => setFeeContributionFinalized(feeFinalize.checked));
   const graph = document.querySelector("#graph");
   graph.addEventListener("pointermove", updateWireDraft);
   graph.addEventListener("pointerup", finishWireDraft);

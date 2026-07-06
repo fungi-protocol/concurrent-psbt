@@ -512,38 +512,86 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
   assert(!expandedCoinSizing.details.some((line) => line.startsWith("label ")), "expected unlabeled inputs not to invent a label");
   assert(expandedCoinSizing.overflowMarkers.length === 0, "expanded details should fit without row overflow markers");
 
-  const explicitFeeSubtotalNotes = await page.evaluate(() => [...document.querySelectorAll(".psbt-explicit-fee-subtotal-note")].map((note) => {
-    const parent = note.parentElement;
-    const noteStyle = getComputedStyle(note);
-    const parentStyle = parent ? getComputedStyle(parent) : null;
-    return {
-      text: note.textContent?.trim() || "",
-      parentClass: parent?.getAttribute("class") || "",
-      noteFontSize: Number.parseFloat(noteStyle.fontSize || "0"),
-      parentFontSize: Number.parseFloat(parentStyle?.fontSize || "0"),
-    };
+  const explicitFeeSubtotalDisplay = await page.evaluate(() => ({
+    oldNotes: [...document.querySelectorAll(".psbt-explicit-fee-subtotal-note")].map((note) => note.textContent?.trim() || ""),
+    declaredFees: [...document.querySelectorAll(".node.session .psbt-declared-fee")].map((note) => note.textContent?.trim() || ""),
+    outputColumnAnnotations: [...document.querySelectorAll(".node.session .psbt-declared-fee")].every((note) => {
+      const rect = note.getBoundingClientRect();
+      const nodeRect = note.closest(".node")?.getBoundingClientRect();
+      return nodeRect ? (rect.left + rect.right) / 2 > (nodeRect.left + nodeRect.right) / 2 : false;
+    }),
   }));
-  assert(explicitFeeSubtotalNotes.length > 0, "expected output subtotals with explicit fee contributions to say '(incl. fees)'");
-  for (const note of explicitFeeSubtotalNotes) {
-    assert(note.text === "(incl. fees)", `expected explicit fee subtotal note text, got ${note.text}`);
-    assert(note.parentClass.includes("psbt-section-total"), `expected subtotal note to live in a subtotal amount, got ${note.parentClass}`);
-    assert(note.noteFontSize < note.parentFontSize, `expected note font ${note.noteFontSize} to be smaller than subtotal font ${note.parentFontSize}`);
-  }
+  assert(explicitFeeSubtotalDisplay.oldNotes.length === 0,
+    `expected explicit fee annotations not to use old subtotal notes, got ${JSON.stringify(explicitFeeSubtotalDisplay.oldNotes)}`);
+  assert(explicitFeeSubtotalDisplay.declaredFees.some((text) => text.startsWith("declared fees:")),
+    `expected declared fee annotation, got ${JSON.stringify(explicitFeeSubtotalDisplay.declaredFees)}`);
+  assert(explicitFeeSubtotalDisplay.outputColumnAnnotations, "expected declared fee annotations to sit in the output column");
 
   const feeRateSignals = await page.evaluate(() => ({
     labels: [...document.querySelectorAll(".node.session .psbt-balance-delta-label")].map((label) => label.textContent?.trim() || ""),
+    balances: [...document.querySelectorAll(".node.session .psbt-balance-delta")].map((label) => label.textContent?.trim() || ""),
     signals: [...document.querySelectorAll(".node.session .fee-rate-signal")].map((signal) => ({
       text: signal.textContent?.trim() || "",
       sectionKind: signal.getAttribute("data-section-kind") || "",
       descriptorId: signal.getAttribute("data-descriptor-id") || "",
     })),
   }));
-  assert(!feeRateSignals.labels.includes("explicit / surplus"), "surplus label should describe accounted fees, not expose the raw field name");
-  assert(feeRateSignals.labels.includes("accounted / surplus"), "expected clearer accounted/surplus label");
+  assert(!feeRateSignals.labels.some((label) => /explicit|surplus|accounted|deficit/.test(label)),
+    `expected balance labels not to expose explicit/surplus/accounted terminology, got ${JSON.stringify(feeRateSignals.labels)}`);
+  assert(feeRateSignals.labels.every((label) => label === "balance:"),
+    `expected balance-only labels, got ${JSON.stringify(feeRateSignals.labels)}`);
+  assert(feeRateSignals.balances.some((text) => text.includes("-")),
+    `expected at least one signed negative balance, got ${JSON.stringify(feeRateSignals.balances)}`);
   assert(feeRateSignals.signals.some((signal) => signal.sectionKind === "recognized" && signal.descriptorId !== "alice"),
     `expected non-mine descriptor fee-rate signal, got ${JSON.stringify(feeRateSignals.signals)}`);
   assert(feeRateSignals.signals.some((signal) => signal.sectionKind === "whole"),
     `expected whole-transaction fee-rate signal, got ${JSON.stringify(feeRateSignals.signals)}`);
+
+  const balanceSheetRuleLayout = await page.evaluate(() => {
+    const deficitLines = [...document.querySelectorAll(".node.session .psbt-balance-delta-line.deficit")].map((line) => {
+      const node = line.closest(".node");
+      const sumLine = node?.querySelector(".psbt-sum-line");
+      return {
+        x1: Number(line.getAttribute("x1") || 0),
+        x2: Number(line.getAttribute("x2") || 0),
+        sumX1: Number(sumLine?.getAttribute("x1") || 0),
+        sumX2: Number(sumLine?.getAttribute("x2") || 0),
+      };
+    });
+    const textEntries = [...document.querySelectorAll(".node.session .psbt-section-total, .node.session .psbt-balance-delta, .node.session .fee-rate-signal, .node.session .psbt-declared-fee")]
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          text: element.textContent?.trim() || "",
+          isGrand: !element.closest(".psbt-subtxn"),
+          left: rect.left,
+          right: rect.right,
+          top: rect.top,
+          bottom: rect.bottom,
+          width: rect.width,
+          height: rect.height,
+        };
+      })
+      .filter((entry) => entry.text && entry.width > 0 && entry.height > 0);
+    const grandEntries = textEntries.filter((entry) => entry.isGrand);
+    const sectionEntries = textEntries.filter((entry) => !entry.isGrand);
+    const overlaps = [];
+    for (const section of sectionEntries) {
+      for (const grand of grandEntries) {
+        const width = Math.min(section.right, grand.right) - Math.max(section.left, grand.left);
+        const height = Math.min(section.bottom, grand.bottom) - Math.max(section.top, grand.top);
+        if (width > 1 && height > 1) overlaps.push({ section, grand, width, height });
+      }
+    }
+    return { deficitLines, overlaps };
+  });
+  assert(balanceSheetRuleLayout.deficitLines.length > 0, "expected at least one deficit balance rule");
+  for (const line of balanceSheetRuleLayout.deficitLines) {
+    assert(line.x1 <= line.sumX1 && line.x2 >= line.sumX2,
+      `expected deficit balance rule to span the transaction, got ${JSON.stringify(line)}`);
+  }
+  assert(balanceSheetRuleLayout.overlaps.length === 0,
+    `expected last subsection and grand total not to overlap, got ${JSON.stringify(balanceSheetRuleLayout.overlaps.slice(0, 3))}`);
 
   const subtotalAndFeeOverlaps = await page.evaluate(() => {
     const selectors = [
@@ -551,7 +599,7 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
       ".psbt-balance-delta-label",
       ".psbt-balance-delta",
       ".fee-rate-signal",
-      ".fee-finalize-button text",
+      ".fee-add-button text",
     ].join(",");
     const entries = [...document.querySelectorAll(`.node.session ${selectors}, .node.fragment ${selectors}`)]
       .map((element, index) => {
@@ -619,7 +667,10 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
   }
 
   const initialFeePanel = await page.evaluate(async () => {
-    const button = document.querySelector(".fee-finalize-button");
+    const button = document.querySelector(".fee-add-button");
+    const buttonText = button?.textContent?.trim() || "";
+    const buttonRect = button?.getBoundingClientRect();
+    const nodeRect = button?.closest(".node")?.getBoundingClientRect();
     button?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const panel = document.querySelector("#feeContributionPanel");
@@ -629,39 +680,48 @@ await withDemoGui(async (page, { consoleMessages, pageErrors }) => {
     const comparison = document.querySelector("#feeContributionComparison");
     const confirmRow = document.querySelector("#feeContributionConfirmRow");
     const confirm = document.querySelector("#feeContributionConfirm");
+    const finalize = document.querySelector("#feeContributionFinalize");
     const apply = document.querySelector("#feeContributionApply");
     return {
       buttonFound: Boolean(button),
+      buttonText,
+      buttonCenterRightOfNode: buttonRect && nodeRect ? (buttonRect.left + buttonRect.right) / 2 > (nodeRect.left + nodeRect.right) / 2 : false,
       hidden: panel?.hidden ?? true,
       panelClass: panel?.className || "",
-      sliderMin: slider?.min || "",
-      sliderMax: Number(slider?.max || 0),
-      sliderValue: Number(slider?.value || 0),
+      sliderPresent: Boolean(slider),
+      amountMin: amount?.min || "",
+      amountMax: Number(amount?.max || 0),
       amountValue: Number(amount?.value || 0),
       rateText: rate?.textContent?.trim() || "",
       comparisonText: comparison?.textContent?.trim() || "",
       confirmHidden: confirmRow?.hidden ?? true,
       confirmChecked: confirm?.checked ?? true,
+      finalizePresent: Boolean(finalize),
+      finalizeChecked: finalize?.checked ?? true,
       applyDisabled: apply?.disabled ?? false,
     };
   });
-  assert(initialFeePanel.buttonFound, "expected a finalize fee control in a mine descriptor section");
-  assert(!initialFeePanel.hidden, "finalize fee should open a fee contribution panel");
-  assert(initialFeePanel.sliderMin === "0", `expected slider min 0, got ${initialFeePanel.sliderMin}`);
-  assert(initialFeePanel.sliderMax > 0, "expected slider max to be the available surplus");
-  assert(initialFeePanel.sliderValue === initialFeePanel.sliderMax, "expected slider to default to the available surplus");
-  assert(initialFeePanel.amountValue === initialFeePanel.sliderValue, "expected numeric amount to mirror the slider");
+  assert(initialFeePanel.buttonFound, "expected an add fee control in a mine descriptor output section");
+  assert(initialFeePanel.buttonText === "Add fee", `expected add fee button text, got ${initialFeePanel.buttonText}`);
+  assert(initialFeePanel.buttonCenterRightOfNode, "expected add fee control to live on the output side");
+  assert(!initialFeePanel.hidden, "add fee should open a fee contribution panel");
+  assert(!initialFeePanel.sliderPresent, "small fee contributions should use a numeric amount input rather than a range slider");
+  assert(initialFeePanel.amountMin === "0", `expected amount min 0, got ${initialFeePanel.amountMin}`);
+  assert(initialFeePanel.amountMax > 0, "expected amount max to be the available surplus");
+  assert(initialFeePanel.amountValue > 0, "expected amount to default to a positive relay-fee-sized contribution");
+  assert(initialFeePanel.amountValue < initialFeePanel.amountMax, "expected amount to default below the whole surplus when possible");
   assert(initialFeePanel.rateText.includes("sat/vB"), `expected feerate readout, got ${initialFeePanel.rateText}`);
   assert(initialFeePanel.comparisonText.includes("overall"), `expected overall feerate comparison, got ${initialFeePanel.comparisonText}`);
-  assert(initialFeePanel.panelClass.includes("warning-confirm"), `expected mandatory confirmation warning class, got ${initialFeePanel.panelClass}`);
-  assert(!initialFeePanel.confirmHidden, "feerates above 1000 sat/vB should show mandatory confirmation");
-  assert(!initialFeePanel.confirmChecked, "mandatory confirmation should start unchecked");
-  assert(initialFeePanel.applyDisabled, "mandatory confirmation should disable apply until checked");
+  assert(!initialFeePanel.panelClass.includes("warning-confirm"), `expected relay-fee default not to require mandatory confirmation, got ${initialFeePanel.panelClass}`);
+  assert(initialFeePanel.confirmHidden, "relay-fee default should not require mandatory high-fee confirmation");
+  assert(!initialFeePanel.finalizeChecked, "fee finalization should be a separate opt-in checkbox");
+  assert(initialFeePanel.finalizePresent, "expected a fee finalization checkbox");
+  assert(!initialFeePanel.applyDisabled, "relay-fee default should be applyable without high-fee confirmation");
 
   const zeroFeePanel = await page.evaluate(async () => {
-    const slider = document.querySelector("#feeContributionSlider");
-    slider.value = "0";
-    slider.dispatchEvent(new Event("input", { bubbles: true }));
+    const amount = document.querySelector("#feeContributionAmount");
+    amount.value = "0";
+    amount.dispatchEvent(new Event("input", { bubbles: true }));
     await new Promise((resolve) => requestAnimationFrame(resolve));
     const panel = document.querySelector("#feeContributionPanel");
     const confirmRow = document.querySelector("#feeContributionConfirmRow");
