@@ -1,0 +1,70 @@
+[package]
+name = "transport-payjoin-dir"
+version.workspace = true
+edition = "2024"
+
+# transport-payjoin-dir — a BIP 77 payjoin-directory store-and-forward mailbox,
+# reached through an OHTTP relay, in the `transport-<name>` family.
+#
+# It moves OPAQUE bytes between two peers via a payjoin directory (a
+# store-and-forward mailbox server) where every request is OHTTP-encapsulated:
+# HPKE-sealed to the directory's gateway key and forwarded by a SEPARATE OHTTP
+# relay. Net effect: the relay sees the client IP but not the ciphertext or its
+# destination subdirectory; the directory sees the ciphertext-destination but
+# NEVER the client IP. So no signaling server, relay, or PWA origin ever learns
+# the client IP, and the directory only relays E2E-encrypted blobs it cannot
+# read. This crate reasons about mailbox addressing, framing, and poll cadence —
+# never about threat models; the metadata privacy is a property of OHTTP + the
+# directory, which this crate merely uses.
+#
+# Two roles for ONE mechanism:
+#   1. WebRTC signaling channel — carries the opaque SDP offer / answer and
+#      trickled ICE candidates between two peers BEFORE the DTLS/SCTP data
+#      channel exists (transport-str0m / transport-webrtc-rs consume this crate as their
+#      introduction/pairing channel). This is why the PWA webrtc opt-in and the
+#      e2e test MUST signal through here, never through a localhost relay.
+#   2. Async fallback transport — the design docs' browser-viable
+#      "payjoin directory via OHTTP" row: if a peer is offline, PSBT envelopes
+#      wait in the directory. Same mailbox, same AnonymousChannel.
+#
+# Layer 0 of the DAG (a leaf transport): depends ONLY on transport-core (for the
+# frozen channel contract + length-prefixed TLV framing) and its own upstream
+# SDKs. It is never depended on by other transport-<name> crates.
+#
+# wasm-compatible: the feature-on backend is authored so its deps
+# (rust-payjoin v2 / BIP-77 directory client + ohttp + bhttp + an http client)
+# resolve on wasm32-unknown-unknown for the PWA as well as on native for the
+# str0m peer. ALL of that usage sits behind the `payjoin-dir` cargo feature;
+# with the feature OFF the crate compiles as a skeleton with NO network deps.
+
+[features]
+# Off by default: the stock build is a network-free skeleton. Turning on
+# `payjoin-dir` pulls the rust-payjoin v2 BIP-77 directory client, the `ohttp`
+# OHTTP encapsulation crate (+ `bhttp` for HTTP-binary encoding, + hpke under
+# ohttp), and an http client, then lights up the real POST/GET-poll mailbox I/O
+# through the OHTTP relay.
+default = []
+payjoin-dir = []
+
+[dependencies]
+async-trait = "0.1.89"
+# TODO(ground-deps): defer the network SDKs until pinned to resolvable
+# crate/versions. Grounding probe (payjoin 0.25.0, ohttp 0.7.2, bhttp 0.7.2 —
+# all resolvable): the type imp.rs codes against,
+# `payjoin::v2::directory::DirectoryLinkedMailbox`, does NOT exist — payjoin
+# 0.25's `directory` module is just ShortId + ENCAPSULATED_MESSAGE_BYTES, and
+# its v2 API is session-typed payjoin protocol flows, not a generic mailbox
+# client — so wiring the deps needs a REWRITE of imp.rs (raw
+# ohttp-encapsulated POST/GET against the directory's mailbox endpoints, or a
+# payjoin-ffi-style client), not just pins. Until then — exactly like
+# transport-arti/nym/emissary/mdk — the `payjoin-dir` feature is declared but
+# empty and its deps stay UN-WIRED: the default skeleton (channel trait +
+# mailbox addressing + framing) compiles, and the feature-on network path in
+# the crate source stays authored-but-unverified.
+transport-core = { path = "../transport-core" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+futures = "0.3.32"
