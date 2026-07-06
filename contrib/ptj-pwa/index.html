@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- viewport-fit=cover for notch/safe-area on mobile (PWA is mobile-first). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Partial Transaction Joiner</title>
+
+    <!-- Installable, offline-first PWA shell. -->
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="theme-color" content="#0f1115" />
+
+    <!-- iOS home-screen install (Add to Home Screen). -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="ptj" />
+    <link rel="apple-touch-icon" href="icons/icon-192.png" />
+
+    <!-- Shared frontend styles (built copy of the demo-gui styles.css). -->
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!--
+      The PWA reuses the SHARED frontend (model.ts + app.ts) UNCHANGED in
+      behavior. The ONLY difference from webgui is the injected backend: the
+      shared boot resolves PTJ_BUILD="pwa" and injects WasmBackend (a FetchLike
+      whose "server" is concurrent-psbt-wasm running in this page). No server is contacted
+      for PSBT ops. See frontend-integration.md.
+
+      The full app markup (graph panel, menus, dozens of form ids) is OWNED BY
+      the shared-frontend component and is identical to
+      contrib/demo-gui/index.html. It is intentionally NOT duplicated here to
+      avoid forking the frontend three ways; the PWA build copies it in and only
+      swaps <head> (manifest/theme/SW) and the boot backend. This file documents
+      the PWA-specific head + the SW registration; the <main> body is injected by
+      the shared frontend build.
+    -->
+    <div id="app-root"><!-- shared frontend renders here --></div>
+
+    <!--
+      Shared frontend entry. The PWA build defines PTJ_BUILD="pwa" so the shared
+      boot injects WasmBackend as the FetchLike. app.js is the built shared
+      frontend; it imports the backend module resolved for this shell.
+    -->
+    <script type="module" src="dist/app.js"></script>
+
+    <!-- Service worker: caches the app shell for full offline use. -->
+    <script type="module">
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker.register("sw.js", { scope: "./" }).catch((err) => {
+            // Offline features degrade gracefully if SW registration fails.
+            console.warn("[ptj-pwa] service worker registration failed:", err);
+          });
+        });
+      }
+    </script>
+  </body>
+</html>

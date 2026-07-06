@@ -99,7 +99,9 @@ function wrap<T>(fn: () => T): T {
 
 export class WasmBackend implements Backend {
   private readonly m: PtjWasmModule;
-  private readonly transport?: BrowserTransport;
+  // `| undefined` (not `?`): the constructor assigns a possibly-undefined
+  // option, which exactOptionalPropertyTypes distinguishes from absence.
+  private readonly transport: BrowserTransport | undefined;
   private readonly defaultWaitMs: number;
 
   constructor(module: PtjWasmModule, options: WasmBackendOptions = {}) {
