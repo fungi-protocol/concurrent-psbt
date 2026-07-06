@@ -100,12 +100,27 @@ fn join_and_sort_commands_parse_to_config_types() {
         Some(&[0xab, 0xcd][..])
     );
 
-    let sync = Cli::try_parse_from(["ptj", "sync", "--state", "session.psbt", "a.psbt", "b.psbt"])
-        .unwrap();
+    let sync = Cli::try_parse_from([
+        "ptj",
+        "sync",
+        "--state",
+        "session.psbt",
+        "--dir",
+        "usb-a",
+        "--directory",
+        "usb-b",
+        "a.psbt",
+        "b.psbt",
+    ])
+    .unwrap();
     let Command::Sync(config) = sync.command else {
         panic!("expected sync command");
     };
     assert_eq!(config.state, PathBuf::from("session.psbt"));
+    assert_eq!(
+        config.directories,
+        vec![PathBuf::from("usb-a"), PathBuf::from("usb-b")]
+    );
     assert_eq!(
         config.files,
         vec![PathBuf::from("a.psbt"), PathBuf::from("b.psbt")]
@@ -127,8 +142,14 @@ fn typed_arguments_reject_malformed_values() {
         OrderingArg::from_str("deterministic").unwrap(),
         OrderingArg::Deterministic
     );
-    assert_eq!(OrderingArg::from_str("det").unwrap(), OrderingArg::Deterministic);
-    assert_eq!(OrderingArg::from_str("explicit").unwrap(), OrderingArg::Explicit);
+    assert_eq!(
+        OrderingArg::from_str("det").unwrap(),
+        OrderingArg::Deterministic
+    );
+    assert_eq!(
+        OrderingArg::from_str("explicit").unwrap(),
+        OrderingArg::Explicit
+    );
     assert!(OrderingArg::from_str("sideways").is_err());
     assert!(NetworkArg::from_str("liquid").is_err());
     assert!(HexSeed::from_str("abc").is_err());
@@ -168,23 +189,29 @@ fn create_emits_real_unordered_psbt_bytes() {
 
 #[test]
 fn create_deterministic_ordering_requires_seed() {
-    let error = ptj::run(
-        Cli::try_parse_from(["ptj", "create", "--ordering", "deterministic"]).unwrap(),
-    )
-    .unwrap_err();
+    let error =
+        ptj::run(Cli::try_parse_from(["ptj", "create", "--ordering", "deterministic"]).unwrap())
+            .unwrap_err();
 
-    assert!(error.to_string().contains("deterministic ordering requires --seed"));
+    assert!(
+        error
+            .to_string()
+            .contains("deterministic ordering requires --seed")
+    );
 }
 
 #[test]
 fn create_explicit_ordering_rejects_seed() {
     let error = ptj::run(
-        Cli::try_parse_from(["ptj", "create", "--ordering", "explicit", "--seed", "abcd"])
-            .unwrap(),
+        Cli::try_parse_from(["ptj", "create", "--ordering", "explicit", "--seed", "abcd"]).unwrap(),
     )
     .unwrap_err();
 
-    assert!(error.to_string().contains("explicit ordering does not use --seed"));
+    assert!(
+        error
+            .to_string()
+            .contains("explicit ordering does not use --seed")
+    );
 }
 
 #[test]
@@ -229,7 +256,11 @@ fn create_explicit_ordering_rejects_non_empty_psbts_until_sort_keys_are_supporte
         &format!("{TXID}:7"),
     ]);
 
-    assert!(error.to_string().contains("explicit ordering requires sort keys"));
+    assert!(
+        error
+            .to_string()
+            .contains("explicit ordering requires sort keys")
+    );
 }
 
 #[test]
@@ -394,7 +425,12 @@ fn sort_deterministic_mode_ignores_explicit_sort_keys() {
     let b = write_psbt(
         temp.path(),
         "b.psbt",
-        create_psbt("0000000000000000000000000000000000000000000000000000000000000002", 1, 2, 70_000),
+        create_psbt(
+            "0000000000000000000000000000000000000000000000000000000000000002",
+            1,
+            2,
+            70_000,
+        ),
     );
     let mut joined = run_to_psbt(["ptj", "join", path_str(&a), path_str(&b)]);
     assert_eq!(joined.global.sort_deterministic(), Some(0x01));
@@ -405,11 +441,14 @@ fn sort_deterministic_mode_ignores_explicit_sort_keys() {
     let first_amount = expected.outputs[0].amount;
 
     for input in &mut joined.inputs {
-        set_input_sort_key(input, if input.previous_txid == first_txid {
-            vec![0x02]
-        } else {
-            vec![0x01]
-        });
+        set_input_sort_key(
+            input,
+            if input.previous_txid == first_txid {
+                vec![0x02]
+            } else {
+                vec![0x01]
+            },
+        );
     }
     for output in &mut joined.outputs {
         output.set_sort_key(if output.amount == first_amount {
@@ -516,6 +555,90 @@ fn sync_creates_missing_state_from_inputs() {
     assert_eq!(synced.global.input_count, 2);
     assert_eq!(synced.global.output_count, 2);
     assert_eq!(psbt_bytes(&stored), psbt_bytes(&synced));
+}
+
+#[test]
+fn sync_joins_psbt_files_from_directories() {
+    let temp = tempfile::tempdir().unwrap();
+    let inbox = temp.path().join("usb-drop");
+    std::fs::create_dir(&inbox).unwrap();
+    std::fs::write(inbox.join("notes.txt"), "not a PSBT").unwrap();
+    write_psbt(&inbox, "b.psbt", create_psbt(TXID, 0, 1, 50_000));
+    write_psbt(
+        &inbox,
+        "a.psbt",
+        create_psbt(
+            "0000000000000000000000000000000000000000000000000000000000000002",
+            1,
+            2,
+            70_000,
+        ),
+    );
+    let state = temp.path().join("session.psbt");
+
+    let synced = run_to_psbt([
+        "ptj",
+        "sync",
+        "--state",
+        path_str(&state),
+        "--dir",
+        path_str(&inbox),
+    ]);
+    let stored = decode_psbt(&std::fs::read_to_string(&state).unwrap());
+
+    assert_eq!(synced.global.input_count, 2);
+    assert_eq!(synced.global.output_count, 2);
+    assert_eq!(psbt_bytes(&stored), psbt_bytes(&synced));
+}
+
+#[test]
+fn sync_waits_for_transient_state_lock() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = write_psbt(temp.path(), "session.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let incoming = write_psbt(
+        temp.path(),
+        "incoming.psbt",
+        create_psbt("0000000000000000000000000000000000000000000000000000000000000002", 1, 2, 70_000),
+    );
+    let lock = temp.path().join(".session.psbt.lock");
+    std::fs::write(&lock, "held by another sync").unwrap();
+    let releaser = {
+        let lock = lock.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::fs::remove_file(lock).unwrap();
+        })
+    };
+
+    let synced = run_to_psbt(["ptj", "sync", "--state", path_str(&state), path_str(&incoming)]);
+    releaser.join().unwrap();
+
+    assert_eq!(synced.global.input_count, 2);
+    assert_eq!(synced.global.output_count, 2);
+}
+
+#[test]
+fn sync_failed_join_preserves_state_and_releases_lock() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = write_psbt(temp.path(), "session.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let original_state = std::fs::read_to_string(&state).unwrap();
+    let malformed = temp.path().join("malformed.psbt");
+    std::fs::write(&malformed, "not a psbt").unwrap();
+
+    let error = run_error(["ptj", "sync", "--state", path_str(&state), path_str(&malformed)]);
+
+    assert!(error.to_string().contains(path_str(&malformed)));
+    assert_eq!(std::fs::read_to_string(&state).unwrap(), original_state);
+    assert!(!temp.path().join(".session.psbt.lock").exists());
+
+    let incoming = write_psbt(
+        temp.path(),
+        "incoming.psbt",
+        create_psbt("0000000000000000000000000000000000000000000000000000000000000002", 1, 2, 70_000),
+    );
+    let synced = run_to_psbt(["ptj", "sync", "--state", path_str(&state), path_str(&incoming)]);
+    assert_eq!(synced.global.input_count, 2);
+    assert_eq!(synced.global.output_count, 2);
 }
 
 #[test]

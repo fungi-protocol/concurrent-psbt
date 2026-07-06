@@ -111,6 +111,9 @@ pub struct SyncConfig {
     /// Local PSBT state file to converge
     #[arg(long)]
     pub state: PathBuf,
+    /// Directory of PSBT files to join into the state (repeatable, sorted by path)
+    #[arg(long = "dir", alias = "directory")]
+    pub directories: Vec<PathBuf>,
     /// Additional PSBT files to join into the state
     pub files: Vec<PathBuf>,
 }
