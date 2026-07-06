@@ -34,6 +34,8 @@ pub enum Command {
     MakeUnordered(MakeUnorderedConfig),
     /// Sort a PSBT into BIP 370 order
     Sort(SortConfig),
+    /// Join PSBTs into a local state file and print the converged state
+    Sync(SyncConfig),
     /// Serve the offline web GUI
     Webgui(WebguiConfig),
 }
@@ -99,6 +101,15 @@ pub struct SortConfig {
     pub seed: Option<HexSeed>,
     /// PSBT file to sort
     pub file: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct SyncConfig {
+    /// Local PSBT state file to converge
+    #[arg(long)]
+    pub state: PathBuf,
+    /// Additional PSBT files to join into the state
+    pub files: Vec<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]

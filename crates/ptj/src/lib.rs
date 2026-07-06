@@ -27,12 +27,16 @@ pub fn run_or_write(cli: cli::Cli) -> Result<Option<String>> {
 
 fn reject_destructive_output_alias(output: &std::path::Path, command: &cli::Command) -> Result<()> {
     match command {
-        cli::Command::Atomize(config) if same_existing_path(output, &config.file) => Err(Error::new(
-            "refusing to overwrite atomize input: atomize writes multiple PSBTs, so choose a distinct --output-file",
-        )),
-        cli::Command::ExportBip174(config) if same_existing_path(output, &config.file) => Err(Error::new(
-            "refusing to overwrite export-bip174 input: BIP 174 import is not implemented, so choose a distinct --output-file",
-        )),
+        cli::Command::Atomize(config) if same_existing_path(output, &config.file) => {
+            Err(Error::new(
+                "refusing to overwrite atomize input: atomize writes multiple PSBTs, so choose a distinct --output-file",
+            ))
+        }
+        cli::Command::ExportBip174(config) if same_existing_path(output, &config.file) => {
+            Err(Error::new(
+                "refusing to overwrite export-bip174 input: BIP 174 import is not implemented, so choose a distinct --output-file",
+            ))
+        }
         _ => Ok(()),
     }
 }
