@@ -70,6 +70,12 @@ fn join_and_sort_commands_parse_to_config_types() {
     };
     assert_eq!(config.file, PathBuf::from("ordered.psbt"));
 
+    let inspect = Cli::try_parse_from(["ptj", "inspect", "transaction.psbt"]).unwrap();
+    let Command::Inspect(config) = inspect.command else {
+        panic!("expected inspect command");
+    };
+    assert_eq!(config.file, PathBuf::from("transaction.psbt"));
+
     let sort = Cli::try_parse_from(["ptj", "sort", "--seed", "abcd", "joined.psbt"]).unwrap();
     let Command::Sort(config) = sort.command else {
         panic!("expected sort command");
@@ -116,6 +122,40 @@ fn create_emits_real_unordered_psbt_bytes() {
     assert_eq!(psbt.inputs[0].spent_output_index, 7);
     assert_eq!(psbt.outputs[0].amount, bitcoin::Amount::from_sat(123_456));
     assert!(psbt.outputs[0].has_unique_id());
+}
+
+#[test]
+fn inspect_reports_psbt_state_as_json() {
+    let temp = tempfile::tempdir().unwrap();
+    let psbt = write_psbt(temp.path(), "created.psbt", create_psbt(TXID, 7, 1, 123_456));
+
+    let inspected = inspect_json(&psbt);
+
+    assert_eq!(inspected["format"], "bip370");
+    assert_eq!(inspected["ordering"], "unordered");
+    assert_eq!(inspected["input_count"], 1);
+    assert_eq!(inspected["output_count"], 1);
+    assert_eq!(inspected["modifiability"]["inputs"], true);
+    assert_eq!(inspected["modifiability"]["outputs"], true);
+    assert_eq!(inspected["sort"]["mode"], "deterministic");
+    assert_eq!(inspected["sort"]["seed_hex"], "abcd");
+
+    let no_seed = write_psbt(
+        temp.path(),
+        "no-seed.psbt",
+        create_psbt_without_seed(TXID, 8, 2, 234_567),
+    );
+    let inspected = inspect_json(&no_seed);
+    assert_eq!(inspected["sort"]["mode"], "unset");
+    assert!(inspected["sort"]["seed_hex"].is_null());
+
+    let mut explicit = create_psbt_without_seed(TXID, 9, 3, 345_678);
+    explicit.global.set_sort_deterministic(0x00);
+    let explicit = write_psbt(temp.path(), "explicit.psbt", explicit);
+    assert_eq!(inspect_json(&explicit)["sort"]["mode"], "explicit");
+
+    let ordered = write_psbt(temp.path(), "ordered.psbt", sorted_psbt(TXID, 10, 4, 456_789));
+    assert_eq!(inspect_json(&ordered)["ordering"], "ordered");
 }
 
 #[test]
@@ -421,6 +461,19 @@ fn create_psbt(txid: &str, vout: u32, address_seed: u8, amount_sats: u64) -> psb
     ])
 }
 
+fn create_psbt_without_seed(txid: &str, vout: u32, address_seed: u8, amount_sats: u64) -> psbt_v2::v2::Psbt {
+    run_to_psbt([
+        "ptj",
+        "create",
+        "--network",
+        "regtest",
+        "--input",
+        &format!("{txid}:{vout}"),
+        "--output",
+        &format!("{}:{}", regtest_address(address_seed), btc_value(amount_sats)),
+    ])
+}
+
 fn sorted_psbt(txid: &str, vout: u32, address_seed: u8, amount_sats: u64) -> psbt_v2::v2::Psbt {
     let temp = tempfile::tempdir().unwrap();
     let unordered = write_psbt(
@@ -429,6 +482,10 @@ fn sorted_psbt(txid: &str, vout: u32, address_seed: u8, amount_sats: u64) -> psb
         create_psbt(txid, vout, address_seed, amount_sats),
     );
     run_to_psbt(["ptj", "sort", "--seed", "abcd", path_str(&unordered)])
+}
+
+fn inspect_json(path: &std::path::Path) -> serde_json::Value {
+    serde_json::from_str(&ptj::run(Cli::try_parse_from(["ptj", "inspect", path_str(path)]).unwrap()).unwrap()).unwrap()
 }
 
 fn write_psbt(dir: &std::path::Path, name: &str, psbt: psbt_v2::v2::Psbt) -> PathBuf {
