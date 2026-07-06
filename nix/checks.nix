@@ -273,6 +273,69 @@
           }
         );
 
+        # ---- webrtc-over-OHTTP e2e, stage 1: authored guard (cheap, mainline).
+        # Analog of demo-gui-webgui-assets: assert the e2e-oblivious harness +
+        # its gating exist and are well-formed WITHOUT running the network path.
+        # The greps are the anti-rot contract: the rust peer stays
+        # required-features-gated off the default target set; the deferred
+        # transport keeps its TODO(ground-deps) until a conscious promotion;
+        # and the anti-false-positive assertions (directory obliviousness +
+        # P2P-only data path) cannot be deleted without failing this check.
+        webrtc-e2e-authored =
+          pkgs.runCommand "webrtc-e2e-authored-${rev}"
+            {
+              inherit src;
+              testScripts = ../contrib/tests;
+            }
+            ''
+              # transport-str0m is GROUNDED (real str0m dep, feature-on compiles);
+              # transport-payjoin-dir is still deferred. If the deferral state
+              # changes, this check forces a conscious update.
+              grep -q 'str0m = { version' "$src/crates/transport-str0m/Cargo.toml"
+              grep -q 'ohttp' "$src/crates/transport-payjoin-dir/Cargo.toml"
+              grep -q 'payjoin-dir' "$src/crates/transport-payjoin-dir/Cargo.toml"
+              grep -q 'TO[D]O(ground-deps)' "$src/crates/transport-payjoin-dir/Cargo.toml"
+
+              # The rust peer is feature-gated OUT of the default target set
+              # (required-features drops the whole [[bin]] until `e2e-peer` is on).
+              grep -Eq 'required-features *= *\[[^]]*"e2e-peer"' "$src/crates/ptj-e2e-peer/Cargo.toml"
+
+              # The node harness + spec exist and PARSE (no rot). `node --check`
+              # is a syntax pass only: it executes nothing.
+              for f in ohttp-harness assertions webrtc-ohttp.spec; do
+                test -f "$src/contrib/demo-gui/test/e2e-oblivious/$f.mjs"
+                ${pkgs.nodejs}/bin/node --check "$src/contrib/demo-gui/test/e2e-oblivious/$f.mjs"
+              done
+              ${pkgs.bash}/bin/bash -n "$testScripts/webrtc-e2e-fixtures.sh"
+
+              # The spec asserts obliviousness AND the P2P data path: fail if
+              # someone deletes the A2/A3 assertions (which is exactly how a
+              # false positive would sneak back).
+              grep -q 'assertDirectoryOblivious' "$src/contrib/demo-gui/test/e2e-oblivious/assertions.mjs"
+              grep -q 'assertDataPathIsP2P' "$src/contrib/demo-gui/test/e2e-oblivious/assertions.mjs"
+              grep -q 'assertDirectoryOblivious' "$src/contrib/demo-gui/test/e2e-oblivious/webrtc-ohttp.spec.mjs"
+              mkdir -p "$out"
+            '';
+
+        # ---- webrtc-over-OHTTP e2e, stage 2: the live run — DEFERRED STUB.
+        # Deliberately FAILS (never fakes green) until its prerequisites exist:
+        # transport-payjoin-dir's network deps grounded (payjoin 0.25 has no
+        # directory-mailbox client; imp.rs needs a rewrite), ptj-e2e-peer
+        # buildable with --features e2e-peer, and payjoin-directory +
+        # ohttp-relay binaries in the pinned nixpkgs (mocking the oblivious
+        # layer would be exactly the false positive A3 guards against). Lives
+        # ONLY in the `frontier` aggregate, so the mainline aggregates
+        # (quick/lint/nightly) never see it. The full recipe: the staged
+        # harness in contrib/demo-gui/test/e2e-oblivious/ (see its README.md
+        # for the manual run) mirrors demo-gui-playwright's store-Chromium
+        # plumbing + the sneakernet checks' bitcoind fixtures.
+        webrtc-e2e-live = pkgs.runCommand "webrtc-e2e-live-${rev}" { } ''
+          echo "webrtc-e2e-live: DEFERRED — see contrib/demo-gui/test/e2e-oblivious/README.md" >&2
+          echo "prereqs: grounded transport-payjoin-dir deps; ptj-e2e-peer --features e2e-peer;" >&2
+          echo "payjoin-directory + ohttp-relay packages; the built PWA wasm bundle." >&2
+          exit 1
+        '';
+
         no-todo-comments = pkgs.runCommand "no-todo-comments-${rev}" { inherit src; } ''
           if grep -rn --exclude-dir=contrib 'TO[D]O\|FIX[M]E' $src/ 2>/dev/null; then
             echo "FAIL: unresolved work-item markers found"
@@ -344,6 +407,7 @@
             demo-gui
             demo-gui-webgui-assets
             demo-gui-playwright
+            webrtc-e2e-authored
           ];
         };
         lint = pkgs.symlinkJoin {
@@ -357,11 +421,30 @@
             validate-commits-repository-probes
             unused-lints
             no-todo-comments
+            webrtc-e2e-authored
           ];
         };
         nightly = pkgs.symlinkJoin {
           name = "nightly-checks-${rev}";
-          paths = builtins.attrValues (removeAttrs checks [ "mutants" ]);
+          paths = builtins.attrValues (
+            removeAttrs checks [
+              "mutants"
+              # The deferred live e2e stub fails by design until its deps
+              # ground; it rides ONLY the frontier aggregate. Delete this line
+              # to promote it once it runs.
+              "webrtc-e2e-live"
+            ]
+          );
+        };
+        # The frontier aggregate: the browser-webrtc<->rust-str0m-over-OHTTP
+        # e2e, kept OFF quick/lint/nightly so its deferred live stage can never
+        # break the mainline. Stage 1 is green; stage 2 fails until grounded.
+        frontier = pkgs.symlinkJoin {
+          name = "frontier-checks-${rev}";
+          paths = with checks; [
+            webrtc-e2e-authored
+            webrtc-e2e-live
+          ];
         };
       };
     };
