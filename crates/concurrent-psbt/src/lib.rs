@@ -35,6 +35,14 @@ pub use psbt::input;
 pub use psbt::output;
 pub use psbt::tx;
 
+// Pure-logic layer over the existing PSBT_GLOBAL_PAYMENT (0x20) and
+// PSBT_GLOBAL_CONFIRMATION (0x21) fields. These define NO new PSBT field; they
+// read the grow-only payment/confirmation sets out of a Global and sequence
+// join → confirmation → export.
+pub mod graph;
+pub mod readiness;
+pub mod session;
+
 /// Proprietary field prefix for all concurrent-psbt extensions.
 ///
 /// All fields defined by this crate use this prefix in their
