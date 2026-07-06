@@ -1,0 +1,34 @@
+[package]
+name = "ptj-tauri"
+version.workspace = true
+edition = "2024"
+
+# ptj-tauri: WIP desktop shell (Tauri) around the ptj webgui — the third
+# frontend surface (webgui/tui/tauri). Native window, no browser: a wry
+# webview pointed at the embedded webgui asset server that `ptj webgui`
+# already serves. This crate wraps that surface; it never reimplements it.
+#
+# Deferred-deps posture (mirrors transport-arti/nym/emissary/mdk): the `tauri`
+# feature is declared but EMPTY and the heavy deps are stripped, so the
+# workspace resolves and the default build stays clean without pulling the
+# tauri toolchain. With the feature off (the only state today) the binary is a
+# stub that reports itself as a scaffold.
+
+[[bin]]
+name = "ptj-tauri"
+path = "src/main.rs"
+
+[features]
+# Off by default: the stock workspace build must not pull the (heavy) tauri
+# toolchain.
+default = []
+# TODO(ground-deps): defer the desktop SDK until pinned to resolvable
+# crates/versions (tauri 2.x + tauri-build, or a bare wry + tao pairing) via
+# `cargo add --dry-run`. The feature is declared but empty so the skeleton
+# compiles; the real webview shell stays unwritten until the deps land.
+tauri = []
+
+[dependencies]
+
+[lints]
+workspace = true
