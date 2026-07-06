@@ -29,6 +29,7 @@
         ./nix/package.nix
         ./nix/toolchain.nix
         ./nix/treefmt.nix
+        ./nix/wasm.nix
       ];
     };
 }
