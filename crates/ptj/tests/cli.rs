@@ -1,3 +1,4 @@
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -79,6 +80,14 @@ fn join_and_sort_commands_parse_to_config_types() {
         config.seed.as_ref().map(HexSeed::as_bytes),
         Some(&[0xab, 0xcd][..])
     );
+
+    let webgui =
+        Cli::try_parse_from(["ptj", "webgui", "--host", "127.0.0.1", "--port", "8035"]).unwrap();
+    let Command::Webgui(config) = webgui.command else {
+        panic!("expected webgui command");
+    };
+    assert_eq!(config.host, IpAddr::V4(Ipv4Addr::LOCALHOST));
+    assert_eq!(config.port, 8035);
 }
 
 #[test]
@@ -384,6 +393,27 @@ fn run_or_write_can_replace_an_input_file_after_joining() {
     let updated = decode_psbt(&std::fs::read_to_string(&target).unwrap());
     assert_eq!(updated.global.input_count, 2);
     assert_eq!(updated.global.output_count, 2);
+}
+
+#[test]
+fn webgui_embeds_static_offline_assets() {
+    let index = ptj::webgui::asset("/").unwrap();
+    assert_eq!(index.content_type, "text/html; charset=utf-8");
+    assert!(
+        std::str::from_utf8(index.body)
+            .unwrap()
+            .contains("Partial Transaction Joiner")
+    );
+
+    let script = ptj::webgui::asset("/dist/app.js?v=cache-busted").unwrap();
+    assert_eq!(script.content_type, "text/javascript; charset=utf-8");
+    assert!(
+        std::str::from_utf8(script.body)
+            .unwrap()
+            .contains("createInitialState")
+    );
+
+    assert!(ptj::webgui::asset("/missing.js").is_none());
 }
 
 fn run_to_psbt<const N: usize>(args: [&str; N]) -> psbt_v2::v2::Psbt {
