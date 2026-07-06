@@ -131,6 +131,7 @@
               tsc -p tsconfig.json
               node --test \
                 --experimental-test-coverage \
+                --test-coverage-include='dist/backend.js' \
                 --test-coverage-include='dist/model.js' \
                 --test-coverage-lines=100 \
                 --test-coverage-branches=100 \
@@ -213,6 +214,14 @@
             installPhase = "mkdir -p $out";
           }
         );
+        demo-gui-webgui-assets = pkgs.runCommand "demo-gui-webgui-assets-${rev}" { inherit src; } ''
+          test -f "$src/contrib/demo-gui/dist/app.js"
+          test -f "$src/contrib/demo-gui/dist/backend.js"
+          grep -q 'backend\.js' "$src/contrib/demo-gui/dist/app.js"
+          grep -q 'const BACKEND_JS' "$src/crates/ptj/src/webgui.rs"
+          grep -q '"/dist/backend\.js"' "$src/crates/ptj/src/webgui.rs"
+          mkdir -p "$out"
+        '';
 
         clippy = toolchains.nightly.cargoClippy (
           checkArgs
@@ -283,6 +292,7 @@
             tests-nightly-dev
             clippy
             demo-gui
+            demo-gui-webgui-assets
             demo-gui-playwright
           ];
         };
@@ -292,6 +302,7 @@
             cargo-sort
             clippy
             demo-gui
+            demo-gui-webgui-assets
             doc
             validate-commits-repository-probes
             unused-lints

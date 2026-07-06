@@ -119,11 +119,17 @@ pub(crate) fn read_psbt(path: &Path) -> Result<Psbt> {
     parse_psbt_bytes(&path.display().to_string(), &raw)
 }
 
+pub(crate) fn read_bip174(path: &Path) -> Result<bip174::Psbt> {
+    let raw =
+        fs::read(path).map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
+    parse_bip174_bytes(&path.display().to_string(), &raw)
+}
+
 pub(crate) fn parse_psbt_bytes(label: &str, raw: &[u8]) -> Result<Psbt> {
     let bytes = psbt_bytes(label, raw.to_vec())?;
     if bip174::Psbt::deserialize(&bytes).is_ok() {
         return Err(Error::new(format!(
-            "{label} is a BIP 174 PSBT; importing or upgrading BIP 174 inputs is not implemented yet"
+            "{label} is a BIP 174 PSBT; run `ptj import-bip174` before using BIP 370 operations"
         )));
     }
 
@@ -134,6 +140,12 @@ pub(crate) fn parse_psbt_bytes(label: &str, raw: &[u8]) -> Result<Psbt> {
             "parsing {label}: unsupported or malformed PSBT"
         ))),
     }
+}
+
+pub(crate) fn parse_bip174_bytes(label: &str, raw: &[u8]) -> Result<bip174::Psbt> {
+    let bytes = psbt_bytes(label, raw.to_vec())?;
+    bip174::Psbt::deserialize(&bytes)
+        .map_err(|error| Error::new(format!("parsing BIP 174 {label}: {error}")))
 }
 
 fn psbt_bytes(label: &str, raw: Vec<u8>) -> Result<Vec<u8>> {
