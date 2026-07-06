@@ -1,0 +1,16 @@
+name: Coverage
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Build coverage report
+        run: nix build --no-update-lock-file '.#checks.x86_64-linux.coverage' --out-link result-coverage
+      - name: Convert lcov to HTML
+        run: nix shell nixpkgs#lcov -c genhtml result-coverage/coverage.lcov -o coverage-html
