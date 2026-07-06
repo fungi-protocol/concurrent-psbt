@@ -43,6 +43,7 @@ pub(crate) fn run_with_stdin(command: Command, stdin: Option<&[u8]>) -> Result<S
         Command::Payments(config) => negotiation::run_payments(config, stdin),
         Command::Sort(config) => sort::run(config, stdin).map(|psbt| crate::io::encode_psbt(&psbt)),
         Command::Sync(config) => sync::run(config, stdin).map(|psbt| crate::io::encode_psbt(&psbt)),
+        #[cfg(feature = "webgui")]
         Command::Webgui(_) => Err(crate::Error::new(
             "webgui is an interactive command; call ptj::webgui::serve",
         )),

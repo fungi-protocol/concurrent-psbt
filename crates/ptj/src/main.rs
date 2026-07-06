@@ -2,7 +2,9 @@ use std::process;
 use std::io::Read as _;
 
 use clap::Parser;
-use ptj::cli::{Cli, Command};
+use ptj::cli::Cli;
+#[cfg(feature = "webgui")]
+use ptj::cli::Command;
 
 fn main() {
     let cli = Cli::parse();
@@ -14,6 +16,7 @@ fn main() {
         }
     };
     let result = match cli.command.clone() {
+        #[cfg(feature = "webgui")]
         Command::Webgui(config) => {
             if cli.output.is_some() {
                 Err(ptj::Error::new("webgui does not write PSBT output"))

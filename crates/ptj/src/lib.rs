@@ -1,6 +1,7 @@
 use cli::OutputFileFormat;
 
 pub mod cli;
+#[cfg(feature = "webgui")]
 pub mod webgui;
 
 mod commands;
