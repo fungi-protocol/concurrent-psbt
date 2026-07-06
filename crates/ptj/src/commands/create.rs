@@ -7,6 +7,10 @@ use crate::cli::CreateConfig;
 use crate::{Error, Result};
 
 pub(super) fn run(config: CreateConfig) -> Result<Psbt> {
+    create_psbt(config)
+}
+
+pub(crate) fn create_psbt(config: CreateConfig) -> Result<Psbt> {
     let mut constructor = Creator::new().build();
 
     for input in config.inputs {

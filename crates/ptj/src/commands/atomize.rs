@@ -6,17 +6,22 @@ use crate::cli::AtomizeConfig;
 use crate::{Error, Result, io};
 
 pub(super) fn run(config: AtomizeConfig) -> Result<String> {
-    let mut psbt = io::read_psbt(&config.file)?;
-    psbt.global.set_unordered();
-    let psbt = dynamic::Constructor::try_from_psbt(psbt)
-        .map(dynamic::Constructor::into_psbt)
+    let psbt = io::read_psbt(&config.file)?;
+    let atoms = atomize_psbt(psbt)
         .map_err(|error| Error::new(format!("{}: {error}", config.file.display())))?;
-    let atoms = atomize(psbt)?;
     Ok(atoms
         .iter()
         .map(io::encode_psbt)
         .collect::<Vec<_>>()
         .join("\n"))
+}
+
+pub(crate) fn atomize_psbt(mut psbt: Psbt) -> Result<Vec<Psbt>> {
+    psbt.global.set_unordered();
+    let psbt = dynamic::Constructor::try_from_psbt(psbt)
+        .map(dynamic::Constructor::into_psbt)
+        .map_err(|error| Error::new(error.to_string()))?;
+    atomize(psbt)
 }
 
 fn atomize(psbt: Psbt) -> Result<Vec<Psbt>> {

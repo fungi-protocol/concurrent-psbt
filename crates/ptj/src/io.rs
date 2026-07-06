@@ -126,7 +126,3 @@ fn psbt_bytes(label: &str, raw: Vec<u8>) -> Result<Vec<u8>> {
         .decode(text.trim())
         .map_err(|error| Error::new(format!("decoding base64 {label}: {error}")))
 }
-
-pub(crate) fn wrap_constructor(constructor: dynamic::Constructor) -> dynamic::ResultConstructor {
-    dynamic::ResultConstructor::wrap(constructor)
-}
