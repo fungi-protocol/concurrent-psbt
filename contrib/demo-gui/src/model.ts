@@ -312,6 +312,10 @@ export interface DescriptorFeeSignal {
   canFinalizeExplicitFee: boolean;
 }
 
+export interface DescriptorFeeFinalizeOptions {
+  feeFinalized?: boolean;
+}
+
 export type FeeWarningLevel = "none" | "yellow" | "red" | "confirm";
 
 export interface DescriptorFeeContributionPlan {
@@ -1129,10 +1133,10 @@ export function accountingDeltaPresentation(section: BalanceSheetTotalRow | Disp
       totalSats,
       explicitFeeSats: explicitFee,
       implicitFeeSats: implicitFee,
-      label: explicitFee > 0 ? "accounted / surplus" : "surplus",
-      separator: explicitFee > 0 ? " / " : null,
-      amountA: explicitFee > 0 ? explicitFee : totalSats,
-      amountB: explicitFee > 0 ? totalSats : null,
+      label: "balance:",
+      separator: null,
+      amountA: totalSats,
+      amountB: null,
     };
   }
   if (kind === "deficit") {
@@ -1144,10 +1148,10 @@ export function accountingDeltaPresentation(section: BalanceSheetTotalRow | Disp
       totalSats,
       explicitFeeSats: explicitFee,
       implicitFeeSats: implicitFee,
-      label: explicitFee > 0 ? "deficit + accounted" : "deficit",
-      separator: explicitFee > 0 ? " + " : null,
-      amountA: totalSats,
-      amountB: explicitFee > 0 ? explicitFee : null,
+      label: "balance:",
+      separator: null,
+      amountA: -totalSats,
+      amountB: null,
     };
   }
   return {
@@ -1174,6 +1178,7 @@ export function balanceSheetFeeSignal(
   averageFeeRateSatsPerVbyte: number,
 ): DescriptorFeeSignal {
   const estimatedVbytes = section.estimatedVbytes;
+  const feeFinalized = "inputs" in section && section.inputs.rows.some((row) => row.feeFinalized === true);
   return {
     descriptorId: section.descriptorId,
     descriptorLabel: section.label,
@@ -1185,6 +1190,7 @@ export function balanceSheetFeeSignal(
     averageFeeRateSatsPerVbyte,
     canFinalizeExplicitFee: Boolean(section.descriptorId) &&
       section.descriptorMine === true &&
+      !feeFinalized &&
       section.implicitFeeSats > 0 &&
       "inputs" in section &&
       section.inputs.rows.length > 0,
@@ -1198,10 +1204,18 @@ export function descriptorFeeSignal(payload: Payload, descriptorId: string): Des
   return balanceSheetFeeSignal(section, display.whole.fee.total / Math.max(1, display.estimatedVbytes));
 }
 
-export function descriptorFeeContributionPlan(signal: DescriptorFeeSignal | null, selectedSats: number): DescriptorFeeContributionPlan | null {
+export function defaultFeeContributionSats(signal: DescriptorFeeSignal | null): number {
+  if (!signal) return 0;
+  const availableSats = Math.max(0, signal.implicitFeeSats);
+  if (availableSats === 0) return 0;
+  const relayFeeSats = Math.max(1, Math.ceil(Math.max(0, signal.estimatedVbytes)));
+  return Math.min(availableSats, relayFeeSats);
+}
+
+export function descriptorFeeContributionPlan(signal: DescriptorFeeSignal | null, selectedSats?: number): DescriptorFeeContributionPlan | null {
   if (!signal) return null;
   const availableSats = Math.max(0, signal.implicitFeeSats);
-  const selected = clampFeeContribution(selectedSats, availableSats);
+  const selected = clampFeeContribution(selectedSats ?? defaultFeeContributionSats(signal), availableSats);
   const feeRateSatsPerVbyte = selected / Math.max(1, signal.estimatedVbytes);
   const relativeFeeRateRatio = relativeFeeRate(feeRateSatsPerVbyte, signal.averageFeeRateSatsPerVbyte);
   const absoluteWarningLevel = feeRateWarningLevel(feeRateSatsPerVbyte);
@@ -1232,7 +1246,7 @@ function clampFeeContribution(value: number, maxValue: number): number {
 
 function relativeFeeRate(feeRate: number, averageFeeRate: number): number {
   if (averageFeeRate > 0) return feeRate / averageFeeRate;
-  return feeRate > 0 ? Number.POSITIVE_INFINITY : 0;
+  return 0;
 }
 
 function feeRateWarningLevel(feeRate: number): FeeWarningLevel {
@@ -1255,7 +1269,12 @@ function maxFeeWarningLevel(left: FeeWarningLevel, right: FeeWarningLevel): FeeW
   return FEE_WARNING_ORDER.indexOf(left) >= FEE_WARNING_ORDER.indexOf(right) ? left : right;
 }
 
-export function finalizeDescriptorExplicitFee(payload: Payload, descriptorId: string, amountSats?: number): Payload {
+export function finalizeDescriptorExplicitFee(
+  payload: Payload,
+  descriptorId: string,
+  amountSats?: number,
+  options: DescriptorFeeFinalizeOptions = {},
+): Payload {
   const display = unorderedPsbtDisplay(payload);
   const section = display.subtransactions.find((candidate) => candidate.descriptorId === descriptorId);
   const signal = section ? descriptorFeeSignal(payload, descriptorId) : null;
@@ -1264,7 +1283,11 @@ export function finalizeDescriptorExplicitFee(payload: Payload, descriptorId: st
   const targetInputId = section.inputs.rows[0].id;
   return {
     inputs: payload.inputs.map((input) => input.id === targetInputId
-      ? { ...input, explicitFeeSats: Number(input.explicitFeeSats || 0) + plan!.selectedSats }
+      ? {
+          ...input,
+          explicitFeeSats: Number(input.explicitFeeSats || 0) + plan!.selectedSats,
+          ...(options.feeFinalized === true ? { feeFinalized: true } : {}),
+        }
       : { ...input }),
     outputs: payload.outputs.map((output) => ({ ...output })),
     descriptors: (payload.descriptors || []).map((descriptor) => ({ ...descriptor })),
