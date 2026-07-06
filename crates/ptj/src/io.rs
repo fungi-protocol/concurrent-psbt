@@ -1,6 +1,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use concurrent_psbt::roles::constructor::dynamic;
 use psbt_v2::v0::bitcoin as bip174;
@@ -61,11 +62,7 @@ pub(crate) fn write_text_atomic(path: &Path, text: &str) -> Result<()> {
 
 pub(crate) fn with_file_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
     let lock_path = lock_path(path)?;
-    let mut lock = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&lock_path)
-        .map_err(|error| Error::new(format!("locking {}: {error}", path.display())))?;
+    let mut lock = create_lock_file(path, &lock_path)?;
     writeln!(lock, "pid={}", std::process::id())
         .map_err(|error| Error::new(format!("writing {}: {error}", lock_path.display())))?;
     lock.sync_all()
@@ -78,6 +75,30 @@ pub(crate) fn with_file_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> R
         (Ok(value), Ok(())) => Ok(value),
         (Ok(_), Err(error)) => Err(Error::new(format!("unlocking {}: {error}", path.display()))),
         (Err(error), _) => Err(error),
+    }
+}
+
+fn create_lock_file(path: &Path, lock_path: &Path) -> Result<File> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(lock_path)
+        {
+            Ok(file) => return Ok(file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if Instant::now() >= deadline {
+                    return Err(Error::new(format!(
+                        "locking {}: timed out waiting for {}",
+                        path.display(),
+                        lock_path.display()
+                    )));
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(Error::new(format!("locking {}: {error}", path.display()))),
+        }
     }
 }
 
