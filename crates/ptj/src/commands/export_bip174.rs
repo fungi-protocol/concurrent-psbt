@@ -10,8 +10,11 @@ use crate::{Error, Result, io};
 
 pub(super) fn run(config: ExportBip174Config) -> Result<String> {
     let psbt = io::read_psbt(&config.file)?;
-    let bip174 = to_bip174(psbt)?;
-    Ok(bip174.to_string())
+    export_bip174_psbt(psbt)
+}
+
+pub(crate) fn export_bip174_psbt(psbt: Psbt) -> Result<String> {
+    Ok(to_bip174(psbt)?.to_string())
 }
 
 fn to_bip174(psbt: Psbt) -> Result<bip174::Psbt> {
