@@ -4378,6 +4378,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ptj-e2e-peer"
+version = "0.1.0"
+dependencies = [
+ "psbt-v2",
+ "transport-core",
+ "transport-payjoin-dir",
+ "transport-str0m",
+]
+
+[[package]]
 name = "ptj-tauri"
 version = "0.1.0"
 
