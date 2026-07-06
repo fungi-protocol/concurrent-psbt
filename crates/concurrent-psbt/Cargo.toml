@@ -4,9 +4,16 @@ version.workspace = true
 edition = "2024"
 
 [features]
-default = ["unit-tests", "prop-tests"]
+default = ["unit-tests", "prop-tests", "removal"]
 unit-tests = []
 prop-tests = []
+# Input/output removal (2P-set tombstones). Default-on per spec: with the
+# feature ON the live-set projection prunes tombstoned elements; with it OFF the
+# projection is the identity and `reject_if_removal_disabled` refuses
+# removal-signaling PSBTs (fail-safe).
+removal = []
+# CRDT bundle: removal tombstones + fee termination signal.
+psbt-crdt = ["removal"]
 
 [dependencies]
 bitcoin = "0.32"
