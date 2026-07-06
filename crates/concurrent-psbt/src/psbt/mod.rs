@@ -4,6 +4,7 @@ mod values;
 
 pub mod global;
 pub mod negotiation;
+pub mod fee;
 pub mod input;
 mod input_set;
 pub mod output;
