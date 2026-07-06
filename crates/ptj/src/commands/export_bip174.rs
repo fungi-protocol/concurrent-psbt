@@ -8,8 +8,8 @@ use psbt_v2::v2::Psbt;
 use crate::cli::ExportBip174Config;
 use crate::{Error, Result, io};
 
-pub(super) fn run(config: ExportBip174Config) -> Result<String> {
-    let psbt = io::read_psbt(&config.file)?;
+pub(super) fn run(config: ExportBip174Config, stdin: Option<&[u8]>) -> Result<String> {
+    let psbt = io::read_psbt_source(&config.file, stdin)?;
     export_bip174_psbt(psbt)
 }
 

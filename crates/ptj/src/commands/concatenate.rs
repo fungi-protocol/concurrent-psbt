@@ -4,11 +4,11 @@ use psbt_v2::v2::{Global, Psbt};
 use crate::cli::ConcatenateConfig;
 use crate::{Error, Result, io};
 
-pub(super) fn run(config: ConcatenateConfig) -> Result<Psbt> {
+pub(super) fn run(config: ConcatenateConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
     let psbts = config
         .files
         .into_iter()
-        .map(|path| io::read_psbt(&path).map(|psbt| (path.display().to_string(), psbt)))
+        .map(|path| io::read_psbt_source(&path, stdin).map(|psbt| (io::source_label(&path), psbt)))
         .collect::<Result<Vec<_>>>()?;
     concatenate_psbts(psbts)
 }

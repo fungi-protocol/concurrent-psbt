@@ -6,8 +6,8 @@ use crate::Result;
 use crate::cli::InspectConfig;
 use crate::io;
 
-pub(super) fn run(config: InspectConfig) -> Result<String> {
-    let psbt = io::read_psbt(&config.file)?;
+pub(super) fn run(config: InspectConfig, stdin: Option<&[u8]>) -> Result<String> {
+    let psbt = io::read_psbt_source(&config.file, stdin)?;
     Ok(inspect_psbt(&psbt).to_string())
 }
 

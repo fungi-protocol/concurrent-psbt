@@ -15,6 +15,16 @@ pub(crate) fn read_modifiable(path: &Path) -> Result<dynamic::Constructor> {
         .map_err(|error| Error::new(format!("{}: {error}", path.display())))
 }
 
+pub(crate) fn read_modifiable_source(
+    path: &Path,
+    stdin: Option<&[u8]>,
+) -> Result<dynamic::Constructor> {
+    let psbt = read_psbt_source(path, stdin)?;
+    let label = source_label(path);
+    dynamic::Constructor::try_from_psbt(psbt)
+        .map_err(|error| Error::new(format!("{label}: {error}")))
+}
+
 pub(crate) fn encode_psbt(psbt: &Psbt) -> String {
     use psbt_v2::bitcoin::base64::prelude::{BASE64_STANDARD, Engine as _};
     let bytes = Psbt::serialize(psbt);
@@ -22,6 +32,17 @@ pub(crate) fn encode_psbt(psbt: &Psbt) -> String {
 }
 
 pub(crate) fn write_text_atomic(path: &Path, text: &str) -> Result<()> {
+    let mut bytes = Vec::with_capacity(text.len() + 1);
+    bytes.extend_from_slice(text.as_bytes());
+    bytes.push(b'\n');
+    write_bytes_atomic(path, &bytes)
+}
+
+pub(crate) fn write_binary_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_bytes_atomic(path, bytes)
+}
+
+fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -41,8 +62,7 @@ pub(crate) fn write_text_atomic(path: &Path, text: &str) -> Result<()> {
             .write(true)
             .create_new(true)
             .open(&temp_path)?;
-        file.write_all(text.as_bytes())?;
-        file.write_all(b"\n")?;
+        file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
         fs::rename(&temp_path, path)?;
@@ -119,11 +139,48 @@ pub(crate) fn read_psbt(path: &Path) -> Result<Psbt> {
     parse_psbt_bytes(&path.display().to_string(), &raw)
 }
 
+pub(crate) fn read_psbt_source(path: &Path, stdin: Option<&[u8]>) -> Result<Psbt> {
+    if is_stdin_path(path) {
+        let bytes = stdin
+            .ok_or_else(|| Error::new("stdin PSBT source requires stdin bytes from the runner"))?;
+        return parse_psbt_bytes("stdin", bytes);
+    }
+    read_psbt(path)
+}
+
+pub(crate) fn read_bip174(path: &Path) -> Result<bip174::Psbt> {
+    let raw = fs::read(path)
+        .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
+    parse_bip174_bytes(&path.display().to_string(), &raw)
+}
+
+pub(crate) fn read_bip174_source(path: &Path, stdin: Option<&[u8]>) -> Result<bip174::Psbt> {
+    if is_stdin_path(path) {
+        let bytes = stdin.ok_or_else(|| {
+            Error::new("stdin BIP 174 source requires stdin bytes from the runner")
+        })?;
+        return parse_bip174_bytes("stdin", bytes);
+    }
+    read_bip174(path)
+}
+
+pub(crate) fn is_stdin_path(path: &Path) -> bool {
+    path == Path::new("-")
+}
+
+pub(crate) fn source_label(path: &Path) -> String {
+    if is_stdin_path(path) {
+        "stdin".to_string()
+    } else {
+        path.display().to_string()
+    }
+}
+
 pub(crate) fn parse_psbt_bytes(label: &str, raw: &[u8]) -> Result<Psbt> {
     let bytes = psbt_bytes(label, raw.to_vec())?;
     if bip174::Psbt::deserialize(&bytes).is_ok() {
         return Err(Error::new(format!(
-            "{label} is a BIP 174 PSBT; importing or upgrading BIP 174 inputs is not implemented yet"
+            "{label} is a BIP 174 PSBT; run `ptj import-bip174` before using BIP 370 operations"
         )));
     }
 
@@ -134,6 +191,12 @@ pub(crate) fn parse_psbt_bytes(label: &str, raw: &[u8]) -> Result<Psbt> {
             "parsing {label}: unsupported or malformed PSBT"
         ))),
     }
+}
+
+fn parse_bip174_bytes(label: &str, raw: &[u8]) -> Result<bip174::Psbt> {
+    let bytes = psbt_bytes(label, raw.to_vec())?;
+    bip174::Psbt::deserialize(&bytes)
+        .map_err(|error| Error::new(format!("parsing BIP 174 {label}: {error}")))
 }
 
 fn psbt_bytes(label: &str, raw: Vec<u8>) -> Result<Vec<u8>> {

@@ -6,8 +6,8 @@ use psbt_v2::v2::Psbt;
 use crate::cli::SortConfig;
 use crate::{Result, io};
 
-pub(super) fn run(config: SortConfig) -> Result<Psbt> {
-    let constructor = io::read_modifiable(&config.file)?;
+pub(super) fn run(config: SortConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
+    let constructor = io::read_modifiable_source(&config.file, stdin)?;
     sort_psbt(
         constructor.into_inner(),
         config.seed.map(crate::cli::HexSeed::into_bytes),
