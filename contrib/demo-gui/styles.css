@@ -803,16 +803,21 @@ h2 {
   font-size: 9px;
 }
 
-.psbt-explicit-fee-subtotal-note {
-  fill: var(--muted);
-  font-size: 7px;
-  font-weight: 700;
-}
-
 .psbt-balance-delta-label {
   fill: var(--ink);
   font-size: 8px;
   font-weight: 800;
+}
+
+.psbt-declared-fee {
+  fill: var(--ink);
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.psbt-declared-fee-label {
+  fill: var(--muted);
+  font-weight: 700;
 }
 
 .node .psbt-balance-delta-label {
@@ -1484,16 +1489,16 @@ h2 {
   font-weight: 800;
 }
 
-.fee-finalize-button {
+.fee-add-button {
   cursor: pointer;
 }
 
-.fee-finalize-button rect {
+.fee-add-button rect {
   fill: #fff;
   stroke: var(--accent);
 }
 
-.fee-finalize-button text {
+.fee-add-button text {
   fill: var(--accent);
   font-size: 9px;
   font-weight: 800;
