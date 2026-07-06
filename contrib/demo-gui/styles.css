@@ -1034,7 +1034,6 @@ h2 {
 }
 
 .node .amount-scale {
-  fill: var(--ink);
   opacity: 0.42;
   font-weight: 500;
 }

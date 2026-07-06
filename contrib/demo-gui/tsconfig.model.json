@@ -4,5 +4,5 @@
     "noEmit": true,
     "strict": true
   },
-  "include": ["src/model.ts"]
+  "include": ["src/backend.ts", "src/model.ts"]
 }
