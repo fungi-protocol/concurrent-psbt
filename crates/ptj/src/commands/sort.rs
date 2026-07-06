@@ -1,5 +1,5 @@
 use concurrent_psbt::global::GlobalSortExt;
-use concurrent_psbt::sorter::{Sorter, Unset};
+use concurrent_psbt::sorter::{Deterministic, ExplicitSortKeys, Sorter, Unset};
 use concurrent_psbt::tx::UnorderedPsbt;
 use psbt_v2::v2::Psbt;
 
@@ -18,8 +18,19 @@ pub(crate) fn sort_psbt(mut psbt: UnorderedPsbt, seed: Option<Vec<u8>>) -> Resul
     if let Some(seed) = seed {
         psbt.global.set_sort_seed(seed);
     }
-    let sorter: Sorter<Unset> = Sorter::from_unordered_psbt(psbt);
-    sorter
-        .into_ordered_psbt()
-        .map_err(|error| crate::Error::new(error.to_string()))
+    match psbt.global.sort_deterministic() {
+        Some(0x01) => {
+            let sorter: Sorter<Deterministic> = Sorter::from_unordered_psbt(psbt);
+            sorter.into_ordered_psbt()
+        }
+        Some(0x00) => {
+            let sorter: Sorter<ExplicitSortKeys> = Sorter::from_unordered_psbt(psbt);
+            sorter.into_ordered_psbt()
+        }
+        _ => {
+            let sorter: Sorter<Unset> = Sorter::from_unordered_psbt(psbt);
+            sorter.into_ordered_psbt()
+        }
+    }
+    .map_err(|error| crate::Error::new(error.to_string()))
 }

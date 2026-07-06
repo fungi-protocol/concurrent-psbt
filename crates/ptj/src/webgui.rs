@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::str::FromStr as _;
 
-use crate::cli::{CreateConfig, NetworkArg, OutPointArg, OutputArg, WebguiConfig};
+use crate::cli::{CreateConfig, NetworkArg, OrderingArg, OutPointArg, OutputArg, WebguiConfig};
 use crate::{Error, Result};
 
 const INDEX_HTML: &[u8] = include_bytes!("../../../contrib/demo-gui/index.html");
@@ -318,6 +318,15 @@ fn create_config_from_request(request: &serde_json::Value) -> Result<CreateConfi
                 .and_then(|seed| crate::cli::HexSeed::from_str(seed).map_err(Error::new))
         })
         .transpose()?;
+    let ordering = match object.get("ordering") {
+        Some(value) => {
+            let value = value
+                .as_str()
+                .ok_or_else(|| Error::new("request JSON field `ordering` must be a string"))?;
+            OrderingArg::from_str(value).map_err(Error::new)?
+        }
+        None => OrderingArg::Unset,
+    };
     let inputs = object
         .get("inputs")
         .map(parse_create_inputs)
@@ -333,6 +342,7 @@ fn create_config_from_request(request: &serde_json::Value) -> Result<CreateConfi
         inputs,
         outputs,
         seed,
+        ordering,
         network,
     })
 }
@@ -594,6 +604,7 @@ mod tests {
     use std::io::{Read as _, Write as _};
 
     use clap::Parser as _;
+    use concurrent_psbt::global::GlobalSortExt as _;
 
     use super::*;
     use crate::cli::Cli;
@@ -613,7 +624,7 @@ mod tests {
         assert_eq!(inspected["ordering"], "unordered");
         assert_eq!(inspected["input_count"], 1);
         assert_eq!(inspected["output_count"], 1);
-        assert_eq!(inspected["sort"]["mode"], "deterministic");
+        assert_eq!(inspected["sort"]["mode"], "unset");
         assert_eq!(inspected["sort"]["seed_hex"], "abcd");
     }
 
@@ -716,7 +727,7 @@ mod tests {
         assert_eq!(sorted.global.input_count, 1);
         assert_eq!(sorted.global.output_count, 1);
         assert_eq!(body["inspect"]["ordering"], "ordered");
-        assert_eq!(body["inspect"]["sort"]["mode"], "deterministic");
+        assert_eq!(body["inspect"]["sort"]["mode"], "unset");
         assert_eq!(body["inspect"]["sort"]["seed_hex"], "deadbeef");
     }
 
@@ -893,6 +904,7 @@ mod tests {
             "outputs": [
                 { "address": regtest_address(1), "amount_btc": "0.00050000" },
             ],
+            "ordering": "deterministic",
             "seed_hex": "abcd",
         })
         .to_string();
@@ -921,6 +933,32 @@ mod tests {
     }
 
     #[test]
+    fn create_endpoint_preserves_unset_ordering_seed_without_deterministic_mode() {
+        let request = serde_json::json!({
+            "network": "regtest",
+            "inputs": [
+                { "txid": TXID, "vout": 7 },
+            ],
+            "seed_hex": "abcd",
+        })
+        .to_string();
+
+        let response = response_for("POST", "/api/create", request.as_bytes());
+
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let created = crate::io::parse_psbt_bytes(
+            "created response psbt",
+            body["psbt"].as_str().unwrap().as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(created.global.sort_seed(), Some(&[0xab, 0xcd][..]));
+        assert_eq!(created.global.sort_deterministic(), None);
+        assert_eq!(body["inspect"]["sort"]["mode"], "unset");
+        assert_eq!(body["inspect"]["sort"]["seed_hex"], "abcd");
+    }
+
+    #[test]
     fn create_endpoint_reports_json_errors() {
         let bad_network = response_for(
             "POST",
@@ -944,6 +982,18 @@ mod tests {
             String::from_utf8(bad_input.body)
                 .unwrap()
                 .contains("invalid txid")
+        );
+
+        let bad_ordering = response_for(
+            "POST",
+            "/api/create",
+            br#"{"network":"regtest","ordering":"sideways"}"#,
+        );
+        assert_eq!(bad_ordering.status, 400);
+        assert!(
+            String::from_utf8(bad_ordering.body)
+                .unwrap()
+                .contains("unknown ordering")
         );
     }
 
