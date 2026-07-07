@@ -1,7 +1,17 @@
 // @ts-nocheck
 // The graph shell is an incremental TypeScript migration from the preview JS.
 // Pure PSBT/session model code is strictly checked in src/model.ts.
-const { PtjBackendError, atomizePsbt: atomizeBackendPsbt, createPsbt: createBackendPsbt, importBip174: importBackendBip174, inspectPsbt: inspectBackendPsbt, joinPsbts: joinBackendPsbts, makeUnordered: makeBackendUnordered, sortPsbt: sortBackendPsbt, syncPsbts: syncBackendPsbts, } = await import("./backend.js?v=20260705-iroh-sync-v1");
+// The ops go through the canonical shared-frontend Backend seam: ONE
+// HttpBackend instance against this page's own origin (the ptj webgui /api/*
+// routes) replaces the retired free-function client in ./backend.js and its 7
+// hard-bound window.fetch call sites. No query strings on these imports:
+// http.js itself imports ../core/types.js without one, and both URLs must
+// resolve to the SAME module instance for `instanceof PtjBackendError` to
+// work (the webgui serves every response Cache-Control: no-store, so cache
+// busting is carried by the ?v on dist/app.js in index.html alone).
+const { HttpBackend } = await import("./shared-frontend/backends/http.js");
+const { PtjBackendError } = await import("./shared-frontend/core/types.js");
+const backend = new HttpBackend();
 const { amountParts, accountingDeltaPresentation, balanceSheetFeeSignal, coinDetailLines, compactBase64, descriptorFeeContributionPlan, descriptorFeeSignal, descriptorDrawerItems, descriptorMenuState, descriptorLooksPrivate, finalizeDescriptorExplicitFee, formatSizeEstimate, formatSatAmount, hashHex, joinSessionSeeds, looksLikeBase64Psbt, looksLikeDescriptor, mergePayloads, orderedProjectionPayload, parseBitcoinUri, payloadSizeEstimate, payloadRowKey, pendingPayloadRowKeys, peerAckPlan, peerBridgeComponents: modelPeerBridgeComponents, peerEdgeTermination: modelPeerEdgeTermination, peerGroupBounds, peerIsInteractive, sessionVisibleToPeerGroup, psbtRole, psbtCompatibility, psbtProtocolIdentity, psbtUnaryActions, normalizeSessionOrdering, seedFromRandomBytes, shouldShowGrandTotal, transactionBalance, unorderedBalanceSheetTotalRows, unorderedPsbtDisplay, } = await import("./model.js?v=20260629-global-fields-v1");
 const palette = ["#1967d2", "#0f7b4f", "#b65c00", "#7b3f98", "#607d00", "#b3261e"];
 const descriptorPalette = ["#1967d2", "#b65c00", "#0f7b4f", "#7b3f98", "#b3261e", "#607d00", "#39434d", "#c2410c"];
@@ -604,7 +614,7 @@ function networkForAddress(address) {
 }
 async function hydratePaymentRequestFragment(fragment, parsed) {
     try {
-        const response = await createBackendPsbt(window.fetch.bind(window), {
+        const response = await backend.createPsbt({
             network: networkForAddress(parsed.address),
             ordering: "unset",
             inputs: [],
@@ -634,7 +644,7 @@ async function hydrateSortedFragment(fragment, source) {
     if (!source.raw)
         return;
     try {
-        const response = await sortBackendPsbt(window.fetch.bind(window), source.raw);
+        const response = await backend.sortPsbt(source.raw);
         if (byId(state.fragments, fragment.id) !== fragment)
             return;
         fragment.raw = response.psbt;
@@ -654,7 +664,7 @@ async function hydrateUnorderedPsbt(node, previousRaw) {
     if (!previousRaw)
         return;
     try {
-        const response = await makeBackendUnordered(window.fetch.bind(window), previousRaw);
+        const response = await backend.makeUnordered(previousRaw);
         if (getNode(node.id) !== node)
             return;
         node.raw = response.psbt;
@@ -676,7 +686,7 @@ async function hydrateAtomizedFragments(atoms, previousRaw, sourceId) {
     if (!previousRaw)
         return;
     try {
-        const response = await atomizeBackendPsbt(window.fetch.bind(window), previousRaw);
+        const response = await backend.atomizePsbt(previousRaw);
         const rawFragments = Array.isArray(response.fragments) ? response.fragments : [];
         for (const [index, atom] of atoms.entries()) {
             const rawFragment = rawFragments[index];
@@ -701,7 +711,7 @@ async function hydrateJoinedPsbt(target, sources) {
     if (psbts.length !== sources.length)
         return;
     try {
-        const response = await joinBackendPsbts(window.fetch.bind(window), psbts);
+        const response = await backend.joinPsbts(psbts);
         if (getNode(target.id) !== target)
             return;
         target.raw = response.psbt;
@@ -809,7 +819,7 @@ async function hydrateIrohSync(ticket) {
     state.log.unshift(`Syncing ${psbts.length} raw PSBT(s) over iroh…`);
     render();
     try {
-        const response = await syncBackendPsbts(window.fetch.bind(window), {
+        const response = await backend.syncPsbts({
             psbts,
             irohTicket: ticket,
         });
@@ -832,9 +842,8 @@ async function hydrateIrohSync(ticket) {
     }
 }
 async function hydratePastedPsbtFragment(fragment) {
-    const fetchImpl = window.fetch.bind(window);
     try {
-        const inspect = await inspectBackendPsbt(fetchImpl, fragment.raw);
+        const inspect = await backend.inspectPsbt(fragment.raw);
         if (byId(state.fragments, fragment.id) !== fragment)
             return;
         fragment.inspect = inspect || null;
@@ -848,7 +857,7 @@ async function hydratePastedPsbtFragment(fragment) {
             throw error;
     }
     try {
-        const response = await importBackendBip174(fetchImpl, fragment.raw);
+        const response = await backend.importBip174(fragment.raw);
         if (byId(state.fragments, fragment.id) !== fragment)
             return;
         fragment.raw = response.psbt;

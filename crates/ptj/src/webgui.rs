@@ -12,6 +12,17 @@ const STYLES_CSS: &[u8] = include_bytes!("../../../contrib/demo-gui/styles.css")
 const APP_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/app.js");
 const BACKEND_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/backend.js");
 const MODEL_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/model.js");
+// The canonical shared-frontend Backend seam (contrib/demo-gui/src/
+// shared-frontend/): app.js constructs ONE HttpBackend against this server's
+// own /api/* routes instead of the retired free-function client in backend.js
+// (still served: it remains the node --test coverage surface). Only the
+// modules the browser actually loads are embedded — http.js plus its one
+// runtime import, core/types.js; core/backend.js is type-only and the
+// wasm/tauri adapters belong to the PWA/tauri shells.
+const SHARED_FRONTEND_HTTP_BACKEND_JS: &[u8] =
+    include_bytes!("../../../contrib/demo-gui/dist/shared-frontend/backends/http.js");
+const SHARED_FRONTEND_TYPES_JS: &[u8] =
+    include_bytes!("../../../contrib/demo-gui/dist/shared-frontend/core/types.js");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Asset {
@@ -49,6 +60,14 @@ pub fn asset(path: &str) -> Option<Asset> {
         "/dist/model.js" => Some(Asset {
             content_type: "text/javascript; charset=utf-8",
             body: MODEL_JS,
+        }),
+        "/dist/shared-frontend/backends/http.js" => Some(Asset {
+            content_type: "text/javascript; charset=utf-8",
+            body: SHARED_FRONTEND_HTTP_BACKEND_JS,
+        }),
+        "/dist/shared-frontend/core/types.js" => Some(Asset {
+            content_type: "text/javascript; charset=utf-8",
+            body: SHARED_FRONTEND_TYPES_JS,
         }),
         _ => None,
     }
@@ -1076,7 +1095,11 @@ mod tests {
         let app = response_for("GET", "/dist/app.js?v=cache-busted", b"");
         assert_eq!(app.status, 200);
         assert_eq!(app.content_type, "text/javascript; charset=utf-8");
-        assert!(String::from_utf8(app.body).unwrap().contains("backend.js"));
+        assert!(
+            String::from_utf8(app.body)
+                .unwrap()
+                .contains("shared-frontend/backends/http.js")
+        );
 
         let backend = response_for("GET", "/dist/backend.js?v=cache-busted", b"");
         assert_eq!(backend.status, 200);
@@ -1085,6 +1108,26 @@ mod tests {
             String::from_utf8(backend.body)
                 .unwrap()
                 .contains("export function joinPsbts")
+        );
+
+        // The shared-frontend seam modules app.js loads at runtime.
+        let http_backend =
+            response_for("GET", "/dist/shared-frontend/backends/http.js?v=cache-busted", b"");
+        assert_eq!(http_backend.status, 200);
+        assert_eq!(http_backend.content_type, "text/javascript; charset=utf-8");
+        assert!(
+            String::from_utf8(http_backend.body)
+                .unwrap()
+                .contains("class HttpBackend")
+        );
+
+        let types = response_for("GET", "/dist/shared-frontend/core/types.js?v=cache-busted", b"");
+        assert_eq!(types.status, 200);
+        assert_eq!(types.content_type, "text/javascript; charset=utf-8");
+        assert!(
+            String::from_utf8(types.body)
+                .unwrap()
+                .contains("class PtjBackendError")
         );
 
         let head = response_for("HEAD", "/dist/app.js?v=cache-busted", b"");
