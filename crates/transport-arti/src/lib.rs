@@ -51,15 +51,19 @@
 //! feature ON, the same surface performs real Tor connection + framing I/O via
 //! `arti_client` (arti is async; the channel seam is async too, so a
 //! feature-on backend `.await`s arti directly — no per-call `block_on`, the same
-//! actor-at-the-edge shape transport-iroh uses). That backend is still deferred;
-//! only the skeleton is built today.
+//! actor-at-the-edge shape transport-iroh uses). The backend is grounded against
+//! arti-client 0.44 and its lockstep tor-* 0.44 crates (see `imp.rs`).
 //!
 //! [arti]: https://gitlab.torproject.org/tpo/core/arti
 
 #![warn(missing_docs)]
 
 use async_trait::async_trait;
-use transport_core::{AnonymousChannel, Error, Result};
+// `Error` is named directly only by the skeleton arm (the real backend has its
+// own import in `imp.rs`), so the top-level import is feature-off only.
+#[cfg(not(feature = "arti"))]
+use transport_core::Error;
+use transport_core::{AnonymousChannel, Result};
 
 /// Configuration for an [`ArtiTransport`]: where to reach peers and where to
 /// listen for them.
@@ -127,11 +131,11 @@ impl ArtiTransport {
 #[async_trait]
 impl AnonymousChannel for ArtiTransport {
     async fn send(&mut self, message: Vec<u8>) -> Result<()> {
-        self.inner.send(message)
+        self.inner.send(message).await
     }
 
     async fn recv(&mut self) -> Result<Vec<Vec<u8>>> {
-        self.inner.recv()
+        self.inner.recv().await
     }
 }
 
@@ -181,11 +185,13 @@ mod skeleton {
             Err(not_built())
         }
 
-        pub fn send(&mut self, _message: Vec<u8>) -> Result<()> {
+        // Async to mirror the feature-on backend's signatures (the channel
+        // seam is async); no runtime is needed to resolve an immediate `Err`.
+        pub async fn send(&mut self, _message: Vec<u8>) -> Result<()> {
             Err(not_built())
         }
 
-        pub fn recv(&mut self) -> Result<Vec<Vec<u8>>> {
+        pub async fn recv(&mut self) -> Result<Vec<Vec<u8>>> {
             Err(not_built())
         }
     }
