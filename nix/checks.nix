@@ -18,6 +18,7 @@
         CARGO_PROFILE = "";
       };
       src = commonArgs.src;
+      demoGuiSrc = inputs.self + /contrib/demo-gui;
 
       profiles = {
         dev = "dev";
@@ -120,6 +121,82 @@
 
         build = toolchains.nightly.buildPackage (checkArgs // { cargoArtifacts = cargoArtifactsRelease; });
 
+        demo-gui =
+          pkgs.runCommand "demo-gui-${rev}"
+            {
+              inherit demoGuiSrc;
+              nativeBuildInputs = with pkgs; [
+                nodejs
+                typescript
+              ];
+            }
+            ''
+              cp -R "$demoGuiSrc" ./demo-gui
+              chmod -R u+w ./demo-gui
+              cd ./demo-gui
+
+              tsc -p tsconfig.model.json
+              tsc -p tsconfig.json
+              node --test \
+                --experimental-test-coverage \
+                --test-coverage-include='dist/backend.js' \
+                --test-coverage-include='dist/model.js' \
+                --test-coverage-lines=100 \
+                --test-coverage-branches=100 \
+                --test-coverage-functions=100 \
+                test/*.mjs
+
+              mkdir -p "$out"
+              cp -R dist "$out/dist"
+            '';
+
+        demo-gui-playwright =
+          pkgs.runCommand "demo-gui-playwright-${rev}"
+            {
+              inherit demoGuiSrc;
+              nativeBuildInputs = with pkgs; [
+                nodejs
+                playwright-test
+                typescript
+              ];
+            }
+            ''
+              cp -R "$demoGuiSrc" ./demo-gui
+              chmod -R u+w ./demo-gui
+              cd ./demo-gui
+
+              tsc -p tsconfig.model.json
+              tsc -p tsconfig.json
+
+              export HOME="$TMPDIR"
+              export PLAYWRIGHT_BROWSERS_PATH="${pkgs.playwright-driver.browsers}"
+              export PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=true
+              export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+              export PLAYWRIGHT_CORE="${pkgs.playwright-test}/lib/node_modules/playwright-core/index.mjs"
+
+              CHROMIUM_BIN=""
+              for _c in \
+                "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux64/chrome \
+                "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-linux/chrome \
+                "$PLAYWRIGHT_BROWSERS_PATH"/chromium-*/chrome-mac*/*.app/Contents/MacOS/*; do
+                [ -e "$_c" ] && CHROMIUM_BIN="$_c" && break
+              done
+              if [ -z "$CHROMIUM_BIN" ]; then
+                echo "ERROR: no store Chromium under $PLAYWRIGHT_BROWSERS_PATH" >&2
+                exit 1
+              fi
+              export CHROMIUM_BIN
+              export DEMO_GUI_HTML="$PWD/index.html"
+
+              echo "node $(node --version); chromium=$CHROMIUM_BIN"
+              for spec in test/e2e/*.spec.mjs; do
+                echo "--- $(basename "$spec") ---"
+                node "$spec"
+              done
+
+              mkdir -p "$out"
+            '';
+
         coverage-collect-prop-only = coverageCollections.coverage-collect-prop-only;
         coverage-collect-unit-only = coverageCollections.coverage-collect-unit-only;
         coverage = mkCoverageGate "" 100 (builtins.attrValues coverageCollections);
@@ -145,6 +222,14 @@
             installPhase = "mkdir -p $out";
           }
         );
+        demo-gui-webgui-assets = pkgs.runCommand "demo-gui-webgui-assets-${rev}" { inherit src; } ''
+          test -f "$src/contrib/demo-gui/dist/app.js"
+          test -f "$src/contrib/demo-gui/dist/backend.js"
+          grep -q 'backend\.js' "$src/contrib/demo-gui/dist/app.js"
+          grep -q 'const BACKEND_JS' "$src/crates/ptj/src/webgui.rs"
+          grep -q '"/dist/backend\.js"' "$src/crates/ptj/src/webgui.rs"
+          mkdir -p "$out"
+        '';
 
         clippy = toolchains.nightly.cargoClippy (
           checkArgs
@@ -256,6 +341,9 @@
           paths = with checks; [
             tests-nightly-dev
             clippy
+            demo-gui
+            demo-gui-webgui-assets
+            demo-gui-playwright
           ];
         };
         lint = pkgs.symlinkJoin {
@@ -263,6 +351,8 @@
           paths = with checks; [
             cargo-sort
             clippy
+            demo-gui
+            demo-gui-webgui-assets
             doc
             validate-commits-repository-probes
             unused-lints

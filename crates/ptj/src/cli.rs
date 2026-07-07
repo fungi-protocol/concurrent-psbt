@@ -1,0 +1,436 @@
+use std::net::IpAddr;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+
+use clap::{Args, Parser, Subcommand, ValueEnum};
+
+#[derive(Parser, Debug, Clone)]
+#[command(name = "ptj")]
+pub struct Cli {
+    /// Write command output atomically to a file instead of stdout
+    #[arg(short = 'o', long = "output-file", global = true)]
+    pub output: Option<PathBuf>,
+    /// Encoding to use with --output-file
+    #[arg(long = "output-file-format", value_enum, default_value_t = OutputFileFormat::Base64, global = true)]
+    pub output_file_format: OutputFileFormat,
+    /// Write raw PSBT bytes to --output-file or sync --state
+    #[arg(long, global = true)]
+    pub binary: bool,
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum Command {
+    /// Split a constructor PSBT into atomic unordered fragments
+    Atomize(AtomizeConfig),
+    /// Create a new PSBT with inputs and outputs
+    Create(CreateConfig),
+    /// Join two or more PSBTs
+    Join(JoinConfig),
+    /// Append ordered PSBT inputs and outputs without lattice joining
+    #[command(alias = "concat")]
+    Concatenate(ConcatenateConfig),
+    /// Export an ordered BIP 370 PSBT as Bitcoin Core-compatible BIP 174
+    #[command(alias = "to-bip174")]
+    ExportBip174(ExportBip174Config),
+    /// Import a Bitcoin Core-compatible BIP 174 PSBT as ordered BIP 370
+    ImportBip174(ImportBip174Config),
+    /// Inspect a PSBT without transforming it
+    Inspect(InspectConfig),
+    /// Mark a safe BIP 370 constructor PSBT unordered for lattice joining
+    MakeUnordered(MakeUnorderedConfig),
+    /// Attach a payment a participant wants constructed (negotiation metadata)
+    Pay(PayConfig),
+    /// Attach a confirmation of the converged transaction prior to signing
+    Confirm(ConfirmConfig),
+    /// Decode the payments and confirmations negotiated in a PSBT
+    Payments(PaymentsConfig),
+    /// Sort a PSBT into BIP 370 order
+    Sort(SortConfig),
+    /// Join local PSBT sources and print the converged state
+    Sync(SyncConfig),
+    /// Serve the offline web GUI
+    Webgui(WebguiConfig),
+}
+
+impl Command {
+    pub fn reads_stdin(&self) -> bool {
+        match self {
+            Command::Atomize(config) => is_stdin_path(&config.file),
+            Command::Concatenate(config) => config.files.iter().any(|path| is_stdin_path(path)),
+            Command::ExportBip174(config) => is_stdin_path(&config.file),
+            Command::ImportBip174(config) => is_stdin_path(&config.file),
+            Command::Inspect(config) => is_stdin_path(&config.file),
+            Command::Join(config) => config.files.iter().any(|path| is_stdin_path(path)),
+            Command::MakeUnordered(config) => is_stdin_path(&config.file),
+            Command::Pay(config) => is_stdin_path(&config.file),
+            Command::Confirm(config) => is_stdin_path(&config.file),
+            Command::Payments(config) => is_stdin_path(&config.file),
+            Command::Sort(config) => is_stdin_path(&config.file),
+            Command::Sync(config) => config.sources.iter().any(|path| is_stdin_path(path)),
+            Command::Create(_) | Command::Webgui(_) => false,
+        }
+    }
+
+    pub(crate) fn stdin_source_count(&self) -> usize {
+        match self {
+            Command::Atomize(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Concatenate(config) => config
+                .files
+                .iter()
+                .filter(|path| is_stdin_path(path))
+                .count(),
+            Command::ExportBip174(config) => usize::from(is_stdin_path(&config.file)),
+            Command::ImportBip174(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Inspect(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Join(config) => config
+                .files
+                .iter()
+                .filter(|path| is_stdin_path(path))
+                .count(),
+            Command::MakeUnordered(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Pay(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Confirm(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Payments(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Sort(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Sync(config) => config
+                .sources
+                .iter()
+                .filter(|path| is_stdin_path(path))
+                .count(),
+            Command::Create(_) | Command::Webgui(_) => 0,
+        }
+    }
+}
+
+fn is_stdin_path(path: &Path) -> bool {
+    path == Path::new("-")
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct AtomizeConfig {
+    /// PSBT file to atomize
+    pub file: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct CreateConfig {
+    /// Input in txid:vout format (repeatable)
+    #[arg(long = "input")]
+    pub inputs: Vec<OutPointArg>,
+    /// Output in addr:amount_btc format (repeatable)
+    #[arg(long = "output")]
+    pub outputs: Vec<OutputArg>,
+    /// Sort seed as hex
+    #[arg(long)]
+    pub seed: Option<HexSeed>,
+    /// Ordering mode for the unordered PSBT
+    #[arg(long = "ordering", value_enum, default_value_t = OrderingArg::Unset)]
+    pub ordering: OrderingArg,
+    /// Bitcoin network (bitcoin, testnet, signet, regtest)
+    #[arg(long, default_value = "bitcoin")]
+    pub network: NetworkArg,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct JoinConfig {
+    /// PSBT files to join (at least 2)
+    #[arg(required = true, num_args = 2..)]
+    pub files: Vec<PathBuf>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ConcatenateConfig {
+    /// Ordered PSBT files to append (at least 2)
+    #[arg(required = true, num_args = 2..)]
+    pub files: Vec<PathBuf>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ExportBip174Config {
+    /// Ordered PSBT file to export
+    pub file: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ImportBip174Config {
+    /// BIP 174 PSBT file to import
+    pub file: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct InspectConfig {
+    /// PSBT file to inspect
+    pub file: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct MakeUnorderedConfig {
+    /// PSBT file to mark unordered
+    pub file: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct SortConfig {
+    /// Sort seed as hex (overrides embedded seed)
+    #[arg(long)]
+    pub seed: Option<HexSeed>,
+    /// PSBT file to sort
+    pub file: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct SyncConfig {
+    /// State PSBT file to update atomically with the converged result
+    #[arg(long = "state")]
+    pub state: Option<PathBuf>,
+    /// PSBT files or directories of .psbt files to join
+    pub sources: Vec<PathBuf>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct WebguiConfig {
+    /// Address to bind
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: IpAddr,
+    /// Port to bind
+    #[arg(long, default_value_t = 8035)]
+    pub port: u16,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFileFormat {
+    /// Write base64 text, matching stdout.
+    Base64,
+    /// Write raw PSBT bytes. Only valid for commands that emit one PSBT.
+    Binary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetworkArg(pub bitcoin::Network);
+
+impl FromStr for NetworkArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "bitcoin" | "mainnet" => Ok(Self(bitcoin::Network::Bitcoin)),
+            "testnet" | "testnet3" => Ok(Self(bitcoin::Network::Testnet)),
+            "signet" => Ok(Self(bitcoin::Network::Signet)),
+            "regtest" => Ok(Self(bitcoin::Network::Regtest)),
+            other => Err(format!(
+                "unknown network '{other}' (expected: bitcoin, testnet, signet, regtest)"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for NetworkArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderingArg {
+    /// Sorter mode is unset; explicit keys are used when present, otherwise derived from seed.
+    Unset,
+    /// Sort keys are derived from the global seed.
+    Deterministic,
+    /// Sort keys must be provided explicitly on every input and output.
+    Explicit,
+}
+
+impl FromStr for OrderingArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "unset" => Ok(Self::Unset),
+            "deterministic" | "det" => Ok(Self::Deterministic),
+            "explicit" => Ok(Self::Explicit),
+            other => Err(format!(
+                "unknown ordering '{other}' (expected: unset, deterministic, explicit)"
+            )),
+        }
+    }
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PayConfig {
+    /// Recipient in addr:amount_btc format
+    #[arg(long = "to")]
+    pub to: OutputArg,
+    /// Optional payment label
+    #[arg(long)]
+    pub label: Option<String>,
+    /// Payer peer id as 32-byte hex (defaults to unspecified/zero)
+    #[arg(long)]
+    pub payer: Option<Hex32>,
+    /// Network the recipient address must be valid for
+    #[arg(long = "network", default_value_t = NetworkArg(bitcoin::Network::Bitcoin))]
+    pub network: NetworkArg,
+    /// Encrypt the payment record with the group secret
+    #[arg(long)]
+    pub encrypt: bool,
+    /// Out-of-band shared secret as hex (required with --encrypt)
+    #[arg(long)]
+    pub secret: Option<HexSeed>,
+    /// Add N indistinguishable dummy payments (requires --encrypt)
+    #[arg(long, default_value_t = 0)]
+    pub dummy: u32,
+    /// PSBT file to attach the payment to
+    pub file: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ConfirmConfig {
+    /// Confirming peer id as 32-byte hex (defaults to unspecified/zero)
+    #[arg(long = "peer-id")]
+    pub peer_id: Option<Hex32>,
+    /// Encrypt the confirmation record with the group secret
+    #[arg(long)]
+    pub encrypt: bool,
+    /// Out-of-band shared secret as hex (required with --encrypt)
+    #[arg(long)]
+    pub secret: Option<HexSeed>,
+    /// PSBT file to confirm
+    pub file: PathBuf,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PaymentsConfig {
+    /// Out-of-band shared secret as hex (decrypts encrypted entries)
+    #[arg(long)]
+    pub secret: Option<HexSeed>,
+    /// Emit the report as JSON
+    #[arg(long)]
+    pub json: bool,
+    /// PSBT file to read negotiation metadata from
+    pub file: PathBuf,
+}
+
+/// A fixed 32-byte value parsed from hex.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hex32([u8; 32]);
+
+impl Hex32 {
+    pub fn into_array(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+impl FromStr for Hex32 {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        let bytes = decode_hex(value)?;
+        <[u8; 32]>::try_from(bytes.as_slice())
+            .map(Self)
+            .map_err(|_| format!("expected 32 bytes (64 hex chars), got {}", value.len() / 2))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HexSeed(Vec<u8>);
+
+impl HexSeed {
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+impl FromStr for HexSeed {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        decode_hex(value).map(Self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutPointArg {
+    pub txid: bitcoin::Txid,
+    pub vout: u32,
+}
+
+impl OutPointArg {
+    pub fn into_outpoint(self) -> bitcoin::OutPoint {
+        bitcoin::OutPoint {
+            txid: self.txid,
+            vout: self.vout,
+        }
+    }
+}
+
+impl FromStr for OutPointArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        let (txid, vout) = value
+            .split_once(':')
+            .ok_or_else(|| "--input expects txid:vout".to_string())?;
+        Ok(Self {
+            txid: txid
+                .parse()
+                .map_err(|error| format!("invalid txid {txid}: {error}"))?,
+            vout: vout
+                .parse()
+                .map_err(|error| format!("invalid vout {vout}: {error}"))?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputArg {
+    pub address_text: String,
+    pub address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
+    pub amount: bitcoin::Amount,
+}
+
+impl FromStr for OutputArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        let (address, amount) = value
+            .split_once(':')
+            .ok_or_else(|| "--output expects address:amount_btc".to_string())?;
+        Ok(Self {
+            address_text: address.to_string(),
+            address: address
+                .parse()
+                .map_err(|error| format!("invalid address {address}: {error}"))?,
+            amount: bitcoin::Amount::from_str_in(amount, bitcoin::Denomination::Bitcoin)
+                .map_err(|error| format!("invalid amount {amount}: {error}"))?,
+        })
+    }
+}
+
+fn decode_hex(value: &str) -> std::result::Result<Vec<u8>, String> {
+    if !value.len().is_multiple_of(2) {
+        return Err(format!("hex string has odd length: {value}"));
+    }
+    value
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let high = hex_nibble(pair[0]).ok_or_else(|| format!("invalid hex: {value}"))?;
+            let low = hex_nibble(pair[1]).ok_or_else(|| format!("invalid hex: {value}"))?;
+            Ok((high << 4) | low)
+        })
+        .collect()
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}

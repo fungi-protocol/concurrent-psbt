@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Partial Transaction Joiner</title>
+  <link rel="stylesheet" href="styles.css?v=20260629-balance-sheet-v1">
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <h1>Partial Transaction Joiner</h1>
+        <p>Warning: every peer can see session details and can stall coordination. Funds stay safe because wallets sign only after the final transaction gives each participant what they approved and accounts for every sat through inputs, outputs, and explicit fees.</p>
+      </div>
+      <div class="header-actions">
+        <button id="resetDemo" type="button">Reset demo</button>
+      </div>
+    </header>
+
+    <main class="home-layout">
+      <section class="graph-panel" aria-label="PSBT graph workspace">
+        <div class="graph-toolbar">
+          <div>
+            <h2>Peer-session read graph</h2>
+            <div id="selectionSummary" class="selection-summary">Sessions are unordered PSBT CRDT registers; select PSBTs for unary actions or wire peer read capabilities.</div>
+          </div>
+          <form id="sessionForm" class="toolbar-session-form" aria-label="Create empty session">
+            <label class="field-label toolbar-field" for="sessionLabel">
+              Session label
+              <input id="sessionLabel" autocomplete="off" placeholder="optional label">
+            </label>
+            <label class="field-label toolbar-field compact-select" for="sessionOrderingMode">
+              Ordering
+              <select id="sessionOrderingMode">
+                <option value="det">deterministic</option>
+                <option value="explicit">explicit</option>
+                <option value="unset">unset</option>
+              </select>
+            </label>
+            <label id="sessionSeedField" class="field-label toolbar-field seed-field" for="sessionSeed">
+              Ordering seed
+              <span class="seed-control">
+                <input id="sessionSeed" autocomplete="off" inputmode="text" spellcheck="false" required placeholder="required hex seed">
+                <button id="generateSessionSeed" class="seed-regenerate" type="button" title="Generate deterministic ordering seed" aria-label="Generate deterministic ordering seed">↻</button>
+              </span>
+            </label>
+            <button type="submit">Create session</button>
+          </form>
+          <div class="toolbar-actions">
+            <button id="connectSelected" type="button" class="primary" hidden>Join</button>
+            <button id="convertSelected" type="button" title="Shuffle a BIP 370 ordered PSBT into unordered form for session sharing." hidden>Make unordered</button>
+            <button id="orderSelected" type="button" title="Run the sorter role." hidden>Sort</button>
+            <button id="atomizeSelected" type="button" hidden>Atomize PSBT</button>
+            <button id="abortSession" type="button" hidden>Abort session</button>
+            <button id="promoteSelected" type="button" hidden>Promote fragment</button>
+            <button id="cancelJoinSelect" type="button" hidden>Cancel wires</button>
+          </div>
+        </div>
+        <div id="pasteDropzone" class="paste-dropzone" tabindex="0">
+          Paste anything here: npub, relay URI, magic-wormhole code, bitcoin URI, base64 PSBT, descriptor, or drop a binary PSBT.
+        </div>
+        <svg id="graph" role="img" aria-label="Interactive graph of peers, unordered session registers, and PSBT fragments"></svg>
+      </section>
+
+      <nav class="menu-dock" aria-label="Workspace menus">
+        <details class="menu-panel">
+          <summary>Create</summary>
+          <section class="control-section">
+            <h2>Add peer</h2>
+            <form id="peerForm" class="stack-form">
+              <label class="field-label" for="peerName">
+                Display name
+                <input id="peerName" name="peerName" autocomplete="off" placeholder="Dana">
+              </label>
+              <label class="field-label" for="peerContactKind">
+                Contact
+                <select id="peerContactKind">
+                  <option value="iroh">dummy iroh key</option>
+                  <option value="npub">npub</option>
+                  <option value="wormhole">magic-wormhole code</option>
+                </select>
+              </label>
+              <label class="field-label" for="peerContactValue">
+                Key or code
+                <input id="peerContactValue" autocomplete="off" placeholder="leave blank for a simulated contact">
+              </label>
+              <button type="submit">Add peer</button>
+            </form>
+          </section>
+
+          <section class="control-section">
+            <h2>Output fragment</h2>
+            <form id="paymentForm" class="stack-form">
+              <label class="field-label" for="paymentLabel">
+                Label
+                <input id="paymentLabel" autocomplete="off" placeholder="Coffee batch">
+              </label>
+              <label class="field-label" for="paymentAddress">
+                Address
+                <input id="paymentAddress" autocomplete="off" placeholder="bcrt1qrecipient">
+              </label>
+              <label class="field-label" for="paymentValue">
+                Value
+                <input id="paymentValue" type="number" min="1" step="1" value="250000">
+              </label>
+              <button type="submit">Make output fragment</button>
+            </form>
+          </section>
+        </details>
+
+        <details class="menu-panel">
+          <summary>Inspect</summary>
+          <section class="control-section">
+            <h2>Inspector</h2>
+            <div id="inspector" class="inspector"></div>
+          </section>
+          <section class="control-section">
+            <h2>Event log</h2>
+            <ol id="eventLog" class="event-log"></ol>
+          </section>
+        </details>
+      </nav>
+    </main>
+
+    <section id="feeContributionPanel" class="fee-panel warning-none" aria-label="Add explicit fee contribution" hidden>
+      <div class="fee-panel-card">
+        <div class="fee-panel-heading">
+          <h2>Add explicit fee</h2>
+          <button id="feeContributionCancel" type="button" aria-label="Close fee contribution panel">×</button>
+        </div>
+        <p id="feeContributionContext" class="fee-panel-context"></p>
+        <label class="field-label" for="feeContributionAmount">
+          Additional explicit fee
+          <input id="feeContributionAmount" type="number" min="0" value="0" step="1">
+        </label>
+        <div class="fee-panel-readout">
+          <strong id="feeContributionRate">0.00 sat/vB</strong>
+          <span id="feeContributionComparison">overall 0.00 sat/vB · 0.00x overall</span>
+        </div>
+        <label class="fee-confirm-row" for="feeContributionFinalize">
+          <input id="feeContributionFinalize" type="checkbox">
+          Finalize fee after this addition.
+        </label>
+        <p id="feeContributionWarning" class="fee-panel-warning">No elevated fee warning for this explicit contribution.</p>
+        <label id="feeContributionConfirmRow" class="fee-confirm-row" for="feeContributionConfirm" hidden>
+          <input id="feeContributionConfirm" type="checkbox">
+          Confirm this unusually high fee contribution.
+        </label>
+        <button id="feeContributionApply" type="button" class="primary">Add fee</button>
+      </div>
+    </section>
+
+    <section class="descriptor-dock" aria-label="Output descriptor color key">
+      <div class="descriptor-dock-heading">
+        <span>Descriptors</span>
+        <details class="descriptor-settings">
+          <summary aria-label="Descriptor settings" title="Descriptor settings">⚙</summary>
+          <div class="descriptor-settings-panel">
+            <form id="descriptorForm" class="stack-form">
+              <label class="field-label" for="descriptorOwner">
+                Owner
+                <input id="descriptorOwner" autocomplete="off" placeholder="Owner name">
+              </label>
+              <label class="field-label" for="descriptorPrivacy">
+                Descriptor visibility
+                <select id="descriptorPrivacy">
+                  <option value="public">Public descriptor</option>
+                  <option value="private">Private descriptor</option>
+                </select>
+              </label>
+              <label class="field-label" for="descriptorOwnership">
+                Display ownership
+                <select id="descriptorOwnership">
+                  <option value="mine">Mine</option>
+                  <option value="other">Other peer</option>
+                </select>
+              </label>
+              <label class="field-label" for="descriptorText">
+                Descriptor
+                <input id="descriptorText" autocomplete="off" placeholder="wpkh([fingerprint/84h/1h/0h]xpub/0/*)">
+              </label>
+              <div class="split-row">
+                <label class="field-label" for="utxoTxid">
+                  UTXO txid
+                  <input id="utxoTxid" autocomplete="off" placeholder="txid">
+                </label>
+                <label class="field-label compact" for="utxoVout">
+                  vout
+                  <input id="utxoVout" type="number" min="0" value="0">
+                </label>
+              </div>
+              <label class="field-label" for="utxoValue">
+                UTXO value
+                <input id="utxoValue" type="number" min="1" step="1" value="1000000">
+              </label>
+              <button type="submit">List descriptor UTXO</button>
+            </form>
+          </div>
+        </details>
+      </div>
+      <div id="descriptorDockRail" class="descriptor-dock-rail"></div>
+    </section>
+
+  <script type="module" src="dist/app.js?v=20260629-balance-sheet-v1"></script>
+</body>
+</html>

@@ -17,7 +17,9 @@
             config.packages.validate-commits
             config.treefmt.build.wrapper
             just
+            nodejs
             rust-analyzer
+            typescript
           ];
         };
     in
