@@ -1,72 +1,46 @@
-use std::env;
-use std::fs;
 use std::process;
+use std::io::Read as _;
 
-use concurrent_psbt::Join;
-use concurrent_psbt::roles::constructor::dynamic;
+use clap::Parser;
+use ptj::cli::{Cli, Command};
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() < 4 || args[1] != "join" {
-        eprintln!("usage: ptj join <file1> <file2> [file3 ...]");
-        process::exit(2);
-    }
-
-    let files = &args[2..];
-
-    let constructors: Vec<_> = files.iter().map(|f| parse_psbt(f)).collect();
-
-    let result = constructors
-        .into_iter()
-        .map(dynamic::ResultConstructor::wrap)
-        .reduce(|a, b| a.join(b))
-        .unwrap();
-
-    if !result.is_ok() {
-        eprintln!("error: join produced conflicting fields");
-        eprintln!();
-        result.for_each_conflict(|section, field, conflict| {
-            eprintln!("  {section}.{field}: {conflict:?}");
-        });
-        process::exit(1);
-    }
-
-    let ctor = result.try_unwrap().expect("checked is_ok");
-    let psbt = ctor.into_psbt();
-
-    use psbt_v2::bitcoin::base64::prelude::{BASE64_STANDARD, Engine as _};
-    let bytes = psbt_v2::v2::Psbt::serialize(&psbt);
-    println!("{}", BASE64_STANDARD.encode(&bytes));
-}
-
-fn parse_psbt(path: &str) -> dynamic::Constructor {
-    let raw = fs::read(path).unwrap_or_else(|e| {
-        eprintln!("error reading {path}: {e}");
-        process::exit(1);
-    });
-
-    let bytes = if raw.starts_with(b"psbt") {
-        raw
-    } else {
-        let text = String::from_utf8(raw).unwrap_or_else(|_| {
-            eprintln!("error: {path} is neither binary PSBT nor valid UTF-8");
+    let cli = Cli::parse();
+    let stdin = match read_stdin_if_needed(&cli) {
+        Ok(stdin) => stdin,
+        Err(error) => {
+            eprintln!("error: {error}");
             process::exit(1);
-        });
-        use psbt_v2::bitcoin::base64::prelude::{BASE64_STANDARD, Engine as _};
-        BASE64_STANDARD.decode(text.trim()).unwrap_or_else(|e| {
-            eprintln!("error decoding base64 {path}: {e}");
-            process::exit(1);
-        })
+        }
+    };
+    let result = match cli.command.clone() {
+        Command::Webgui(config) => {
+            if cli.output.is_some() {
+                Err(ptj::Error::new("webgui does not write PSBT output"))
+            } else {
+                ptj::webgui::serve(config).map(|()| None)
+            }
+        }
+        _ => ptj::run_or_write_with_stdin(cli, stdin.as_deref()),
     };
 
-    let psbt = psbt_v2::v2::Psbt::deserialize(&bytes).unwrap_or_else(|e| {
-        eprintln!("error parsing {path}: {e}");
-        process::exit(1);
-    });
+    match result {
+        Ok(Some(output)) => println!("{output}"),
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("error: {error}");
+            process::exit(1);
+        }
+    }
+}
 
-    dynamic::Constructor::try_from_psbt(psbt).unwrap_or_else(|e| {
-        eprintln!("error: {path}: {e}");
-        process::exit(1);
-    })
+fn read_stdin_if_needed(cli: &Cli) -> Result<Option<Vec<u8>>, ptj::Error> {
+    if !cli.command.reads_stdin() {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    std::io::stdin()
+        .read_to_end(&mut bytes)
+        .map_err(|error| ptj::Error::new(format!("reading stdin: {error}")))?;
+    Ok(Some(bytes))
 }

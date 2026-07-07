@@ -17,7 +17,9 @@
             config.packages.scrub-commit-history
             config.treefmt.build.wrapper
             just
+            nodejs
             rust-analyzer
+            typescript
           ];
         };
     in
