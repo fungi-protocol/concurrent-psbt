@@ -224,7 +224,7 @@ impl SyncConfig {
 /// Which transport backend `ptj sync` moves bytes over. Every non-`local`
 /// variant is behind an optional cargo feature that pulls the standalone
 /// `transport-<name>` crate; selecting one without its feature yields a clear
-/// "rebuild with --features <name>" error at runtime.
+/// "rebuild with `--features <name>`" error at runtime.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportKind {
     /// File/dir transport: positional PSBT sources plus `--state` (the default).
