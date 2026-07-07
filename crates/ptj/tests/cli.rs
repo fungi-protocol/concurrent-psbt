@@ -509,11 +509,12 @@ fn create_explicit_ordering_rejects_non_empty_psbts_until_sort_keys_are_supporte
 #[test]
 fn inspect_reports_psbt_state_as_json() {
     let temp = tempfile::tempdir().unwrap();
-    let psbt = write_psbt(
-        temp.path(),
-        "created.psbt",
-        create_psbt(TXID, 7, 1, 123_456),
-    );
+    let created = create_psbt(TXID, 7, 1, 123_456);
+    let expected_unique_id = concurrent_psbt::payments::negotiation::unordered_unique_id(&created)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let psbt = write_psbt(temp.path(), "created.psbt", created);
 
     let inspected = inspect_json(&psbt);
 
@@ -525,6 +526,8 @@ fn inspect_reports_psbt_state_as_json() {
     assert_eq!(inspected["modifiability"]["outputs"], true);
     assert_eq!(inspected["sort"]["mode"], "deterministic");
     assert_eq!(inspected["sort"]["seed_hex"], "abcd");
+    // The psbt.md unordered unique id — the identity `ptj confirm` records.
+    assert_eq!(inspected["unordered_unique_id_hex"], expected_unique_id);
 
     let no_seed = write_psbt(
         temp.path(),
