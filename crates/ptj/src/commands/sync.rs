@@ -92,7 +92,32 @@ pub(crate) fn build_transport(config: &SyncConfig) -> Result<Box<dyn Transport>>
         TransportKind::Str0m => build_str0m_transport(config),
         TransportKind::WebrtcRs => build_webrtc_rs_transport(config),
         TransportKind::PayjoinDir => build_payjoin_dir_transport(config),
+        TransportKind::Plugin => build_plugin_transport(config),
     }
+}
+
+#[cfg(feature = "plugin-transports")]
+fn build_plugin_transport(config: &SyncConfig) -> Result<Box<dyn Transport>> {
+    let binary = config.plugin.as_ref().ok_or_else(|| {
+        Error::new(
+            "plugin sync requires --plugin <binary>: the transport plugin executable to spawn \
+             (a path, or a bare name resolved on PATH)",
+        )
+    })?;
+    let entries = crate::transport::plugin::parse_config_entries(&config.plugin_config)?;
+    // Spawn + handshake block HERE, on the sync side of the runtime boundary
+    // (the str0m handshake precedent): the driver's publish/collect find a
+    // ready transport. The host is Send and owns its own actor thread, so
+    // boxing it into the driver's runtime is safe.
+    let transport = crate::transport::plugin::PluginTransport::spawn(binary, entries)?;
+    Ok(Box::new(transport))
+}
+
+#[cfg(not(feature = "plugin-transports"))]
+fn build_plugin_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
+    Err(Error::new(
+        "ptj was built without transport plugin support; rebuild with --features plugin-transports",
+    ))
 }
 
 #[cfg(feature = "iroh-sync")]
@@ -568,6 +593,8 @@ mod tests {
             webrtc_bind: "127.0.0.1:0".to_string(),
             ice_servers: Vec::new(),
             signal_timeout_ms: 50,
+            plugin: None,
+            plugin_config: Vec::new(),
             ongoing: false,
             poll_interval_ms: 1000,
             max_iterations: None,
@@ -596,6 +623,25 @@ mod tests {
     fn webrtc_rs_dispatch_requires_feature() {
         let error = dispatch_error(&config_for(TransportKind::WebrtcRs));
         assert!(error.contains("--features webrtc-rs"), "got: {error}");
+    }
+
+    #[cfg(not(feature = "plugin-transports"))]
+    #[test]
+    fn plugin_dispatch_requires_feature() {
+        let error = dispatch_error(&config_for(TransportKind::Plugin));
+        assert!(
+            error.contains("--features plugin-transports"),
+            "got: {error}"
+        );
+    }
+
+    // Feature-ON, param absent: the missing flag is named (the spawn/handshake
+    // failure paths live with the fake plugin in tests/plugin_host.rs).
+    #[cfg(feature = "plugin-transports")]
+    #[test]
+    fn plugin_dispatch_names_the_missing_binary_flag() {
+        let error = dispatch_error(&config_for(TransportKind::Plugin));
+        assert!(error.contains("--plugin"), "got: {error}");
     }
 
     // ---- feature-ON dispatch, params absent: each missing flag is named ----
