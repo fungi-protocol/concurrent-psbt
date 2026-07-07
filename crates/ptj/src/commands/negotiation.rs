@@ -183,6 +183,37 @@ pub(crate) fn random_dummy_payment() -> Payment {
 // negotiation.rs) so HttpBackend and WasmBackend are indistinguishable to the
 // shared frontend.
 
+/// Build a real payment record from address/amount parts (the webgui
+/// `/api/pay` address variant). The txout is constructed server-side with the
+/// exact same validation as `ptj pay --to`: the address must parse and must be
+/// valid for `network`, and the amount is parsed in BTC denomination. `payer`
+/// is an OPAQUE optional 32-byte id copied into the record unchanged (payer
+/// semantics live in the negotiation spec, not in this mechanism).
+#[cfg(feature = "webgui")]
+pub(crate) fn payment_from_parts(
+    address: &str,
+    amount_btc: &str,
+    network: crate::cli::NetworkArg,
+    label: Option<&str>,
+    payer: Option<[u8; 32]>,
+) -> Result<Payment> {
+    let unchecked: bitcoin::Address<bitcoin::address::NetworkUnchecked> = address
+        .parse()
+        .map_err(|error| Error::new(format!("invalid address {address}: {error}")))?;
+    let recipient = unchecked
+        .require_network(network.0)
+        .map_err(|error| Error::new(format!("address not valid for {network}: {error}")))?;
+    let amount = bitcoin::Amount::from_str_in(amount_btc, bitcoin::Denomination::Bitcoin)
+        .map_err(|error| Error::new(format!("invalid amount {amount_btc}: {error}")))?;
+    Ok(Payment {
+        kind: PAYMENT_KIND_REAL,
+        payer: payer.unwrap_or([0u8; 32]),
+        amount_sats: amount.to_sat(),
+        script_pubkey: recipient.script_pubkey().into_bytes(),
+        label: label.unwrap_or_default().to_owned(),
+    })
+}
+
 /// Append an opaque payment record (webgui `/api/pay`). When `secret` is
 /// present the record is encrypted; otherwise it is stored in the clear.
 #[cfg(feature = "webgui")]
@@ -258,15 +289,30 @@ fn decode_band_entry(
 
 pub(super) fn run_confirm(config: ConfirmConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
     let mut psbt = io::read_psbt_source(&config.file, stdin)?;
-    let unique_id = unordered_unique_id(&psbt);
     let peer_id = config.peer_id.map(|p| p.into_array()).unwrap_or([0u8; 32]);
-    let confirmation = Confirmation { peer_id, unique_id };
 
     let secret = if config.encrypt {
         Some(require_secret(config.secret.as_ref().map(|s| s.as_bytes()))?)
     } else {
         None
     };
+
+    add_derived_confirmation(&mut psbt, peer_id, secret)?;
+    Ok(psbt)
+}
+
+/// Derive a confirmation of the CURRENT state of `psbt` (its unordered unique
+/// id) for `peer_id` and append it. This is the one confirmation builder: the
+/// CLI (`ptj confirm`) and the webgui derive variant (`/api/confirm` with
+/// `derive: true`) both land here, so the two surfaces produce byte-identical
+/// records and ids.
+pub(crate) fn add_derived_confirmation(
+    psbt: &mut Psbt,
+    peer_id: [u8; 32],
+    secret: Option<&[u8]>,
+) -> Result<()> {
+    let unique_id = unordered_unique_id(psbt);
+    let confirmation = Confirmation { peer_id, unique_id };
 
     // Derived id so a re-emitted identical confirmation deduplicates. Keyed
     // with the secret when encrypting, so observers cannot dictionary-test
@@ -291,7 +337,7 @@ pub(super) fn run_confirm(config: ConfirmConfig, stdin: Option<&[u8]>) -> Result
         None => confirmation.encode(),
     };
     psbt.global.add_confirmation(id, blob);
-    Ok(psbt)
+    Ok(())
 }
 
 pub(super) fn run_payments(config: PaymentsConfig, stdin: Option<&[u8]>) -> Result<String> {

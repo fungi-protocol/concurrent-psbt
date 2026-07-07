@@ -14,10 +14,12 @@
 import type { Backend } from "../core/backend.js";
 import {
   type AtomizeResponse,
+  type ConfirmationRecord,
   type ConfirmOptions,
   type CreatePsbtRequest,
   type ExportBip174Response,
   type InspectResponse,
+  type PaymentRecord,
   type PayOptions,
   type PaymentsOptions,
   type PaymentsResponse,
@@ -108,19 +110,39 @@ export class TauriBackend implements Backend {
     return this.call("ptj_import_bip174", { psbt });
   }
 
-  pay(psbt: string, paymentHex: string, options?: PayOptions): Promise<PsbtResponse> {
+  pay(psbt: string, payment: PaymentRecord, options?: PayOptions): Promise<PsbtResponse> {
+    // Same request-shape mapping as HttpBackend: the future native handler
+    // shares the webgui route's builder (`ptj pay --to`).
+    const record =
+      typeof payment === "string"
+        ? { payment_hex: payment }
+        : {
+            address: payment.address,
+            amount_btc: payment.amountBtc,
+            network: payment.network,
+            label: payment.label,
+            payer_hex: payment.payerHex,
+          };
     return this.call("ptj_pay", {
       psbt,
-      payment_hex: paymentHex,
+      ...record,
       secret_hex: options?.secretHex,
       dummy: options?.dummy ?? 0,
     });
   }
 
-  confirm(psbt: string, confirmationHex: string, options?: ConfirmOptions): Promise<PsbtResponse> {
+  confirm(
+    psbt: string,
+    confirmation: ConfirmationRecord,
+    options?: ConfirmOptions,
+  ): Promise<PsbtResponse> {
+    const record =
+      typeof confirmation === "string"
+        ? { confirmation_hex: confirmation }
+        : { derive: true, peer_id_hex: confirmation.peerIdHex };
     return this.call("ptj_confirm", {
       psbt,
-      confirmation_hex: confirmationHex,
+      ...record,
       secret_hex: options?.secretHex,
     });
   }
@@ -132,8 +154,18 @@ export class TauriBackend implements Backend {
   syncPsbts(request: SyncRequest): Promise<SyncResponse> {
     return this.call("ptj_sync", {
       psbts: request.psbts,
+      transport: request.transport,
+      sources: request.sources,
+      state: request.state,
       iroh_ticket: request.irohTicket,
+      iroh_ticket_out: request.irohTicketOut,
       iroh_wait_ms: request.irohWaitMs,
+      webrtc_role: request.webrtcRole,
+      signal_out: request.signalOut,
+      signal_in: request.signalIn,
+      webrtc_bind: request.webrtcBind,
+      ice_servers: request.iceServers,
+      signal_timeout_ms: request.signalTimeoutMs,
     });
   }
 }

@@ -80,20 +80,33 @@ export class HttpBackend {
     }
     // Negotiation band: served by the webgui's /api/{pay,confirm,payments}
     // routes (crates/ptj/src/webgui.rs pay_response/confirm_response/
-    // payments_response), which append/decode the same opaque records as the
-    // wasm surface.
-    pay(psbt, paymentHex, options) {
+    // payments_response). Opaque records pass through unchanged (wasm parity);
+    // the PayByAddress / DeriveConfirmation variants map onto the routes'
+    // build-it-server-side request shapes.
+    pay(psbt, payment, options) {
+        const record = typeof payment === "string"
+            ? { payment_hex: payment }
+            : {
+                address: payment.address,
+                amount_btc: payment.amountBtc,
+                network: payment.network,
+                label: payment.label,
+                payer_hex: payment.payerHex,
+            };
         return this.postJson("/api/pay", {
             psbt,
-            payment_hex: paymentHex,
+            ...record,
             secret_hex: options?.secretHex,
             dummy: options?.dummy ?? 0,
         });
     }
-    confirm(psbt, confirmationHex, options) {
+    confirm(psbt, confirmation, options) {
+        const record = typeof confirmation === "string"
+            ? { confirmation_hex: confirmation }
+            : { derive: true, peer_id_hex: confirmation.peerIdHex };
         return this.postJson("/api/confirm", {
             psbt,
-            confirmation_hex: confirmationHex,
+            ...record,
             secret_hex: options?.secretHex,
         });
     }
@@ -103,11 +116,26 @@ export class HttpBackend {
             secret_hex: options?.secretHex,
         });
     }
-    syncPsbts(request) {
-        return this.postJson("/api/sync", {
+    async syncPsbts(request) {
+        const raw = await this.postJson("/api/sync", {
             psbts: request.psbts,
+            transport: request.transport,
+            sources: request.sources,
+            state: request.state,
             iroh_ticket: request.irohTicket,
+            iroh_ticket_out: request.irohTicketOut,
             iroh_wait_ms: request.irohWaitMs,
+            webrtc_role: request.webrtcRole,
+            signal_out: request.signalOut,
+            signal_in: request.signalIn,
+            webrtc_bind: request.webrtcBind,
+            ice_servers: request.iceServers,
+            signal_timeout_ms: request.signalTimeoutMs,
         });
+        // The one snake_case response field that needs camelCase surfacing.
+        if (raw.iroh_ticket_out !== undefined && raw.irohTicketOut === undefined) {
+            raw.irohTicketOut = raw.iroh_ticket_out;
+        }
+        return raw;
     }
 }

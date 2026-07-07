@@ -21,10 +21,12 @@
 import type { Backend } from "../core/backend.js";
 import {
   type AtomizeResponse,
+  type ConfirmationRecord,
   type ConfirmOptions,
   type CreatePsbtRequest,
   type ExportBip174Response,
   type InspectResponse,
+  type PaymentRecord,
   type PayOptions,
   type PaymentsOptions,
   type PaymentsResponse,
@@ -159,11 +161,22 @@ export class WasmBackend implements Backend {
 
   // --- negotiation band (opaque hex records; snake_case wire fields) ---
 
-  async pay(psbt: string, paymentHex: string, options?: PayOptions): Promise<PsbtResponse> {
+  async pay(psbt: string, payment: PaymentRecord, options?: PayOptions): Promise<PsbtResponse> {
+    // The wasm wrapper only appends OPAQUE records; the PayByAddress variant
+    // needs a server-side builder (webgui /api/pay). Reject it clearly rather
+    // than parse addresses here — the transport-skeleton "built without
+    // support" pattern.
+    if (typeof payment !== "string") {
+      throw new PtjBackendError(
+        0,
+        "WasmBackend cannot build a payment record from an address; " +
+          "pass an opaque payment hex or use a server backend",
+      );
+    }
     return wrap(() =>
       this.m.pay({
         psbt,
-        payment_hex: paymentHex,
+        payment_hex: payment,
         secret_hex: options?.secretHex,
         dummy: options?.dummy ?? 0,
       })
@@ -172,13 +185,22 @@ export class WasmBackend implements Backend {
 
   async confirm(
     psbt: string,
-    confirmationHex: string,
+    confirmation: ConfirmationRecord,
     options?: ConfirmOptions
   ): Promise<PsbtResponse> {
+    // Same shape as pay: DeriveConfirmation needs the server-side builder
+    // (webgui /api/confirm with derive: true).
+    if (typeof confirmation !== "string") {
+      throw new PtjBackendError(
+        0,
+        "WasmBackend cannot derive a confirmation record; " +
+          "pass an opaque confirmation hex or use a server backend",
+      );
+    }
     return wrap(() =>
       this.m.confirm({
         psbt,
-        confirmation_hex: confirmationHex,
+        confirmation_hex: confirmation,
         secret_hex: options?.secretHex,
       })
     );

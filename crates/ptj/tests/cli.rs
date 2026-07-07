@@ -1655,12 +1655,23 @@ fn run_or_write_rejects_in_place_atomize() {
 
 #[test]
 fn webgui_embeds_static_offline_assets() {
+    // "/" serves the real session UI; the demo sandbox is explicit at /demo.
     let index = ptj::webgui::asset("/").unwrap();
     assert_eq!(index.content_type, "text/html; charset=utf-8");
+    let index_html = std::str::from_utf8(index.body).unwrap();
+    assert!(index_html.contains("Partial Transaction Joiner"));
+    assert!(index_html.contains("dist/session/app.js"));
+
+    let demo = ptj::webgui::asset("/demo").unwrap();
+    assert_eq!(demo.content_type, "text/html; charset=utf-8");
+    assert!(std::str::from_utf8(demo.body).unwrap().contains("dist/app.js"));
+
+    let session_app = ptj::webgui::asset("/dist/session/app.js?v=cache-busted").unwrap();
+    assert_eq!(session_app.content_type, "text/javascript; charset=utf-8");
     assert!(
-        std::str::from_utf8(index.body)
+        std::str::from_utf8(session_app.body)
             .unwrap()
-            .contains("Partial Transaction Joiner")
+            .contains("HttpBackend")
     );
 
     let script = ptj::webgui::asset("/dist/app.js?v=cache-busted").unwrap();
