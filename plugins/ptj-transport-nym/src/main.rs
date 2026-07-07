@@ -50,18 +50,22 @@ struct State {
     backend: Option<nym::Backend>,
 }
 
-impl State {
-    /// Connect on first use (see the module doc).
-    #[cfg(feature = "nym")]
-    async fn backend(&mut self) -> Result<&mut nym::Backend, capnp::Error> {
-        if self.backend.is_none() {
-            let backend = nym::Backend::connect(&self.recipients)
-                .await
-                .map_err(|error| capnp::Error::failed(format!("ptj-transport-nym: {error}")))?;
-            self.backend = Some(backend);
-        }
-        Ok(self.backend.as_mut().expect("just initialized"))
+/// Take the backend out of the state for one operation, connecting on first
+/// use (see the module doc), WITHOUT holding a RefCell borrow across an
+/// await (each borrow below is scoped to one statement). The caller puts
+/// the backend back when done. If the host ever pipelined requests (it does
+/// not — the sync driver is one logical task), an overlapping call would at
+/// worst connect a second client and the last put-back would win; it can
+/// never alias or panic a borrow.
+#[cfg(feature = "nym")]
+async fn take_backend(state: &Rc<RefCell<State>>) -> Result<nym::Backend, capnp::Error> {
+    if let Some(backend) = state.borrow_mut().backend.take() {
+        return Ok(backend);
     }
+    let recipients = state.borrow().recipients.clone();
+    nym::Backend::connect(&recipients)
+        .await
+        .map_err(|error| capnp::Error::failed(format!("ptj-transport-nym: {error}")))
 }
 
 /// The error every transport operation reports when built without `nym` —
@@ -149,15 +153,12 @@ impl transport::Server for NymTransport {
         _results: transport::PublishResults,
     ) -> Result<(), capnp::Error> {
         let message = params.get()?.get_message()?.to_vec();
-        // One borrow across the awaits is fine: the vat serves one request
-        // at a time (the host serializes them), so no reentrant borrow can
-        // occur.
-        let mut state = self.state.borrow_mut();
-        let backend = state.backend().await?;
-        backend
-            .publish(&message)
-            .await
-            .map_err(|error| capnp::Error::failed(format!("ptj-transport-nym: {error}")))
+        let backend = take_backend(&self.state).await?;
+        let result = backend.publish(&message).await;
+        // Put the backend back even on error — the connection may well
+        // outlive one failed send.
+        self.state.borrow_mut().backend = Some(backend);
+        result.map_err(|error| capnp::Error::failed(format!("ptj-transport-nym: {error}")))
     }
 
     #[cfg(feature = "nym")]
@@ -166,9 +167,9 @@ impl transport::Server for NymTransport {
         _params: transport::CollectParams,
         mut results: transport::CollectResults,
     ) -> Result<(), capnp::Error> {
-        let mut state = self.state.borrow_mut();
-        let backend = state.backend().await?;
+        let mut backend = take_backend(&self.state).await?;
         let collected = backend.collect().await;
+        self.state.borrow_mut().backend = Some(backend);
         let mut messages = results.get().init_messages(collected.len() as u32);
         for (index, message) in collected.iter().enumerate() {
             messages.set(index as u32, message);

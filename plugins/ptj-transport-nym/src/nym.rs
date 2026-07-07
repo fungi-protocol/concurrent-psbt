@@ -100,22 +100,18 @@ impl Backend {
     /// transport moves bytes; it never crashes on a bad wire blob.
     pub async fn collect(&mut self) -> Vec<Vec<u8>> {
         let mut messages = Vec::new();
-        loop {
-            match tokio::time::timeout(
-                Duration::from_millis(50),
-                self.client.wait_for_messages(),
-            )
-            .await
-            {
-                Ok(Some(batch)) => {
-                    for reconstructed in batch {
-                        if let Some(bytes) = unframe_one(&reconstructed.message) {
-                            messages.push(bytes);
-                        }
-                    }
+        // Ends on a closed stream (`Ok(None)`) or an empty poll window
+        // (`Err(Elapsed)`) — either way, nothing more is ready right now.
+        while let Ok(Some(batch)) = tokio::time::timeout(
+            Duration::from_millis(50),
+            self.client.wait_for_messages(),
+        )
+        .await
+        {
+            for reconstructed in batch {
+                if let Some(bytes) = unframe_one(&reconstructed.message) {
+                    messages.push(bytes);
                 }
-                // Stream closed, or nothing more within the poll window.
-                Ok(None) | Err(_) => break,
             }
         }
         messages
