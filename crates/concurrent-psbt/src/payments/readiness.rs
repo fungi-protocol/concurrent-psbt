@@ -1,13 +1,13 @@
 #![allow(clippy::result_large_err)]
 
 //! Confirmation readiness: the predicate that decides
-//! [`Phase::Ready`](crate::session::Phase::Ready).
+//! [`Phase::Ready`](crate::payments::session::Phase::Ready).
 //!
 //! This is pure logic over two already-existing ingredients:
 //!
-//! - the grow-only confirmation set ([`crate::negotiation::Confirmation`],
+//! - the grow-only confirmation set ([`crate::payments::negotiation::Confirmation`],
 //!   subtype `0x21`), a set of `(peer_id, unique_id)` attestations, and
-//! - the order-independent [`unordered_unique_id`](crate::negotiation::unordered_unique_id)
+//! - the order-independent [`unordered_unique_id`](crate::payments::negotiation::unordered_unique_id)
 //!   of the current joined PSBT.
 //!
 //! It answers: *given the payment graph and the confirmations collected so
@@ -48,7 +48,7 @@
 //! Because confirmations attest to the *content* id (which changes whenever
 //! the joined set changes), a stale confirmation against an old id simply does
 //! not count — the session stays in
-//! [`Phase::Confirming`](crate::session::Phase::Confirming) until every required
+//! [`Phase::Confirming`](crate::payments::session::Phase::Confirming) until every required
 //! party re-confirms the current least upper bound. This is exactly the
 //! eventual-consistency behaviour the spec requires: no consensus, only
 //! convergence on the current LUB.
@@ -57,8 +57,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use psbt_v2::v2::Global;
 
-use crate::graph::{ParticipantId, PaymentGraph};
-use crate::negotiation::{Confirmation, GlobalNegotiationExt};
+use crate::payments::graph::{ParticipantId, PaymentGraph};
+use crate::payments::negotiation::{Confirmation, GlobalNegotiationExt};
 
 /// Compute, for every participant in the graph, whether it is *confirmable*:
 /// its net balance is non-negative, or every party it pays is confirmable.
@@ -122,9 +122,9 @@ pub fn confirmable(graph: &PaymentGraph) -> BTreeMap<ParticipantId, bool> {
 ///
 /// A *pseudonymous* recipient — one the addressing layer could not resolve to a
 /// real 32-byte peer id, so it is bucketed under a script-derived
-/// [`script_pseudonym`](crate::graph) — can **never** produce a
+/// [`script_pseudonym`](crate::payments::graph) — can **never** produce a
 /// `PSBT_GLOBAL_CONFIRMATION` under a real `peer_id`. Including it here would
-/// wedge [`is_ready`] in [`Phase::Confirming`](crate::session::Phase) forever.
+/// wedge [`is_ready`] in [`Phase::Confirming`](crate::payments::session::Phase) forever.
 /// We therefore **exclude pseudonymous recipients** from the required set and
 /// surface them separately via [`unresolved_recipients`]: readiness then depends
 /// only on parties that *can* confirm, and a `Ready` verdict while
@@ -143,7 +143,7 @@ pub fn required_confirmers(graph: &PaymentGraph) -> BTreeSet<ParticipantId> {
 
 /// Recipients that receive value but were not resolved to a real peer id.
 ///
-/// Non-empty means [`is_ready`]/[`Phase::Ready`](crate::session::Phase) is only
+/// Non-empty means [`is_ready`]/[`Phase::Ready`](crate::payments::session::Phase) is only
 /// *provisional*: those payees cannot attest, so they are excluded from
 /// [`required_confirmers`], and the caller should treat readiness as
 /// conditional on resolving them. This is the diagnostic half of the
@@ -191,9 +191,9 @@ pub fn can_sign(
 /// current unique id.
 ///
 /// When this holds, every sender's `can_sign` predicate is satisfiable and the
-/// session may transition to [`Phase::Ready`](crate::session::Phase::Ready).
-/// This is the predicate the [`Session`](crate::session::Session) uses to leave
-/// [`Phase::Confirming`](crate::session::Phase::Confirming).
+/// session may transition to [`Phase::Ready`](crate::payments::session::Phase::Ready).
+/// This is the predicate the [`Session`](crate::payments::session::Session) uses to leave
+/// [`Phase::Confirming`](crate::payments::session::Phase::Confirming).
 ///
 /// The empty payment graph (no real payments — e.g. a pure coinjoin with no
 /// net transfer, or a not-yet-populated session) has no required confirmers
@@ -251,7 +251,7 @@ pub fn is_ready_from_global(
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::negotiation::{PAYMENT_KIND_REAL, Payment};
+    use crate::payments::negotiation::{PAYMENT_KIND_REAL, Payment};
 
     fn pay(payer: u8, script: &[u8], amount: u64) -> Payment {
         Payment {
@@ -459,7 +459,7 @@ mod tests {
 
         #[test]
         fn readiness_reads_wire_confirmations() {
-            use crate::negotiation::GlobalNegotiationExt;
+            use crate::payments::negotiation::GlobalNegotiationExt;
             let g = PaymentGraph::from_payments(&[pay(0x0a, &[0x0b], 1000)], &resolve_by_first_byte);
             // Bob embeds his confirmation of the current uid into a Global via
             // the 0x21 wire field.
@@ -481,7 +481,7 @@ mod tests {
 
         #[test]
         fn wire_and_extra_confirmations_union() {
-            use crate::negotiation::GlobalNegotiationExt;
+            use crate::payments::negotiation::GlobalNegotiationExt;
             // A -> B 500, B -> A 300: both are payees, both required.
             let g = PaymentGraph::from_payments(
                 &[pay(0x0a, &[0x0b], 500), pay(0x0b, &[0x0a], 300)],

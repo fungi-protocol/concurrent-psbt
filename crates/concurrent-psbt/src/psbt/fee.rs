@@ -4,7 +4,7 @@
 //!
 //! `PSBT_GLOBAL_EXPLICIT_FEE_CONTRIBUTION` (subtype `0x22`) is the third field
 //! in the negotiation band (after payment `0x20` and confirmation `0x21`). It
-//! is structurally identical to [`crate::negotiation::Payment`]: one entry per
+//! is structurally identical to [`crate::payments::negotiation::Payment`]: one entry per
 //! contribution keyed by a random 16-byte uuid, value an opaque `Vec<u8>` at
 //! the field layer. The only difference is the codec — each entry carries a
 //! bare little-endian `u64` amount of satoshis explicitly contributed as fees
@@ -25,14 +25,14 @@
 //! plaintext one; only [`FeeContribution`] here understands the plaintext form.
 //! Encryption reuses the negotiation group-key machinery in the `ptj` CLI.
 
-// This module lives at `crates/concurrent-psbt/src/psbt/fee.rs`, a sibling of
-// `psbt/negotiation.rs`, and is re-exported from lib.rs as `pub use psbt::fee;`
-// (mirroring `pub use psbt::negotiation;`). Sibling references use the crate
-// re-export path `crate::negotiation`.
+// This module lives at `crates/concurrent-psbt/src/psbt/fee.rs` and is
+// re-exported from lib.rs as `pub use psbt::fee;`. The negotiation module it
+// mirrors now lives in the `payments` module; references use the path
+// `crate::payments::negotiation`.
 use psbt_v2::raw;
 use psbt_v2::v2::Global;
 
-use crate::negotiation::{FORMAT_PLAINTEXT, NegotiationError};
+use crate::payments::negotiation::{FORMAT_PLAINTEXT, NegotiationError};
 
 type Result<T> = std::result::Result<T, NegotiationError>;
 
@@ -68,7 +68,7 @@ fn entries(global: &Global) -> Vec<([u8; 16], Vec<u8>)> {
 
 /// Extension trait on [`Global`] for the explicit-fee-contribution set.
 ///
-/// Mirrors [`crate::negotiation::GlobalNegotiationExt`]; kept as a separate
+/// Mirrors [`crate::payments::negotiation::GlobalNegotiationExt`]; kept as a separate
 /// trait so the fee feature is self-contained and can be feature-gated
 /// independently of the payment/confirmation band.
 pub trait GlobalFeeExt {
@@ -185,7 +185,7 @@ mod tests {
     mod unit {
         use super::*;
         use crate::fee::PSBT_GLOBAL_EXPLICIT_FEE_CONTRIBUTION_SUBTYPE as FEE_SUBTYPE;
-        use crate::negotiation::{FORMAT_ENCRYPTED, GlobalNegotiationExt, PSBT_GLOBAL_PAYMENT_SUBTYPE};
+        use crate::payments::negotiation::{FORMAT_ENCRYPTED, GlobalNegotiationExt, PSBT_GLOBAL_PAYMENT_SUBTYPE};
 
         #[test]
         fn fee_roundtrip() {
@@ -308,7 +308,7 @@ mod tests {
         use crate::collections::btreemap::BTreeMapExt;
         use crate::lattice::join::Join;
         use crate::lattice::partial::JoinResult;
-        use crate::negotiation::FORMAT_ENCRYPTED;
+        use crate::payments::negotiation::FORMAT_ENCRYPTED;
         use proptest::prelude::*;
         use std::collections::BTreeMap;
 

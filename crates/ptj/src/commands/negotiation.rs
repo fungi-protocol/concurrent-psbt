@@ -1,7 +1,7 @@
 //! Payment negotiation and confirmation subcommands.
 //!
 //! `pay` and `confirm` append grow-only global proprietary entries
-//! (`concurrent_psbt::negotiation`); `payments` decodes them back. Each
+//! (`concurrent_psbt::payments::negotiation`); `payments` decodes them back. Each
 //! element is optionally encrypted with a group key derived from an
 //! out-of-band shared secret (`--secret`), and `pay` can pad the visible
 //! payment set with indistinguishable dummy entries (`--dummy N`, encrypted
@@ -12,7 +12,7 @@
 use bitcoin::hashes::{Hash, HashEngine, sha256t_hash_newtype};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-use concurrent_psbt::negotiation::{
+use concurrent_psbt::payments::negotiation::{
     Confirmation, FORMAT_ENCRYPTED, GlobalNegotiationExt, PAYMENT_KIND_DUMMY, PAYMENT_KIND_REAL,
     PSBT_GLOBAL_CONFIRMATION_SUBTYPE, PSBT_GLOBAL_PAYMENT_SUBTYPE, Payment, unordered_unique_id,
 };
