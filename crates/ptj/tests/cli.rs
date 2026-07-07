@@ -324,6 +324,10 @@ fn iroh_sync_requires_feature_even_with_output_file() {
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("joined.psbt");
     let ticket = temp.path().join("session.ticket");
+    // A real source, so the local fold succeeds and the error the test
+    // observes is the transport feature gate, not the empty-source check
+    // (sync folds local sources before constructing the transport).
+    let source = write_psbt(temp.path(), "source.psbt", create_psbt(TXID, 0, 1, 50_000));
 
     let error = ptj::run_or_write(
         Cli::try_parse_from([
@@ -331,8 +335,11 @@ fn iroh_sync_requires_feature_even_with_output_file() {
             "--output-file",
             path_str(&output),
             "sync",
+            "--transport",
+            "iroh",
             "--iroh-ticket-out",
             path_str(&ticket),
+            path_str(&source),
         ])
         .unwrap(),
     )
