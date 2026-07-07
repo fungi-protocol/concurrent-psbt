@@ -141,20 +141,7 @@ pub(super) fn run_pay(config: PayConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
 
     add_payment_entry(&mut psbt, &payment, secret)?;
     for _ in 0..config.dummy {
-        let dummy = Payment {
-            kind: PAYMENT_KIND_DUMMY,
-            payer: rand::random(),
-            amount_sats: u64::from(rand::random::<u32>()),
-            script_pubkey: {
-                let mut spk = vec![0u8; 22];
-                spk[0] = 0x00;
-                spk[1] = 0x14;
-                rand::fill(&mut spk[2..]);
-                spk
-            },
-            label: String::new(),
-        };
-        add_payment_entry(&mut psbt, &dummy, secret)?;
+        add_payment_entry(&mut psbt, &random_dummy_payment(), secret)?;
     }
     Ok(psbt)
 }
@@ -167,6 +154,106 @@ fn add_payment_entry(psbt: &mut Psbt, payment: &Payment, secret: Option<&[u8]>) 
     };
     psbt.global.add_payment(id, blob);
     Ok(())
+}
+
+/// A randomly-generated dummy payment record: a fresh v0 witness program
+/// script plus random payer/amount, indistinguishable from a real entry once
+/// encrypted. Shared by `pay --dummy` and the webgui `/api/pay` dummy padding.
+pub(crate) fn random_dummy_payment() -> Payment {
+    let mut spk = vec![0u8; 22];
+    spk[0] = 0x00;
+    spk[1] = 0x14;
+    rand::fill(&mut spk[2..]);
+    Payment {
+        kind: PAYMENT_KIND_DUMMY,
+        payer: rand::random(),
+        amount_sats: u64::from(rand::random::<u32>()),
+        script_pubkey: spk,
+        label: String::new(),
+    }
+}
+
+// --- webgui negotiation mechanism (opaque records) --------------------------
+//
+// The `/api/{pay,confirm,payments}` routes (webgui.rs) speak the shared
+// frontend contract: the record bytes arrive OPAQUE (hex) — the frontend
+// builds them — and the server only appends/decodes, using the exact same
+// deterministic AEAD helpers as the CLI subcommands above. The surface mirrors
+// concurrent-psbt-wasm's negotiation module (crates/concurrent-psbt-wasm/src/
+// negotiation.rs) so HttpBackend and WasmBackend are indistinguishable to the
+// shared frontend.
+
+/// Append an opaque payment record (webgui `/api/pay`). When `secret` is
+/// present the record is encrypted; otherwise it is stored in the clear.
+#[cfg(feature = "webgui")]
+pub(crate) fn add_opaque_payment(
+    psbt: &mut Psbt,
+    record: &[u8],
+    secret: Option<&[u8]>,
+) -> Result<()> {
+    let id = random_id();
+    let blob = match secret {
+        Some(secret) => encrypt(secret, PSBT_GLOBAL_PAYMENT_SUBTYPE, &id, record)?,
+        None => record.to_vec(),
+    };
+    psbt.global.add_payment(id, blob);
+    Ok(())
+}
+
+/// Append an opaque confirmation record (webgui `/api/confirm`).
+#[cfg(feature = "webgui")]
+pub(crate) fn add_opaque_confirmation(
+    psbt: &mut Psbt,
+    record: &[u8],
+    secret: Option<&[u8]>,
+) -> Result<()> {
+    let id = random_id();
+    let blob = match secret {
+        Some(secret) => encrypt(secret, PSBT_GLOBAL_CONFIRMATION_SUBTYPE, &id, record)?,
+        None => record.to_vec(),
+    };
+    psbt.global.add_confirmation(id, blob);
+    Ok(())
+}
+
+/// Decode the negotiation band to opaque hex blobs (webgui `/api/payments`).
+/// Encrypted entries are decrypted when `secret` is supplied (a wrong secret
+/// is an error); encrypted entries with no secret given are returned as their
+/// stored ciphertext bytes so the caller can decide.
+#[cfg(feature = "webgui")]
+pub(crate) fn decode_band(
+    psbt: &Psbt,
+    secret: Option<&[u8]>,
+) -> Result<(Vec<String>, Vec<String>)> {
+    let payments = psbt
+        .global
+        .payments()
+        .into_iter()
+        .map(|(id, blob)| decode_band_entry(PSBT_GLOBAL_PAYMENT_SUBTYPE, &id, &blob, secret))
+        .collect::<Result<Vec<_>>>()?;
+    let confirmations = psbt
+        .global
+        .confirmations()
+        .into_iter()
+        .map(|(id, blob)| decode_band_entry(PSBT_GLOBAL_CONFIRMATION_SUBTYPE, &id, &blob, secret))
+        .collect::<Result<Vec<_>>>()?;
+    Ok((payments, confirmations))
+}
+
+#[cfg(feature = "webgui")]
+fn decode_band_entry(
+    subtype: u8,
+    id: &[u8; 16],
+    blob: &[u8],
+    secret: Option<&[u8]>,
+) -> Result<String> {
+    let bytes = match (blob.first(), secret) {
+        (Some(&FORMAT_ENCRYPTED), Some(secret)) => {
+            decrypt(secret, subtype, id, blob)?.unwrap_or_else(|| blob.to_vec())
+        }
+        _ => blob.to_vec(),
+    };
+    Ok(hex(&bytes))
 }
 
 pub(super) fn run_confirm(config: ConfirmConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
