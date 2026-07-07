@@ -187,6 +187,59 @@ fn join_and_sort_commands_parse_to_config_types() {
     assert_eq!(config.iroh_wait_ms, 5000);
     assert_eq!(config.sources, vec![PathBuf::from("bob.psbt")]);
 
+    // WebRTC signaling params (str0m / webrtc-rs): role + signal files parse,
+    // ICE servers repeat, and the timeout/bind override their defaults.
+    let webrtc = Cli::try_parse_from([
+        "ptj",
+        "sync",
+        "--transport",
+        "str0m",
+        "--webrtc-role",
+        "offer",
+        "--signal-out",
+        "us.sig",
+        "--signal-in",
+        "peer.sig",
+        "--webrtc-bind",
+        "127.0.0.1:0",
+        "--ice-server",
+        "stun:stun.example.org:3478",
+        "--ice-server",
+        "turn:turn.example.org:3478",
+        "--signal-timeout-ms",
+        "5000",
+        "alice.psbt",
+    ])
+    .unwrap();
+    let Command::Sync(config) = webrtc.command else {
+        panic!("expected sync command");
+    };
+    assert_eq!(config.webrtc_role, Some(ptj::cli::WebrtcRoleArg::Offer));
+    assert_eq!(config.signal_out, Some(PathBuf::from("us.sig")));
+    assert_eq!(config.signal_in, Some(PathBuf::from("peer.sig")));
+    assert_eq!(config.webrtc_bind, "127.0.0.1:0");
+    assert_eq!(
+        config.ice_servers,
+        vec![
+            "stun:stun.example.org:3478".to_string(),
+            "turn:turn.example.org:3478".to_string(),
+        ]
+    );
+    assert_eq!(config.signal_timeout_ms, 5000);
+
+    // And their defaults: no role/files, OS-picked wildcard bind, no ICE
+    // servers, a 60s signaling timeout.
+    let webrtc_defaults = Cli::try_parse_from(["ptj", "sync", "bob.psbt"]).unwrap();
+    let Command::Sync(config) = webrtc_defaults.command else {
+        panic!("expected sync command");
+    };
+    assert_eq!(config.webrtc_role, None);
+    assert_eq!(config.signal_out, None);
+    assert_eq!(config.signal_in, None);
+    assert_eq!(config.webrtc_bind, "0.0.0.0:0");
+    assert!(config.ice_servers.is_empty());
+    assert_eq!(config.signal_timeout_ms, 60_000);
+
     let ongoing_stdin =
         Cli::try_parse_from(["ptj", "sync", "--ongoing", "--state", "state.psbt", "-"]).unwrap();
     assert!(!ongoing_stdin.command.reads_stdin());
