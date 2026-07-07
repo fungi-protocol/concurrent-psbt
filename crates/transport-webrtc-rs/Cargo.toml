@@ -1,0 +1,62 @@
+[package]
+name = "transport-webrtc-rs"
+version.workspace = true
+edition = "2024"
+
+# transport-webrtc-rs — the ALTERNATE WebRTC data-channel transport, backed by
+# the full-async `webrtc` crate (webrtc-rs). This is the heavier, iroh/nym-shaped
+# sibling of `transport-str0m` (the primary, sans-IO `str0m` backend): it
+# owns a tokio runtime and bridges the synchronous channel contract to
+# webrtc-rs's callback-driven async API with `rt.block_on(...)` per call —
+# exactly the pattern transport-iroh and transport-nym use. The human's steer:
+# ship ONE of the two WebRTC backends real; str0m (sans-IO, tokio-free) is
+# preferred and is the one the e2e path proves. This crate is authored in full
+# (skeleton + feature-on backend) with grounded deps: it type-checks under
+# --features webrtc-rs, but no live peer connection has been exercised.
+#
+# Kind: AnonymousChannel only. A WebRTC data channel is a bare DTLS/SCTP byte
+# pipe; DTLS gives a peer-cert fingerprint but the transport does no security
+# reasoning and surfaces no identity, so there is nothing to hand back as a
+# SenderId. Exactly like transport-arti / transport-nym / transport-emissary.
+#
+# Signaling (SDP offer/answer + trickle ICE) is OUT OF SCOPE for this crate: the
+# offer/answer/candidate blobs are opaque bytes that arrive/leave as INPUTS,
+# moved over a BIP-77 payjoin-directory-over-OHTTP oblivious mailbox (its own
+# transport crate), never a direct/localhost signaling server. This crate only
+# owns the peer-to-peer data path once the channel is up.
+#
+# ALL external-network dependency usage sits behind the `webrtc-rs` cargo feature
+# (named after the backend, to disambiguate from a future str0m feature on the
+# sibling crate), mirroring how ptj gates iroh behind `iroh-sync`. With the
+# feature OFF the crate compiles as a skeleton against transport-core only and
+# every constructor/method returns a clear "built without the `webrtc-rs`
+# feature" error.
+
+[features]
+# Off by default: the stock build is a network-free skeleton. Turning on
+# `webrtc-rs` pulls the full webrtc-rs stack (`webrtc` + `bytes` + a tokio
+# runtime — webrtc-rs is async and callback-driven; we bridge to the pull-based
+# seam with an owned runtime at the edge, exactly like the iroh and nym
+# transports) and lights up the real send/recv over an SCTP data channel.
+default = []
+webrtc-rs = ["dep:webrtc", "dep:tokio", "dep:bytes", "dep:serde_json"]
+
+[dependencies]
+# Grounded via cargo add (webrtc + tokio + bytes + serde_json, all optional
+# behind the `webrtc-rs` feature). webrtc-rs's send() takes Bytes; `webrtc`
+# re-exports RTCSessionDescription/RTCIceCandidateInit as serde types, so
+# serde_json is the only extra needed for signaling-blob (de)serdes. The
+# feature-on backend type-checks against these pins; no live peer connection
+# has been exercised yet (see src/imp.rs).
+async-trait = "0.1.89"
+bytes = { version = "1.12.0", optional = true }
+serde_json = { version = "1.0.150", optional = true }
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "sync", "time"], optional = true }
+transport-core = { path = "../transport-core" }
+webrtc = { version = "0.17.1", optional = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+futures = "0.3.32"
