@@ -8,7 +8,11 @@ name = "ptj"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["webgui"]
+webgui = []
+# WIP: interactive terminal UI (`ptj tui`). NOT in the default set — the TUI
+# pulls a terminal stack (ratatui + crossterm) the plain CLI doesn't need.
+tui = ["dep:ratatui", "dep:crossterm"]
 iroh-sync = ["dep:transport-iroh", "transport-iroh/iroh"]
 arti = ["dep:transport-arti", "transport-arti/arti"]
 nym = ["dep:transport-nym", "transport-nym/nym"]
@@ -23,6 +27,9 @@ bitcoin = "0.32"
 chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive"] }
 concurrent-psbt = { path = "../concurrent-psbt" }
+# Terminal backend + input events for the `tui` feature only (ratatui's
+# conventional pairing). Version grounded via `cargo add --dry-run` (2026-07).
+crossterm = { version = "0.29.0", optional = true }
 # Event-driven `--ongoing` sync: react to source/state file-change events
 # instead of a busy poll-sleep loop (a poll-interval fallback is retained).
 notify = "8"
@@ -30,6 +37,9 @@ psbt-v2 = { version = "0.3.0", features = [
     "base64",
 ] }
 rand = "0.9"
+# Terminal UI framework for the `tui` feature only. Version grounded via
+# `cargo add --dry-run` (2026-07).
+ratatui = { version = "0.30.2", optional = true }
 serde_json = "1"
 # The single async runtime for the whole sync driver, created only at the `Sync`
 # command edge (`commands::sync::drive_async`). `rt` = current-thread runtime;

@@ -1,3 +1,4 @@
+#[cfg(feature = "webgui")]
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -51,7 +52,11 @@ pub enum Command {
     /// Join local PSBT sources and print the converged state
     Sync(SyncConfig),
     /// Serve the offline web GUI
+    #[cfg(feature = "webgui")]
     Webgui(WebguiConfig),
+    /// Open the interactive terminal UI (WIP placeholder)
+    #[cfg(feature = "tui")]
+    Tui(TuiConfig),
 }
 
 impl Command {
@@ -71,7 +76,11 @@ impl Command {
             Command::Sync(config) => {
                 !config.ongoing && config.sources.iter().any(|path| is_stdin_path(path))
             }
-            Command::Create(_) | Command::Webgui(_) => false,
+            Command::Create(_) => false,
+            #[cfg(feature = "webgui")]
+            Command::Webgui(_) => false,
+            #[cfg(feature = "tui")]
+            Command::Tui(_) => false,
         }
     }
 
@@ -101,7 +110,11 @@ impl Command {
                 .iter()
                 .filter(|path| is_stdin_path(path))
                 .count(),
-            Command::Create(_) | Command::Webgui(_) => 0,
+            Command::Create(_) => 0,
+            #[cfg(feature = "webgui")]
+            Command::Webgui(_) => 0,
+            #[cfg(feature = "tui")]
+            Command::Tui(_) => 0,
         }
     }
 }
@@ -241,6 +254,14 @@ pub enum TransportKind {
     Mdk,
 }
 
+/// WIP: no options yet. Candidates once the TUI is real: a state/--sources
+/// pair like `sync` (which document to converge on), a read-only flag, and a
+/// network selector for address validation in the pay screen.
+#[cfg(feature = "tui")]
+#[derive(Args, Debug, Clone)]
+pub struct TuiConfig {}
+
+#[cfg(feature = "webgui")]
 #[derive(Args, Debug, Clone)]
 pub struct WebguiConfig {
     /// Address to bind
