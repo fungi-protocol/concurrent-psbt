@@ -12,6 +12,11 @@
 //! idempotent/commutative/associative, so ordering and duplicates cost nothing.
 
 pub(crate) mod local;
+// Manual file-based SDP/ICE signaling for the WebRTC transports; only those
+// features have a caller, so the module is gated with them (keeping the
+// default build free of dead code).
+#[cfg(any(feature = "str0m", feature = "webrtc-rs"))]
+pub(crate) mod signaling;
 
 pub(crate) use local::LocalTransport;
 // `Transport` is re-exported here so `use crate::transport::{LocalTransport,
