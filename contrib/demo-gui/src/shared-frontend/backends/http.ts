@@ -129,10 +129,10 @@ export class HttpBackend implements Backend {
     return this.postJson("/api/import-bip174", { psbt });
   }
 
-  // TODO(webgui-pay): the webgui does not expose /api/{pay,confirm,payments}
-  // yet. These POST anyway; until the routes land the server answers 404 with
-  // an {error} body, which surfaces as the usual PtjBackendError. Adding the
-  // routes server-side lights these up with no frontend change.
+  // Negotiation band: served by the webgui's /api/{pay,confirm,payments}
+  // routes (crates/ptj/src/webgui.rs pay_response/confirm_response/
+  // payments_response), which append/decode the same opaque records as the
+  // wasm surface.
   pay(psbt: string, paymentHex: string, options?: PayOptions): Promise<PsbtResponse> {
     return this.postJson("/api/pay", {
       psbt,

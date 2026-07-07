@@ -60,12 +60,15 @@ pub(crate) fn response_for(method: &str, path: &str, body: &[u8]) -> Response {
         match path {
             "/api/atomize" => return atomize_response(body),
             "/api/concatenate" => return concatenate_response(body),
+            "/api/confirm" => return confirm_response(body),
             "/api/create" => return create_response(body),
             "/api/export-bip174" => return export_bip174_response(body),
             "/api/import-bip174" => return import_bip174_response(body),
             "/api/inspect" => return inspect_response(body),
             "/api/join" => return join_response(body),
             "/api/make-unordered" => return make_unordered_response(body),
+            "/api/pay" => return pay_response(body),
+            "/api/payments" => return payments_response(body),
             "/api/sort" => return sort_response(body),
             "/api/sync" => return sync_response(body),
             _ => {}
@@ -818,6 +821,141 @@ fn make_unordered_response_result(body: &[u8]) -> Result<Vec<u8>> {
     })
     .to_string()
     .into_bytes())
+}
+
+// --- negotiation band: /api/{pay,confirm,payments} --------------------------
+//
+// Mechanism-only, mirroring the concurrent-psbt-wasm surface so the shared
+// frontend cannot tell HttpBackend and WasmBackend apart: `payment_hex` /
+// `confirmation_hex` are OPAQUE record bytes the frontend builds; the server
+// appends them to the grow-only negotiation band (`secret_hex` opt-in enables
+// the deterministic AEAD from commands/negotiation.rs) and `payments` decodes
+// the band back to opaque hex blobs.
+
+fn pay_response(body: &[u8]) -> Response {
+    match pay_response_result(body) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/json; charset=utf-8",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+fn pay_response_result(body: &[u8]) -> Result<Vec<u8>> {
+    let request: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
+    let psbt = request_string(&request, "psbt")?;
+    let mut psbt = crate::io::parse_psbt_bytes("request psbt", psbt.as_bytes())?;
+    let record = crate::cli::HexSeed::from_str(request_string(&request, "payment_hex")?)
+        .map_err(Error::new)?
+        .into_bytes();
+    let secret = optional_hex_field(&request, "secret_hex")?;
+    let dummy = match request.get("dummy") {
+        None => 0,
+        Some(value) => value.as_u64().ok_or_else(|| {
+            Error::new("request JSON field `dummy` must be a non-negative integer")
+        })?,
+    };
+    if dummy > 0 && secret.is_none() {
+        return Err(Error::new(
+            "dummy padding requires secret_hex; plaintext dummies are trivially distinguishable",
+        ));
+    }
+    crate::commands::negotiation::add_opaque_payment(&mut psbt, &record, secret.as_deref())?;
+    for _ in 0..dummy {
+        let record = crate::commands::negotiation::random_dummy_payment().encode();
+        crate::commands::negotiation::add_opaque_payment(&mut psbt, &record, secret.as_deref())?;
+    }
+    Ok(serde_json::json!({
+        "psbt": crate::io::encode_psbt(&psbt),
+        "inspect": crate::commands::inspect::inspect_psbt(&psbt),
+    })
+    .to_string()
+    .into_bytes())
+}
+
+fn confirm_response(body: &[u8]) -> Response {
+    match confirm_response_result(body) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/json; charset=utf-8",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+fn confirm_response_result(body: &[u8]) -> Result<Vec<u8>> {
+    let request: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
+    let psbt = request_string(&request, "psbt")?;
+    let mut psbt = crate::io::parse_psbt_bytes("request psbt", psbt.as_bytes())?;
+    let record = crate::cli::HexSeed::from_str(request_string(&request, "confirmation_hex")?)
+        .map_err(Error::new)?
+        .into_bytes();
+    let secret = optional_hex_field(&request, "secret_hex")?;
+    crate::commands::negotiation::add_opaque_confirmation(&mut psbt, &record, secret.as_deref())?;
+    Ok(serde_json::json!({
+        "psbt": crate::io::encode_psbt(&psbt),
+        "inspect": crate::commands::inspect::inspect_psbt(&psbt),
+    })
+    .to_string()
+    .into_bytes())
+}
+
+fn payments_response(body: &[u8]) -> Response {
+    match payments_response_result(body) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/json; charset=utf-8",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+fn payments_response_result(body: &[u8]) -> Result<Vec<u8>> {
+    let request: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
+    let psbt = request_string(&request, "psbt")?;
+    let psbt = crate::io::parse_psbt_bytes("request psbt", psbt.as_bytes())?;
+    let secret = optional_hex_field(&request, "secret_hex")?;
+    let (payments, confirmations) =
+        crate::commands::negotiation::decode_band(&psbt, secret.as_deref())?;
+    Ok(serde_json::json!({
+        "payments": payments,
+        "confirmations": confirmations,
+    })
+    .to_string()
+    .into_bytes())
+}
+
+/// Read a required string field from a request object.
+fn request_string<'a>(request: &'a serde_json::Value, field: &str) -> Result<&'a str> {
+    request
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Error::new(format!("request JSON must contain string field `{field}`")))
+}
+
+/// Read an optional hex-string field (`secret_hex`, ...) to raw bytes, with
+/// the same error text as the CLI's hex arguments.
+fn optional_hex_field(request: &serde_json::Value, field: &str) -> Result<Option<Vec<u8>>> {
+    request
+        .get(field)
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| Error::new(format!("request JSON field `{field}` must be a string")))
+                .and_then(|hex| crate::cli::HexSeed::from_str(hex).map_err(Error::new))
+                .map(crate::cli::HexSeed::into_bytes)
+        })
+        .transpose()
 }
 
 fn text_response(status: u16, reason: &'static str, body: &'static str) -> Response {
@@ -1702,5 +1840,170 @@ mod tests {
         })
         .expect("empty create");
         crate::io::encode_psbt(&empty)
+    }
+
+    /// POST helper for the negotiation endpoints: send `request`, expect 200,
+    /// return the parsed JSON body.
+    fn negotiation_ok(path: &str, request: &serde_json::Value) -> serde_json::Value {
+        let response = response_for("POST", path, request.to_string().as_bytes());
+        assert_eq!(
+            response.status,
+            200,
+            "{path}: {}",
+            String::from_utf8_lossy(&response.body)
+        );
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        serde_json::from_slice(&response.body).unwrap()
+    }
+
+    #[test]
+    fn pay_endpoint_appends_plaintext_record_and_payments_decodes_it() {
+        let paid = negotiation_ok(
+            "/api/pay",
+            &serde_json::json!({ "psbt": encoded_psbt(), "payment_hex": "deadbeef" }),
+        );
+        assert!(paid["inspect"].is_object());
+        let paid_psbt = paid["psbt"].as_str().unwrap();
+
+        let decoded = negotiation_ok("/api/payments", &serde_json::json!({ "psbt": paid_psbt }));
+        assert_eq!(decoded["payments"], serde_json::json!(["deadbeef"]));
+        assert_eq!(decoded["confirmations"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn pay_endpoint_encrypted_roundtrip_with_dummy_padding() {
+        let paid = negotiation_ok(
+            "/api/pay",
+            &serde_json::json!({
+                "psbt": encoded_psbt(),
+                "payment_hex": "deadbeef",
+                "secret_hex": "0011",
+                "dummy": 2,
+            }),
+        );
+        let paid_psbt = paid["psbt"].as_str().unwrap();
+
+        // Correct secret: the real record decrypts back; two dummies ride along.
+        let decoded = negotiation_ok(
+            "/api/payments",
+            &serde_json::json!({ "psbt": paid_psbt, "secret_hex": "0011" }),
+        );
+        let payments = decoded["payments"].as_array().unwrap();
+        assert_eq!(payments.len(), 3);
+        assert_eq!(
+            payments
+                .iter()
+                .filter(|payment| payment.as_str() == Some("deadbeef"))
+                .count(),
+            1
+        );
+
+        // No secret: every entry stays an opaque ciphertext blob.
+        let opaque = negotiation_ok("/api/payments", &serde_json::json!({ "psbt": paid_psbt }));
+        assert!(
+            opaque["payments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|payment| payment.as_str() != Some("deadbeef"))
+        );
+
+        // Wrong secret: decryption failure is a clean 400 {error}.
+        let request = serde_json::json!({ "psbt": paid_psbt, "secret_hex": "ffff" }).to_string();
+        let response = response_for("POST", "/api/payments", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("failed to decrypt")
+        );
+    }
+
+    #[test]
+    fn confirm_endpoint_appends_record_plaintext_and_encrypted() {
+        let confirmed = negotiation_ok(
+            "/api/confirm",
+            &serde_json::json!({ "psbt": encoded_psbt(), "confirmation_hex": "c0ffee00" }),
+        );
+        assert!(confirmed["inspect"].is_object());
+        let decoded = negotiation_ok(
+            "/api/payments",
+            &serde_json::json!({ "psbt": confirmed["psbt"].as_str().unwrap() }),
+        );
+        assert_eq!(decoded["payments"], serde_json::json!([]));
+        assert_eq!(decoded["confirmations"], serde_json::json!(["c0ffee00"]));
+
+        let confirmed = negotiation_ok(
+            "/api/confirm",
+            &serde_json::json!({
+                "psbt": encoded_psbt(),
+                "confirmation_hex": "c0ffee00",
+                "secret_hex": "0011",
+            }),
+        );
+        let decoded = negotiation_ok(
+            "/api/payments",
+            &serde_json::json!({
+                "psbt": confirmed["psbt"].as_str().unwrap(),
+                "secret_hex": "0011",
+            }),
+        );
+        assert_eq!(decoded["confirmations"], serde_json::json!(["c0ffee00"]));
+    }
+
+    #[test]
+    fn negotiation_endpoints_report_json_errors() {
+        // Missing `psbt` (all three routes share the shape).
+        for path in ["/api/pay", "/api/confirm", "/api/payments"] {
+            let response = response_for("POST", path, b"{}");
+            assert_eq!(response.status, 400, "{path}");
+            assert_eq!(response.content_type, "application/json; charset=utf-8");
+            let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+            assert!(body["error"].as_str().unwrap().contains("`psbt`"), "{path}");
+        }
+
+        // Missing record field.
+        let request = serde_json::json!({ "psbt": encoded_psbt() }).to_string();
+        let response = response_for("POST", "/api/pay", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("`payment_hex`")
+        );
+        let response = response_for("POST", "/api/confirm", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("`confirmation_hex`")
+        );
+
+        // Malformed hex reports the CLI's exact error text.
+        let request =
+            serde_json::json!({ "psbt": encoded_psbt(), "payment_hex": "abc" }).to_string();
+        let response = response_for("POST", "/api/pay", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("odd length")
+        );
+
+        // Dummy padding without a secret is refused (plaintext dummies are
+        // trivially distinguishable), mirroring the CLI's --dummy guard.
+        let request = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "payment_hex": "deadbeef",
+            "dummy": 1,
+        })
+        .to_string();
+        let response = response_for("POST", "/api/pay", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("requires secret_hex")
+        );
     }
 }
