@@ -25,11 +25,15 @@
 //!
 //! emissary-core is an *embeddable* I2P router: it runs inside our own process,
 //! the same shape as transport-arti's in-process Tor client. There is no
-//! separate i2pd/Java-router daemon to install and no SAMv3 bridge to reach —
-//! [`EmissaryChannel::connect`] brings the router up itself. The router is
-//! async, and so is the [`AnonymousChannel`] seam, so (exactly like
-//! transport-arti) a feature-on backend `.await`s the router directly — no
-//! per-call `block_on`. That backend is still deferred; only the skeleton builds.
+//! separate i2pd/Java-router daemon to install —
+//! [`EmissaryChannel::connect`] brings the router up itself. (Grounded against
+//! the real emissary-core 0.4 API: the embedded router's client surface is the
+//! SAMv3 listener it hosts in-process, so the backend speaks SAMv3 to OUR OWN
+//! router on a loopback port — see `net.rs` — never to an external bridge.)
+//! The router is async, and so is the [`AnonymousChannel`] seam, so the
+//! feature-on backend runs the router on a dedicated actor thread and the
+//! channel methods `.await` an `mpsc`/`oneshot` round-trip to it — no per-call
+//! `block_on`.
 //!
 //! # Feature gating (mirrors how the ptj CLI gates iroh-sync)
 //!
@@ -176,7 +180,7 @@ impl AnonymousChannel for EmissaryChannel {
             .stream
             .as_mut()
             .ok_or_else(|| Error::new("transport-emissary: channel is not connected"))?;
-        stream.send_framed(&message)
+        stream.send_framed(&message).await
     }
 
     /// Skeleton form: no stream exists, so sending is impossible. Unreachable in
@@ -195,7 +199,7 @@ impl AnonymousChannel for EmissaryChannel {
             .stream
             .as_mut()
             .ok_or_else(|| Error::new("transport-emissary: channel is not connected"))?;
-        stream.drain_framed()
+        stream.drain_framed().await
     }
 
     /// Skeleton form: no stream, nothing to receive.
