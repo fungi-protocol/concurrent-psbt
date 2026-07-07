@@ -1,12 +1,25 @@
 {
   perSystem =
     {
+      cargoArtifactsDev,
+      commonArgs,
       config,
       pkgs,
       toolchains,
       ...
     }:
     let
+      ptjDev = toolchains.nightly.buildPackage (
+        commonArgs
+        // {
+          CARGO_PROFILE = "dev";
+          cargoArtifacts = cargoArtifactsDev;
+          cargoExtraArgs = "-p ptj";
+          pname = "ptj";
+          pnameSuffix = "-demo-dev";
+        }
+      );
+
       mkDevShell =
         craneLib:
         craneLib.devShell {
@@ -28,10 +41,19 @@
             wasm-pack
           ];
         };
+      demoDevShell = toolchains.nightly.devShell {
+        packages = with pkgs; [
+          bitcoind
+          coreutils
+          jq
+          ptjDev
+        ];
+      };
     in
     {
       devShells = builtins.mapAttrs (_: mkDevShell) toolchains // {
         default = mkDevShell toolchains.nightly;
+        demo = demoDevShell;
       };
     };
 }
