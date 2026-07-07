@@ -53,10 +53,9 @@ export interface Backend {
   // Negotiation band (ptj pay / confirm / payments). Mechanism-only: the
   // record bytes are opaque hex the frontend builds; the backend appends to /
   // decodes the grow-only negotiation set. WASM implements these via
-  // concurrent-psbt-wasm's pay/confirm/payments exports. The webgui does NOT
-  // expose /api/{pay,confirm,payments} yet — HttpBackend still POSTs there and
-  // surfaces the 404 as a PtjBackendError until the routes land
-  // (TODO(webgui-pay)); tauri stubs them like every other op.
+  // concurrent-psbt-wasm's pay/confirm/payments exports; the webgui serves
+  // /api/{pay,confirm,payments} with the same append/decode semantics; tauri
+  // stubs them like every other op.
   pay(psbt: string, paymentHex: string, options?: PayOptions): Promise<PsbtResponse>;
   confirm(psbt: string, confirmationHex: string, options?: ConfirmOptions): Promise<PsbtResponse>;
   payments(psbt: string, options?: PaymentsOptions): Promise<PaymentsResponse>;
