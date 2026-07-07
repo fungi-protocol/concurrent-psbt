@@ -20,10 +20,12 @@ emissary = ["dep:transport-emissary", "transport-emissary/emissary"]
 mdk = ["dep:transport-mdk", "transport-mdk/mdk"]
 # Browser-viable transports (PWA + webgui). Feature names match each crate's
 # own gate. The /api/sync handler and the CLI select them through the shared
-# `commands::sync::build_transport`; their feature-ON arms are not yet
-# selectable end to end (WebRTC needs out-of-band signaling and the directory
-# mailbox needs session parameters wired into SyncConfig — see
-# TODO(webgui-transport-wiring) in commands/sync.rs).
+# `commands::sync::build_transport`. The WebRTC pair (str0m / webrtc-rs) is
+# selectable with the MANUAL file-based signaling params (--webrtc-role,
+# --signal-out/--signal-in — see `transport::signaling`); the oblivious
+# BIP-77/OHTTP signaling path and the payjoin-dir arm's own session params
+# arrive with transport-payjoin-dir (owned externally — see
+# TODO(transport-payjoin-dir) in commands/sync.rs).
 str0m = ["dep:transport-str0m", "transport-str0m/str0m"]
 webrtc-rs = ["dep:transport-webrtc-rs", "transport-webrtc-rs/webrtc-rs"]
 payjoin-dir = ["dep:transport-payjoin-dir", "transport-payjoin-dir/payjoin-dir"]
