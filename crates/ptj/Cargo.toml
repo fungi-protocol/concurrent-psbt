@@ -7,6 +7,16 @@ edition = "2024"
 name = "ptj"
 path = "src/main.rs"
 
+# A minimal in-memory plugin speaking the full transport-plugin protocol over
+# stdio. TEST INFRASTRUCTURE for tests/plugin_host.rs (which locates it via
+# CARGO_BIN_EXE_ptj-fake-plugin): the host's spawn/handshake/publish/collect
+# paths are exercised end to end over real child pipes with no network. Also
+# handy as the reference implementation for plugin authors.
+[[bin]]
+name = "ptj-fake-plugin"
+path = "src/bin/fake_plugin.rs"
+required-features = ["plugin-transports"]
+
 [features]
 default = ["webgui"]
 webgui = []
@@ -32,6 +42,25 @@ payjoin-dir = ["dep:transport-payjoin-dir", "transport-payjoin-dir/payjoin-dir"]
 # TODO(transport-nostr): unauthored — do NOT add until the crate exists.
 # nostr = ["dep:transport-nostr", "transport-nostr/nostr"]
 all-transports = ["iroh-sync", "arti", "nym", "emissary", "mdk"]
+# Out-of-process transport plugins: `--transport plugin --plugin <binary>`
+# spawns a SEPARATE binary (own Cargo.lock — for transport stacks that cannot
+# share this workspace's lock, e.g. arti vs nym-sdk on libsqlite3-sys) and
+# drives it over child stdio via Cap'n Proto twoparty RPC
+# (`transport::plugin`, contract in transport-plugin-api). Pulls the RPC
+# stack via transport-plugin-api's re-exports, plus tokio's process/io/sync
+# bits and the tokio<->futures compat shims the vat needs.
+plugin-transports = [
+    "dep:transport-plugin-api",
+    "dep:futures",
+    "dep:tokio-util",
+    "tokio/process",
+    "tokio/io-util",
+    # io-std is for the ptj-fake-plugin test binary, which serves the plugin
+    # side of the protocol over its OWN stdio; the host side only uses child
+    # pipes (tokio/process).
+    "tokio/io-std",
+    "tokio/sync",
+]
 
 [dependencies]
 # Desugars the async `Transport` impl for `LocalTransport` to boxed futures.
@@ -68,11 +97,26 @@ transport-mdk = { path = "../transport-mdk", optional = true }
 transport-str0m = { path = "../transport-str0m", optional = true }
 transport-webrtc-rs = { path = "../transport-webrtc-rs", optional = true }
 transport-payjoin-dir = { path = "../transport-payjoin-dir", optional = true }
+# The host<->plugin wire contract (schema bindings + re-exported
+# capnp/capnp-rpc, so host and plugin binaries share one grounded RPC stack).
+# `plugin-transports` only.
+transport-plugin-api = { path = "../transport-plugin-api", optional = true }
+# futures::io::{BufReader, BufWriter} wrap the child's stdio for the capnp
+# twoparty vat (which speaks the futures IO traits). Version grounded via
+# `cargo add` (2026-07). `plugin-transports` only.
+futures = { version = "0.3.32", optional = true }
+# tokio<->futures IO compat: tokio::process pipes -> the futures traits the
+# vat consumes. Version grounded via `cargo add` (2026-07). `plugin-transports`
+# only.
+tokio-util = { version = "0.7.18", features = ["compat"], optional = true }
 # TODO(transport-nostr): unauthored — no such crate exists yet.
 # transport-nostr = { path = "../transport-nostr", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+# The `Transport` trait itself, so the plugin-host integration test
+# (tests/plugin_host.rs) can drive `PluginTransport` through the seam.
+transport-core = { path = "../transport-core" }
 
 [lints]
 workspace = true

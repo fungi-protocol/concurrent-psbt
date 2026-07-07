@@ -6675,6 +6675,7 @@ dependencies = [
  "clap",
  "concurrent-psbt",
  "crossterm",
+ "futures",
  "notify",
  "psbt-v2",
  "rand 0.9.4",
@@ -6682,6 +6683,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
  "transport-arti",
  "transport-core",
  "transport-emissary",
@@ -6689,6 +6691,7 @@ dependencies = [
  "transport-mdk",
  "transport-nym",
  "transport-payjoin-dir",
+ "transport-plugin-api",
  "transport-str0m",
  "transport-webrtc-rs",
 ]
