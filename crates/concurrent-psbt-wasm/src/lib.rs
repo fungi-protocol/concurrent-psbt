@@ -178,7 +178,7 @@ pub fn local_sync(psbts: JsValue) -> Result<JsValue, JsError> {
 // Negotiation surface (ptj `pay` / `confirm` / `payments`). The webgui does NOT
 // currently expose these as /api routes, but the task requires pay/confirm and
 // the shared backend contract benefits from a superset. These reuse
-// concurrent-psbt::negotiation directly. Signatures match the CLI semantics:
+// concurrent-psbt::payments::negotiation directly. Signatures match the CLI semantics:
 // `pay` appends a payment record; `confirm` appends a confirmation; `payments`
 // decodes both back. Encryption (`secret`) is optional; when absent, records
 // are stored in the clear exactly like `ptj pay` with no `--secret`.
