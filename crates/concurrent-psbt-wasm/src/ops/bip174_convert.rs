@@ -113,8 +113,8 @@ fn map_proprietaries_out(
             !(key.prefix == concurrent_psbt::PROPRIETARY_PREFIX
                 && matches!(
                     key.subtype,
-                    concurrent_psbt::negotiation::PSBT_GLOBAL_PAYMENT_SUBTYPE
-                        | concurrent_psbt::negotiation::PSBT_GLOBAL_CONFIRMATION_SUBTYPE
+                    concurrent_psbt::payments::negotiation::PSBT_GLOBAL_PAYMENT_SUBTYPE
+                        | concurrent_psbt::payments::negotiation::PSBT_GLOBAL_CONFIRMATION_SUBTYPE
                 ))
         })
         .map(|(key, value)| {

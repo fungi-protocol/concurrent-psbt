@@ -3,7 +3,7 @@
 //! Input/output removal as grow-only tombstone sets riding the global
 //! proprietary map in the negotiation band.
 //!
-//! Mirror of `psbt/negotiation.rs` (subtypes `0x20`/`0x21`), extending the same
+//! Mirror of `payments/negotiation.rs` (subtypes `0x20`/`0x21`), extending the same
 //! grow-only global-proprietary-set idiom into two new tombstone subtypes:
 //!
 //! - `PSBT_GLOBAL_REMOVED_INPUT` (subtype `0x23`): a **tombstone set**. Each
@@ -472,7 +472,7 @@ mod tests {
 
         #[test]
         fn clear_removal_and_fee_leaves_negotiation_band() {
-            use crate::negotiation::GlobalNegotiationExt;
+            use crate::payments::negotiation::GlobalNegotiationExt;
             let mut g = Global::default();
             g.add_payment([9u8; 16], vec![0u8]);
             g.remove_input(&make_input(1, 0));

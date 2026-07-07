@@ -3,7 +3,7 @@
 //! Payment-graph netting over the existing `PSBT_GLOBAL_PAYMENT` set.
 //!
 //! This module is pure logic layered *on top of* the wire field already
-//! defined in [`crate::negotiation`] ([`Payment`], subtype `0x20`). It does
+//! defined in [`crate::payments::negotiation`] ([`Payment`], subtype `0x20`). It does
 //! **not** define a new PSBT field. It reads the grow-only payment set out of
 //! a [`Global`] (via [`GlobalNegotiationExt::payments`]) and answers two
 //! questions the confirmation protocol needs:
@@ -41,7 +41,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use bitcoin::hashes::{Hash, HashEngine, sha256t_hash_newtype};
 use psbt_v2::v2::Global;
 
-use crate::negotiation::{GlobalNegotiationExt, Payment};
+use crate::payments::negotiation::{GlobalNegotiationExt, Payment};
 
 sha256t_hash_newtype! {
     /// Tag for the in-memory recipient-pseudonym domain.
@@ -50,7 +50,7 @@ sha256t_hash_newtype! {
     /// buckets recipient scripts the [`RecipientResolver`] cannot map to a real
     /// 32-byte peer id, so conservation (`Σ net == 0`) still holds. Uses the
     /// crate's BIP 341-style tagged-hash convention (cf.
-    /// `concurrent-psbt/unordered-unique-id` in [`crate::negotiation`]) and is
+    /// `concurrent-psbt/unordered-unique-id` in [`crate::payments::negotiation`]) and is
     /// domain-separated from every wire tag.
     pub struct RecipientPseudonymTag = hash_str("concurrent-psbt/recipient-pseudonym");
 
@@ -98,7 +98,7 @@ pub struct PaymentGraph {
     /// Recipient ids that were *not* resolved to a real 32-byte peer id and are
     /// therefore script-derived pseudonyms (see [`script_pseudonym`]). A
     /// pseudonymous recipient can never be attested by a real `peer_id`, so
-    /// [`crate::readiness`] excludes it from the required-confirmer set and
+    /// [`crate::payments::readiness`] excludes it from the required-confirmer set and
     /// surfaces it as an "unresolved recipient" diagnostic (a `Ready` verdict is
     /// then known-provisional). See [`PaymentGraph::is_pseudonymous`].
     pseudonymous: BTreeSet<ParticipantId>,
@@ -143,7 +143,7 @@ impl PaymentGraph {
     /// party", and confirmation is only owed to *another* party. A self-edge
     /// contributes `0` to `Σ net` anyway (it debits and credits the same node),
     /// so dropping it preserves conservation while avoiding a spurious
-    /// self-confirmation requirement in [`crate::readiness`].
+    /// self-confirmation requirement in [`crate::payments::readiness`].
     pub fn from_payments(payments: &[Payment], resolve: &RecipientResolver<'_>) -> Self {
         let mut edges = Vec::new();
         let mut pseudonymous = BTreeSet::new();
@@ -245,7 +245,7 @@ impl PaymentGraph {
     /// as opposed to a real 32-byte peer id.
     ///
     /// A pseudonymous recipient cannot produce a `PSBT_GLOBAL_CONFIRMATION`
-    /// attestation under a real `peer_id`, so [`crate::readiness`] must not gate
+    /// attestation under a real `peer_id`, so [`crate::payments::readiness`] must not gate
     /// readiness on it (that would deadlock forever). See
     /// [`PaymentGraph::unresolved_recipients`].
     pub fn is_pseudonymous(&self, who: &ParticipantId) -> bool {
@@ -277,7 +277,7 @@ impl PaymentGraph {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::negotiation::{PAYMENT_KIND_DUMMY, PAYMENT_KIND_REAL};
+    use crate::payments::negotiation::{PAYMENT_KIND_DUMMY, PAYMENT_KIND_REAL};
 
     fn pay(payer: u8, script: &[u8], amount: u64, kind: u8) -> Payment {
         Payment {

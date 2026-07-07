@@ -47,7 +47,7 @@ pub struct CreateOutput {
 /// Negotiation `pay` body. `payment_hex` is the opaque record bytes (hex); the
 /// frontend encodes the address/amount/label record the same way `ptj pay`
 /// would build it, keeping the wasm core mechanism-only. `secret_hex` opt-in
-/// enables deterministic AEAD encryption (see concurrent-psbt::negotiation).
+/// enables deterministic AEAD encryption (see concurrent-psbt::payments::negotiation).
 #[derive(Debug, Clone, Deserialize)]
 pub struct PayRequest {
     pub psbt: String,
