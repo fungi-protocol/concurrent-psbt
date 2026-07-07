@@ -52,11 +52,34 @@ export interface CreatePsbtRequest {
 
 export interface SyncRequest {
   psbts?: string[];
-  // Transport selection. The webgui path only ever wires the iroh ticket
-  // (feature-gated in ptj); the PWA path substitutes a browser-viable transport
-  // handle (nostr / webrtc-over-payjoin-directory), still opaque to this seam.
+  // Transport selection, mirroring the CLI's --transport ValueEnum ("local",
+  // "iroh", "arti", "nym", "emissary", "mdk", "str0m", "webrtc-rs",
+  // "payjoin-dir"). Absent, the webgui infers iroh from a pasted ticket and
+  // local otherwise (back-compat); the PWA path substitutes a browser-viable
+  // transport handle injected into the WasmBackend, still opaque to this seam.
+  transport?: string;
+  // Server-side local sources: PSBT files or directories of .psbt files (the
+  // CLI's positional sources) plus the state PSBT file. Paths on the machine
+  // running `ptj webgui` (an offline localhost GUI: the server IS the user's
+  // machine); folded read-only with `psbts[]` in one lattice join.
+  sources?: string[];
+  state?: string;
+  // Iroh document tickets: paste one in (`irohTicket`) to join an existing
+  // document, or set `irohTicketOut` to have the server CREATE a document and
+  // return its ticket in SyncResponse.irohTicketOut.
   irohTicket?: string;
+  irohTicketOut?: boolean;
   irohWaitMs?: number;
+  // Manual WebRTC signaling/session params for the str0m / webrtc-rs
+  // transports, mirroring the CLI flags 1:1 (--webrtc-role, --signal-out,
+  // --signal-in, --webrtc-bind, --ice-server, --signal-timeout-ms). The
+  // signal files are server-side paths, exchanged out of band.
+  webrtcRole?: "offer" | "answer";
+  signalOut?: string;
+  signalIn?: string;
+  webrtcBind?: string;
+  iceServers?: string[];
+  signalTimeoutMs?: number;
 }
 
 export interface SyncResponse {
@@ -64,11 +87,42 @@ export interface SyncResponse {
   inspect?: InspectResponse;
   payments: string[];
   confirmations: string[];
+  // The ticket of the iroh document created for this request (set only when
+  // the request asked for `irohTicketOut`); hand it to peers out of band.
+  irohTicketOut?: string;
 }
 
 // Negotiation-band options/DTOs (Backend.pay / Backend.confirm / Backend.payments).
 // The records are OPAQUE hex blobs — the frontend builds them, the backend only
 // appends/decodes (mechanism-only, matching `ptj pay/confirm/payments`).
+
+// Backend.pay's record argument: either a pre-built OPAQUE record (hex
+// string), or the address variant, where the BACKEND builds the txout-shaped
+// record with the same network validation as `ptj pay --to` — the frontend
+// never parses addresses. `payerHex` is an OPAQUE optional 32-byte hex id
+// copied into the record unchanged (payer semantics live in the negotiation
+// spec, not in this seam).
+export interface PayByAddress {
+  address: string;
+  amountBtc: string;
+  // Same selector as CreatePsbtRequest.network; the backend defaults to
+  // bitcoin, like `ptj pay`.
+  network?: string;
+  label?: string;
+  payerHex?: string;
+}
+export type PaymentRecord = string | PayByAddress;
+
+// Backend.confirm's record argument: either a pre-built OPAQUE record (hex
+// string), or `derive: true`, where the BACKEND derives a confirmation of the
+// submitted PSBT's current unordered unique id (the CLI's `ptj confirm`),
+// with `peerIdHex` mirroring --peer-id as an OPAQUE optional 32-byte hex id.
+export interface DeriveConfirmation {
+  derive: true;
+  peerIdHex?: string;
+}
+export type ConfirmationRecord = string | DeriveConfirmation;
+
 export interface PayOptions {
   // Opt-in deterministic AEAD encryption of the record (ptj `--encrypt`).
   secretHex?: string;

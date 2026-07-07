@@ -7,6 +7,14 @@ use crate::transport::message::Message;
 use crate::cli::{CreateConfig, NetworkArg, OrderingArg, OutPointArg, OutputArg, WebguiConfig};
 use crate::{Error, Result};
 
+// The REAL session UI (contrib/demo-gui/session.html + src/session/), served
+// at "/": real PSBTs through the Backend seam, no fixtures. The demo sandbox
+// (index.html + src/app.ts, synthetic payloads) stays fully served behind the
+// explicit "/demo" route — WIP-retained, still the playwright surface.
+const SESSION_HTML: &[u8] = include_bytes!("../../../contrib/demo-gui/session.html");
+const SESSION_APP_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/session/app.js");
+const SESSION_STATE_JS: &[u8] =
+    include_bytes!("../../../contrib/demo-gui/dist/session/state.js");
 const INDEX_HTML: &[u8] = include_bytes!("../../../contrib/demo-gui/index.html");
 const STYLES_CSS: &[u8] = include_bytes!("../../../contrib/demo-gui/styles.css");
 const APP_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/app.js");
@@ -41,9 +49,25 @@ pub(crate) struct Response {
 pub fn asset(path: &str) -> Option<Asset> {
     let path = path.split_once('?').map_or(path, |(path, _)| path);
     match path {
-        "/" | "/index.html" => Some(Asset {
+        "/" | "/session.html" => Some(Asset {
+            content_type: "text/html; charset=utf-8",
+            body: SESSION_HTML,
+        }),
+        // The demo sandbox, explicitly opt-in. Its relative asset URLs
+        // (styles.css, dist/app.js) resolve against "/" from "/demo" (no
+        // trailing slash), so the page works unchanged; "/index.html" keeps
+        // serving it under its historical name.
+        "/demo" | "/index.html" => Some(Asset {
             content_type: "text/html; charset=utf-8",
             body: INDEX_HTML,
+        }),
+        "/dist/session/app.js" => Some(Asset {
+            content_type: "text/javascript; charset=utf-8",
+            body: SESSION_APP_JS,
+        }),
+        "/dist/session/state.js" => Some(Asset {
+            content_type: "text/javascript; charset=utf-8",
+            body: SESSION_STATE_JS,
         }),
         "/styles.css" => Some(Asset {
             content_type: "text/css; charset=utf-8",
@@ -271,12 +295,40 @@ fn sync_response_result(body: &[u8]) -> Result<Vec<u8>> {
     // ---- Layer 3: transport selection (mirrors the CLI's --transport) -----
     let config = sync_config_from_request(&request)?;
 
-    if config.transport == crate::cli::TransportKind::Local {
-        // No network: return the locally-joined PSBT (or error if nothing to
-        // fold). Identical to the old no-ticket branch.
+    if config.transport == crate::cli::TransportKind::Local
+        && config.sources.is_empty()
+        && config.state.is_none()
+    {
+        // No network, no server-side sources: return the locally-joined PSBT
+        // (or error if nothing to fold). Identical to the old no-ticket branch.
         let joined = local
             .ok_or_else(|| Error::new("request must contain `psbts` or a network transport"))?;
-        return sync_json(&joined, &[]);
+        return sync_json(&joined, &[], None);
+    }
+
+    if config.transport == crate::cli::TransportKind::Local {
+        // Local file/dir transport: fold the request's in-band `psbts[]`
+        // together with the server-side `sources` paths and `state` file —
+        // the same LocalTransport the CLI's `ptj sync <sources>` drives. The
+        // in-band fold rides the CLI's stdin-source mechanism (a `-` source),
+        // so everything converges in ONE lattice join. Read-only: the runner
+        // owns state writing on the CLI path, and this route only reports the
+        // converged result (`publish_target` stays `None`).
+        let mut config = config;
+        let stdin = local.map(|psbt| crate::io::encode_psbt(&psbt).into_bytes());
+        if stdin.is_some() {
+            config.sources.push(std::path::PathBuf::from("-"));
+        }
+        let mut transport = crate::commands::sync::local_transport(
+            &config,
+            stdin.as_deref(),
+            None,
+            crate::cli::OutputFileFormat::Base64,
+        );
+        let (joined, messages) = crate::commands::sync::drive_async(async move {
+            crate::commands::sync::sync_step(&mut transport).await
+        })?;
+        return sync_json(&joined, &messages, None);
     }
 
     // Network transport: build it through the shared selector, publish our
@@ -284,6 +336,7 @@ fn sync_response_result(body: &[u8]) -> Result<Vec<u8>> {
     // shape as the CLI's `run_over_network`, but transport-agnostic. The
     // interactive server handler is sync, so this is the webgui's async→sync
     // edge, driven on the shared sync-driver runtime.
+    let ticket_out_path = config.iroh_ticket_out.clone();
     let mut transport = crate::commands::sync::build_transport(&config)?;
     let wait_ms = config.iroh_wait_ms;
     let (joined, messages) = crate::commands::sync::drive_async(async move {
@@ -295,14 +348,25 @@ fn sync_response_result(body: &[u8]) -> Result<Vec<u8>> {
         tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
         crate::commands::sync::sync_step(transport.as_mut()).await
     })?;
-    sync_json(&joined, &messages)
+    // `iroh_ticket_out: true` asked the selector to create a fresh document;
+    // the ticket it wrote (server-side temp file, exactly like the inbound
+    // ticket) is read back into the response so the browser can hand it out.
+    let ticket_out = ticket_out_path
+        .map(|path| {
+            std::fs::read_to_string(&path)
+                .map(|ticket| ticket.trim().to_owned())
+                .map_err(|error| Error::new(format!("reading created iroh ticket: {error}")))
+        })
+        .transpose()?;
+    sync_json(&joined, &messages, ticket_out.as_deref())
 }
 
 /// Build a `SyncConfig` from a `/api/sync` JSON request.
 ///
-/// Only the fields the webgui path uses are populated; file/dir source fields
-/// stay empty (the webgui feeds PSBTs in-band via `psbts[]`, folded before the
-/// transport step). The `transport` field maps 1:1 onto the CLI's
+/// PSBTs arrive in-band via `psbts[]` (folded before the transport step) and
+/// optionally from server-side `sources` paths (files or directories of .psbt
+/// files, the CLI's positional sources) plus a `state` PSBT file, read-only.
+/// The `transport` field maps 1:1 onto the CLI's
 /// `TransportKind` (same `ValueEnum`); absent, it is inferred from the legacy
 /// request shape (a pasted `iroh_ticket` selects Iroh) so the existing
 /// frontend keeps working with no JS change. The WebRTC signaling params
@@ -340,6 +404,26 @@ fn sync_config_from_request(request: &serde_json::Value) -> Result<crate::cli::S
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(5000);
 
+    // `iroh_ticket_out: true` asks the selector to CREATE a fresh iroh
+    // document (the CLI's --iroh-ticket-out) and write its ticket to a
+    // server-side temp file; the sync handler reads it back into the response.
+    let iroh_ticket_out = match request.get("iroh_ticket_out") {
+        None => None,
+        Some(value) => {
+            let requested = value.as_bool().ok_or_else(|| {
+                Error::new("request JSON field `iroh_ticket_out` must be a boolean")
+            })?;
+            if requested {
+                let nonce: u64 = rand::random();
+                let mut path = std::env::temp_dir();
+                path.push(format!("ptj-webgui-iroh-ticket-out-{nonce:016x}"));
+                Some(path)
+            } else {
+                None
+            }
+        }
+    };
+
     // The iroh selector reads the ticket from a *file path* (commands/sync.rs),
     // but the webgui receives it as a *string* in the request body, so we
     // materialize it to a temp file the selector can read. (Only the Iroh arm
@@ -353,11 +437,36 @@ fn sync_config_from_request(request: &serde_json::Value) -> Result<crate::cli::S
     ) {
         (crate::cli::TransportKind::Iroh, Some(ticket)) => Some(write_ticket_tempfile(ticket)?),
         (crate::cli::TransportKind::Iroh, None) => {
-            return Err(Error::new(
-                "iroh transport requires an `iroh_ticket` in the request",
-            ));
+            if iroh_ticket_out.is_none() {
+                return Err(Error::new(
+                    "iroh transport requires an `iroh_ticket` in the request or `iroh_ticket_out: true`",
+                ));
+            }
+            None
         }
         _ => None,
+    };
+
+    // Server-side local sources: PSBT files or directories of .psbt files
+    // (the CLI's positional sources) plus the `state` PSBT file — paths on
+    // the machine running `ptj webgui` (an offline localhost GUI: the server
+    // IS the user's machine), exactly like the signaling files below.
+    let sources = match request.get("sources") {
+        None => Vec::new(),
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| Error::new("request JSON field `sources` must be an array"))?
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                value
+                    .as_str()
+                    .map(std::path::PathBuf::from)
+                    .ok_or_else(|| {
+                        Error::new(format!("request sources[{index}] must be a string"))
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?,
     };
 
     // WebRTC signaling/session params (str0m / webrtc-rs), mirroring the CLI
@@ -388,6 +497,9 @@ fn sync_config_from_request(request: &serde_json::Value) -> Result<crate::cli::S
     };
     let signal_out = signal_path("signal_out")?;
     let signal_in = signal_path("signal_in")?;
+    // The `state` PSBT file rides the same optional-path parsing (it is read
+    // as one more local source; this route never writes it).
+    let state = signal_path("state")?;
     let webrtc_bind = match request.get("webrtc_bind") {
         None => "0.0.0.0:0".to_string(),
         Some(value) => value
@@ -416,9 +528,9 @@ fn sync_config_from_request(request: &serde_json::Value) -> Result<crate::cli::S
 
     Ok(crate::cli::SyncConfig {
         transport,
-        state: None,
+        state,
         iroh_ticket,
-        iroh_ticket_out: None,
+        iroh_ticket_out,
         iroh_wait_ms,
         webrtc_role,
         signal_out,
@@ -429,7 +541,7 @@ fn sync_config_from_request(request: &serde_json::Value) -> Result<crate::cli::S
         ongoing: false,
         poll_interval_ms: 1000,
         max_iterations: None,
-        sources: Vec::new(),
+        sources,
     })
 }
 
@@ -462,7 +574,13 @@ fn write_ticket_tempfile(_ticket: &str) -> Result<std::path::PathBuf> {
 
 /// Serialize a sync result: converged PSBT plus any out-of-band negotiation
 /// messages (hex-encoded; payments and confirmations are opaque records).
-fn sync_json(joined: &psbt_v2::v2::Psbt, messages: &[Message]) -> Result<Vec<u8>> {
+/// `iroh_ticket_out` is the ticket of a document freshly created for this
+/// request (`iroh_ticket_out: true`), echoed back so the browser can share it.
+fn sync_json(
+    joined: &psbt_v2::v2::Psbt,
+    messages: &[Message],
+    iroh_ticket_out: Option<&str>,
+) -> Result<Vec<u8>> {
     let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
     let mut payments = Vec::new();
     let mut confirmations = Vec::new();
@@ -473,14 +591,16 @@ fn sync_json(joined: &psbt_v2::v2::Psbt, messages: &[Message]) -> Result<Vec<u8>
             Message::Psbt(_) => {}
         }
     }
-    Ok(serde_json::json!({
+    let mut body = serde_json::json!({
         "psbt": crate::io::encode_psbt(joined),
         "inspect": crate::commands::inspect::inspect_psbt(joined),
         "payments": payments,
         "confirmations": confirmations,
-    })
-    .to_string()
-    .into_bytes())
+    });
+    if let Some(ticket) = iroh_ticket_out {
+        body["iroh_ticket_out"] = serde_json::Value::String(ticket.to_owned());
+    }
+    Ok(body.to_string().into_bytes())
 }
 
 fn join_response(body: &[u8]) -> Response {
@@ -868,9 +988,17 @@ fn pay_response_result(body: &[u8]) -> Result<Vec<u8>> {
         .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
     let psbt = request_string(&request, "psbt")?;
     let mut psbt = crate::io::parse_psbt_bytes("request psbt", psbt.as_bytes())?;
-    let record = crate::cli::HexSeed::from_str(request_string(&request, "payment_hex")?)
-        .map_err(Error::new)?
-        .into_bytes();
+    // Two request variants: an OPAQUE pre-built record (`payment_hex`, the
+    // wasm-parity mechanism), or the address variant (`address` +
+    // `amount_btc`), where THIS route builds the txout-shaped record with the
+    // same network validation as `ptj pay --to` — the frontend never parses
+    // addresses.
+    let record = match request.get("payment_hex") {
+        Some(_) => crate::cli::HexSeed::from_str(request_string(&request, "payment_hex")?)
+            .map_err(Error::new)?
+            .into_bytes(),
+        None => payment_record_from_request(&request)?,
+    };
     let secret = optional_hex_field(&request, "secret_hex")?;
     let dummy = match request.get("dummy") {
         None => 0,
@@ -913,11 +1041,38 @@ fn confirm_response_result(body: &[u8]) -> Result<Vec<u8>> {
         .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
     let psbt = request_string(&request, "psbt")?;
     let mut psbt = crate::io::parse_psbt_bytes("request psbt", psbt.as_bytes())?;
-    let record = crate::cli::HexSeed::from_str(request_string(&request, "confirmation_hex")?)
-        .map_err(Error::new)?
-        .into_bytes();
     let secret = optional_hex_field(&request, "secret_hex")?;
-    crate::commands::negotiation::add_opaque_confirmation(&mut psbt, &record, secret.as_deref())?;
+    // Two request variants: an OPAQUE pre-built record (`confirmation_hex`,
+    // the wasm-parity mechanism), or `derive: true`, where THIS route derives
+    // a confirmation of the submitted PSBT's current unordered unique id via
+    // the same builder as `ptj confirm` (optional `peer_id_hex` = the CLI's
+    // --peer-id; defaults to the unspecified/zero id).
+    match request.get("confirmation_hex") {
+        Some(_) => {
+            let record =
+                crate::cli::HexSeed::from_str(request_string(&request, "confirmation_hex")?)
+                    .map_err(Error::new)?
+                    .into_bytes();
+            crate::commands::negotiation::add_opaque_confirmation(
+                &mut psbt,
+                &record,
+                secret.as_deref(),
+            )?;
+        }
+        None if request.get("derive").and_then(serde_json::Value::as_bool) == Some(true) => {
+            let peer_id = optional_hex32_field(&request, "peer_id_hex")?.unwrap_or([0u8; 32]);
+            crate::commands::negotiation::add_derived_confirmation(
+                &mut psbt,
+                peer_id,
+                secret.as_deref(),
+            )?;
+        }
+        None => {
+            return Err(Error::new(
+                "request JSON must contain a `confirmation_hex` record or `derive: true`",
+            ));
+        }
+    }
     Ok(serde_json::json!({
         "psbt": crate::io::encode_psbt(&psbt),
         "inspect": crate::commands::inspect::inspect_psbt(&psbt),
@@ -954,6 +1109,46 @@ fn payments_response_result(body: &[u8]) -> Result<Vec<u8>> {
     .into_bytes())
 }
 
+/// Build a real payment record from the `/api/pay` address variant:
+/// `address` + `amount_btc` (BTC denomination string, like create's outputs),
+/// optional `network` (same selector as `/api/create`; defaults to bitcoin
+/// like `ptj pay`), optional `label`, and optional `payer_hex` — an OPAQUE
+/// 32-byte hex id stored in the record unchanged (defaults to the
+/// unspecified/zero id, mirroring `ptj pay` without `--payer`).
+fn payment_record_from_request(request: &serde_json::Value) -> Result<Vec<u8>> {
+    let address = request
+        .get("address")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            Error::new(
+                "request JSON must contain a `payment_hex` record or an `address` + `amount_btc` pair",
+            )
+        })?;
+    let amount_btc = request_string(request, "amount_btc")?;
+    let network = match request.get("network") {
+        Some(value) => {
+            let value = value
+                .as_str()
+                .ok_or_else(|| Error::new("request JSON field `network` must be a string"))?;
+            NetworkArg::from_str(value).map_err(Error::new)?
+        }
+        None => NetworkArg(bitcoin::Network::Bitcoin),
+    };
+    let label = match request.get("label") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .ok_or_else(|| Error::new("request JSON field `label` must be a string"))?,
+        ),
+    };
+    let payer = optional_hex32_field(request, "payer_hex")?;
+    Ok(
+        crate::commands::negotiation::payment_from_parts(address, amount_btc, network, label, payer)?
+            .encode(),
+    )
+}
+
 /// Read a required string field from a request object.
 fn request_string<'a>(request: &'a serde_json::Value, field: &str) -> Result<&'a str> {
     request
@@ -973,6 +1168,21 @@ fn optional_hex_field(request: &serde_json::Value, field: &str) -> Result<Option
                 .ok_or_else(|| Error::new(format!("request JSON field `{field}` must be a string")))
                 .and_then(|hex| crate::cli::HexSeed::from_str(hex).map_err(Error::new))
                 .map(crate::cli::HexSeed::into_bytes)
+        })
+        .transpose()
+}
+
+/// Read an optional 32-byte hex field (`payer_hex`, `peer_id_hex`) with the
+/// CLI's `Hex32` parsing and error text.
+fn optional_hex32_field(request: &serde_json::Value, field: &str) -> Result<Option<[u8; 32]>> {
+    request
+        .get(field)
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| Error::new(format!("request JSON field `{field}` must be a string")))
+                .and_then(|hex| crate::cli::Hex32::from_str(hex).map_err(Error::new))
+                .map(crate::cli::Hex32::into_array)
         })
         .transpose()
 }
@@ -1087,10 +1297,44 @@ mod tests {
 
     #[test]
     fn response_for_preserves_static_asset_http_behavior() {
+        // "/" is the REAL session UI; the demo sandbox is explicit at /demo
+        // (and its historical /index.html name).
         let index = response_for("GET", "/", b"");
         assert_eq!(index.status, 200);
         assert_eq!(index.content_type, "text/html; charset=utf-8");
-        assert!(!index.body.is_empty());
+        assert!(
+            String::from_utf8(index.body)
+                .unwrap()
+                .contains("dist/session/app.js")
+        );
+
+        for path in ["/demo", "/demo?from=header", "/index.html"] {
+            let demo = response_for("GET", path, b"");
+            assert_eq!(demo.status, 200, "{path}");
+            assert_eq!(demo.content_type, "text/html; charset=utf-8", "{path}");
+            assert!(
+                String::from_utf8(demo.body).unwrap().contains("dist/app.js"),
+                "{path} must serve the demo shell"
+            );
+        }
+
+        let session_app = response_for("GET", "/dist/session/app.js?v=cache-busted", b"");
+        assert_eq!(session_app.status, 200);
+        assert_eq!(session_app.content_type, "text/javascript; charset=utf-8");
+        assert!(
+            String::from_utf8(session_app.body)
+                .unwrap()
+                .contains("shared-frontend/backends/http.js")
+        );
+
+        let session_state = response_for("GET", "/dist/session/state.js?v=cache-busted", b"");
+        assert_eq!(session_state.status, 200);
+        assert_eq!(session_state.content_type, "text/javascript; charset=utf-8");
+        assert!(
+            String::from_utf8(session_state.body)
+                .unwrap()
+                .contains("buildSyncRequest")
+        );
 
         let app = response_for("GET", "/dist/app.js?v=cache-busted", b"");
         assert_eq!(app.status, 200);
@@ -1871,6 +2115,106 @@ mod tests {
         assert!(error.contains("offer, answer"), "got: {error}");
     }
 
+    /// Server-side `sources` (a directory of .psbt files) and a `state` file
+    /// fold together with the in-band `psbts[]` in ONE lattice join, exactly
+    /// like `ptj sync <sources>`; the route stays read-only.
+    #[test]
+    fn sync_endpoint_folds_server_side_sources() {
+        let nonce: u64 = rand::random();
+        let dir = std::env::temp_dir().join(format!("ptj-webgui-test-sources-{nonce:016x}"));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("a.psbt"), encoded_psbt_with(TXID, 7, 1, 50_000)).unwrap();
+        let state = dir.join("state-psbt");
+        std::fs::write(
+            &state,
+            encoded_psbt_with(
+                "0000000000000000000000000000000000000000000000000000000000000002",
+                8,
+                2,
+                70_000,
+            ),
+        )
+        .unwrap();
+
+        let request = serde_json::json!({
+            "transport": "local",
+            "psbts": [encoded_psbt_with(
+                "0000000000000000000000000000000000000000000000000000000000000003",
+                9,
+                3,
+                90_000,
+            )],
+            "sources": [dir.join("a.psbt").to_string_lossy()],
+            "state": state.to_string_lossy(),
+        })
+        .to_string();
+        let response = response_for("POST", "/api/sync", request.as_bytes());
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(value["inspect"]["input_count"], 3);
+        assert_eq!(value["inspect"]["output_count"], 3);
+        // Read-only: the state file was folded, not rewritten.
+        let state_after = std::fs::read_to_string(&state).unwrap();
+        let state_psbt =
+            crate::io::parse_psbt_bytes("state after sync", state_after.as_bytes()).unwrap();
+        assert_eq!(state_psbt.global.input_count, 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `sources`/`state` map into `SyncConfig` and `iroh_ticket_out: true`
+    /// allocates a server-side ticket-out path (feature-independent mapping —
+    /// the selector performs the iroh work later).
+    #[test]
+    fn sync_request_maps_sources_state_and_ticket_out() {
+        let request = serde_json::json!({
+            "transport": "iroh",
+            "iroh_ticket_out": true,
+            "sources": ["/tmp/psbts", "/tmp/one.psbt"],
+            "state": "/tmp/state.psbt",
+        });
+        let config = sync_config_from_request(&request).unwrap();
+        assert_eq!(config.transport, crate::cli::TransportKind::Iroh);
+        assert_eq!(config.iroh_ticket, None);
+        let ticket_out = config.iroh_ticket_out.expect("ticket-out path");
+        assert!(
+            ticket_out
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("ptj-webgui-iroh-ticket-out-")
+        );
+        assert_eq!(
+            config.sources,
+            vec![
+                std::path::PathBuf::from("/tmp/psbts"),
+                std::path::PathBuf::from("/tmp/one.psbt"),
+            ]
+        );
+        assert_eq!(config.state, Some(std::path::PathBuf::from("/tmp/state.psbt")));
+    }
+
+    /// Selecting iroh with neither a ticket nor `iroh_ticket_out: true` names
+    /// both options (feature-independent: the config step rejects it before
+    /// any transport is built).
+    #[test]
+    fn sync_endpoint_iroh_requires_ticket_or_ticket_out() {
+        let request = serde_json::json!({
+            "transport": "iroh",
+            "psbts": [sync_test_psbt()],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/sync", request.as_bytes());
+        assert_eq!(response.status, 400);
+        let body = String::from_utf8_lossy(&response.body);
+        assert!(body.contains("`iroh_ticket`"), "got: {body}");
+        assert!(body.contains("`iroh_ticket_out: true`"), "got: {body}");
+    }
+
     /// Test helper: one empty regtest PSBT, encoded (the same shape
     /// `sync_endpoint_folds_psbts_locally` builds inline).
     fn sync_test_psbt() -> String {
@@ -1963,6 +2307,81 @@ mod tests {
     }
 
     #[test]
+    fn pay_endpoint_builds_record_from_address() {
+        let payer_hex = "11".repeat(32);
+        let paid = negotiation_ok(
+            "/api/pay",
+            &serde_json::json!({
+                "psbt": encoded_psbt(),
+                "address": regtest_address(3),
+                "amount_btc": "0.00025000",
+                "network": "regtest",
+                "label": "lunch",
+                "payer_hex": payer_hex,
+            }),
+        );
+        let paid_psbt = paid["psbt"].as_str().unwrap();
+
+        let decoded = negotiation_ok("/api/payments", &serde_json::json!({ "psbt": paid_psbt }));
+        let payments = decoded["payments"].as_array().unwrap();
+        assert_eq!(payments.len(), 1);
+        let record_hex = payments[0].as_str().unwrap();
+        let record_bytes = (0..record_hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&record_hex[i..i + 2], 16).unwrap())
+            .collect::<Vec<_>>();
+        let payment =
+            concurrent_psbt::payments::negotiation::Payment::decode(&record_bytes).unwrap();
+        assert!(!payment.is_dummy());
+        assert_eq!(payment.amount_sats, 25_000);
+        assert_eq!(payment.label, "lunch");
+        assert_eq!(payment.payer, [0x11; 32]);
+        let expected_spk = regtest_address(3)
+            .parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
+            .unwrap()
+            .require_network(bitcoin::Network::Regtest)
+            .unwrap()
+            .script_pubkey();
+        assert_eq!(payment.script_pubkey, expected_spk.into_bytes());
+    }
+
+    #[test]
+    fn pay_endpoint_validates_address_network_and_payer() {
+        // Network defaults to bitcoin, exactly like `ptj pay`: a regtest
+        // address must be rejected unless the request selects regtest.
+        let request = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "address": regtest_address(3),
+            "amount_btc": "0.00025000",
+        })
+        .to_string();
+        let response = response_for("POST", "/api/pay", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("address not valid for bitcoin")
+        );
+
+        // payer_hex must be exactly 32 bytes (the CLI's Hex32 error text).
+        let request = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "address": regtest_address(3),
+            "amount_btc": "0.00025000",
+            "network": "regtest",
+            "payer_hex": "1234",
+        })
+        .to_string();
+        let response = response_for("POST", "/api/pay", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("expected 32 bytes")
+        );
+    }
+
+    #[test]
     fn confirm_endpoint_appends_record_plaintext_and_encrypted() {
         let confirmed = negotiation_ok(
             "/api/confirm",
@@ -1992,6 +2411,57 @@ mod tests {
             }),
         );
         assert_eq!(decoded["confirmations"], serde_json::json!(["c0ffee00"]));
+    }
+
+    #[test]
+    fn confirm_endpoint_derives_confirmation_from_current_psbt() {
+        let peer_hex = "22".repeat(32);
+        // One fixture instance: creation shuffles per-output unique ids, so
+        // the derived unique id must be compared against THIS encoding.
+        let source_psbt = encoded_psbt();
+        let confirmed = negotiation_ok(
+            "/api/confirm",
+            &serde_json::json!({
+                "psbt": source_psbt,
+                "derive": true,
+                "peer_id_hex": peer_hex,
+            }),
+        );
+        let confirmed_psbt = confirmed["psbt"].as_str().unwrap();
+
+        let decoded =
+            negotiation_ok("/api/payments", &serde_json::json!({ "psbt": confirmed_psbt }));
+        let confirmations = decoded["confirmations"].as_array().unwrap();
+        assert_eq!(confirmations.len(), 1);
+        let record_hex = confirmations[0].as_str().unwrap();
+        let record_bytes = (0..record_hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&record_hex[i..i + 2], 16).unwrap())
+            .collect::<Vec<_>>();
+        let confirmation =
+            concurrent_psbt::payments::negotiation::Confirmation::decode(&record_bytes).unwrap();
+        assert_eq!(confirmation.peer_id, [0x22; 32]);
+        let source = crate::io::parse_psbt_bytes("fixture", source_psbt.as_bytes()).unwrap();
+        assert_eq!(
+            confirmation.unique_id,
+            concurrent_psbt::payments::negotiation::unordered_unique_id(&source)
+        );
+
+        // Re-deriving the identical confirmation deduplicates (the derived id
+        // matches `ptj confirm`), instead of growing the band.
+        let again = negotiation_ok(
+            "/api/confirm",
+            &serde_json::json!({
+                "psbt": confirmed_psbt,
+                "derive": true,
+                "peer_id_hex": peer_hex,
+            }),
+        );
+        let decoded = negotiation_ok(
+            "/api/payments",
+            &serde_json::json!({ "psbt": again["psbt"].as_str().unwrap() }),
+        );
+        assert_eq!(decoded["confirmations"].as_array().unwrap().len(), 1);
     }
 
     #[test]

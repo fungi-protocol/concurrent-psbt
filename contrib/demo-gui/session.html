@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Partial Transaction Joiner</title>
+    <link rel="stylesheet" href="styles.css?v=20260708-session-v1">
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <h1>Partial Transaction Joiner</h1>
+        <p>Real PSBTs only: everything below drives the ptj backend on this machine. Warning: every peer can see session details and can stall coordination. Funds stay safe because wallets sign only after the final transaction gives each participant what they approved and accounts for every sat through inputs, outputs, and explicit fees.</p>
+      </div>
+      <div class="header-actions">
+        <a class="session-demo-link" href="/demo">Demo sandbox</a>
+      </div>
+    </header>
+
+    <main class="session-layout">
+      <section class="control-section session-panel session-panel-wide" aria-label="Loaded PSBT fragments">
+        <h2>Session</h2>
+        <div id="sessionStatus" class="session-status" role="status"></div>
+
+        <div class="session-load">
+          <label class="field-label" for="pasteInput">
+            Paste a base64 PSBT (v2 or BIP 174)
+            <textarea id="pasteInput" rows="3" spellcheck="false" placeholder="cHNidP8B…"></textarea>
+          </label>
+          <div class="session-load-actions">
+            <button id="addV2" type="button" class="primary">Add PSBT v2</button>
+            <button id="addBip174" type="button">Import BIP 174</button>
+            <label class="session-upload">
+              Upload file
+              <input id="uploadInput" type="file">
+            </label>
+          </div>
+        </div>
+
+        <p id="fragmentEmpty">No PSBTs loaded yet. Paste, upload, or create one.</p>
+        <ul id="fragmentList" class="item-list"></ul>
+
+        <div class="session-ops">
+          <span id="selectionCount" class="item-meta">none selected</span>
+          <button id="opJoin" type="button" class="primary" title="Lattice join of the selected unordered PSBTs">Join</button>
+          <button id="opConcatenate" type="button" title="Concatenate the selected PSBTs in list order">Concatenate</button>
+          <button id="opMakeUnordered" type="button" title="Shuffle an ordered PSBT into unordered form">Make unordered</button>
+          <button id="opSort" type="button" title="Run the sorter role on the selected PSBT">Sort</button>
+          <label class="field-label compact session-seed" for="sortSeed">
+            sort seed (hex, optional)
+            <input id="sortSeed" autocomplete="off" spellcheck="false" placeholder="abcd">
+          </label>
+          <button id="opAtomize" type="button" title="Split the selected PSBT into single-element fragments">Atomize</button>
+          <button id="opExportV2" type="button">Export v2</button>
+          <button id="opExportBip174" type="button">Export BIP 174</button>
+        </div>
+      </section>
+
+      <section class="control-section session-panel" aria-label="Create a payment request PSBT">
+        <h2>Create</h2>
+        <form id="createForm" class="stack-form">
+          <div class="split-row">
+            <label class="field-label" for="createNetwork">
+              Network
+              <select id="createNetwork">
+                <option value="bitcoin">bitcoin</option>
+                <option value="testnet">testnet</option>
+                <option value="signet">signet</option>
+                <option value="regtest" selected>regtest</option>
+              </select>
+            </label>
+            <label class="field-label" for="createOrdering">
+              Ordering
+              <select id="createOrdering">
+                <option value="unset" selected>unset</option>
+                <option value="det">deterministic</option>
+                <option value="explicit">explicit</option>
+              </select>
+            </label>
+          </div>
+          <label class="field-label" for="createSeed">
+            Ordering seed (hex)
+            <span class="seed-control">
+              <input id="createSeed" autocomplete="off" spellcheck="false" placeholder="hex seed">
+              <button id="createGenerateSeed" class="seed-regenerate" type="button" title="Generate a random ordering seed" aria-label="Generate a random ordering seed">↻</button>
+            </span>
+          </label>
+          <h2>Inputs (outpoints)</h2>
+          <div id="createInputs" class="session-rows"></div>
+          <button id="createAddInput" type="button">+ input row</button>
+          <h2>Outputs</h2>
+          <div id="createOutputs" class="session-rows"></div>
+          <button id="createAddOutput" type="button">+ output row</button>
+          <button type="submit" class="primary">Create PSBT</button>
+        </form>
+      </section>
+
+      <section class="control-section session-panel" aria-label="Sync fragments over a transport">
+        <h2>Sync</h2>
+        <form id="syncForm" class="stack-form">
+          <label class="field-label" for="syncTransport">
+            Transport
+            <select id="syncTransport">
+              <option value="local" selected>local (files/dirs on this machine)</option>
+              <option value="iroh">iroh (document ticket)</option>
+              <option value="str0m">str0m (WebRTC, manual signaling)</option>
+              <option value="webrtc-rs">webrtc-rs (WebRTC, manual signaling)</option>
+            </select>
+          </label>
+          <div data-transport="local">
+            <label class="field-label" for="syncSources">
+              Source paths (one per line: .psbt files or directories)
+              <textarea id="syncSources" rows="2" spellcheck="false" placeholder="/path/to/psbts"></textarea>
+            </label>
+            <label class="field-label" for="syncState">
+              State PSBT file (read-only)
+              <input id="syncState" autocomplete="off" spellcheck="false" placeholder="/path/to/state.psbt">
+            </label>
+          </div>
+          <div data-transport="iroh">
+            <label class="field-label" for="syncIrohTicket">
+              Document ticket (paste to join)
+              <textarea id="syncIrohTicket" rows="2" spellcheck="false" placeholder="doc…"></textarea>
+            </label>
+            <label class="fee-confirm-row" for="syncIrohTicketOut">
+              <input id="syncIrohTicketOut" type="checkbox">
+              Create a new document and return its ticket
+            </label>
+          </div>
+          <div data-transport="iroh str0m webrtc-rs">
+            <label class="field-label compact" for="syncIrohWaitMs">
+              Peer wait (ms)
+              <input id="syncIrohWaitMs" autocomplete="off" inputmode="numeric" placeholder="5000">
+            </label>
+          </div>
+          <div data-transport="str0m webrtc-rs">
+            <label class="field-label" for="syncWebrtcRole">
+              Role
+              <select id="syncWebrtcRole">
+                <option value="" selected>choose…</option>
+                <option value="offer">offer (creates the SDP offer)</option>
+                <option value="answer">answer (replies to the offer)</option>
+              </select>
+            </label>
+            <div class="split-row">
+              <label class="field-label" for="syncSignalOut">
+                signal-out file
+                <input id="syncSignalOut" autocomplete="off" spellcheck="false" placeholder="/tmp/us.sig">
+              </label>
+              <label class="field-label" for="syncSignalIn">
+                signal-in file
+                <input id="syncSignalIn" autocomplete="off" spellcheck="false" placeholder="/tmp/peer.sig">
+              </label>
+            </div>
+            <label class="field-label" for="syncWebrtcBind">
+              UDP bind (optional)
+              <input id="syncWebrtcBind" autocomplete="off" spellcheck="false" placeholder="0.0.0.0:0">
+            </label>
+            <label class="field-label" for="syncIceServers">
+              ICE servers (one per line, optional)
+              <textarea id="syncIceServers" rows="2" spellcheck="false" placeholder="stun:stun.example.org:3478"></textarea>
+            </label>
+            <label class="field-label compact" for="syncSignalTimeoutMs">
+              Signal timeout (ms)
+              <input id="syncSignalTimeoutMs" autocomplete="off" inputmode="numeric" placeholder="60000">
+            </label>
+          </div>
+          <button id="syncRun" type="submit" class="primary">Sync selected fragments</button>
+        </form>
+      </section>
+
+      <section class="control-section session-panel" aria-label="Payment negotiation">
+        <h2>Negotiation</h2>
+        <p class="item-meta">Targets the one selected fragment. Records are grow-only; results are added as new fragments.</p>
+
+        <form id="payForm" class="stack-form">
+          <h2>Pay</h2>
+          <div class="session-mode-row" role="radiogroup" aria-label="payment record source">
+            <label><input id="payModeAddress" type="radio" name="payMode" checked> address + amount</label>
+            <label><input id="payModeHex" type="radio" name="payMode"> opaque record hex</label>
+          </div>
+          <div id="payAddressFields">
+            <div class="split-row">
+              <label class="field-label" for="payAddress">
+                Address
+                <input id="payAddress" autocomplete="off" spellcheck="false" placeholder="bcrt1q…">
+              </label>
+              <label class="field-label compact" for="payAmount">
+                Amount (BTC)
+                <input id="payAmount" autocomplete="off" inputmode="decimal" placeholder="0.00050000">
+              </label>
+            </div>
+            <div class="split-row">
+              <label class="field-label" for="payNetwork">
+                Network
+                <select id="payNetwork">
+                  <option value="bitcoin">bitcoin</option>
+                  <option value="testnet">testnet</option>
+                  <option value="signet">signet</option>
+                  <option value="regtest" selected>regtest</option>
+                </select>
+              </label>
+              <label class="field-label" for="payLabel">
+                Label (optional)
+                <input id="payLabel" autocomplete="off" placeholder="optional label">
+              </label>
+            </div>
+            <label class="field-label" for="payPayerHex">
+              Payer id (optional, 32-byte hex — opaque)
+              <input id="payPayerHex" autocomplete="off" spellcheck="false" placeholder="64 hex chars">
+            </label>
+          </div>
+          <div id="payHexFields" hidden>
+            <label class="field-label" for="payPaymentHex">
+              Payment record (hex)
+              <textarea id="payPaymentHex" rows="2" spellcheck="false" placeholder="opaque record bytes as hex"></textarea>
+            </label>
+          </div>
+          <div class="split-row">
+            <label class="field-label" for="paySecretHex">
+              Secret (hex, optional — encrypts)
+              <input id="paySecretHex" autocomplete="off" spellcheck="false" placeholder="shared secret hex">
+            </label>
+            <label class="field-label compact" for="payDummy">
+              Dummies
+              <input id="payDummy" autocomplete="off" inputmode="numeric" placeholder="0">
+            </label>
+          </div>
+          <button type="submit" class="primary">Attach payment</button>
+        </form>
+
+        <form id="confirmForm" class="stack-form">
+          <h2>Confirm</h2>
+          <div class="session-mode-row" role="radiogroup" aria-label="confirmation record source">
+            <label><input id="confirmModeDerive" type="radio" name="confirmMode" checked> derive from current PSBT</label>
+            <label><input id="confirmModeHex" type="radio" name="confirmMode"> opaque record hex</label>
+          </div>
+          <div id="confirmDeriveFields">
+            <label class="field-label" for="confirmPeerIdHex">
+              Peer id (optional, 32-byte hex — opaque)
+              <input id="confirmPeerIdHex" autocomplete="off" spellcheck="false" placeholder="64 hex chars">
+            </label>
+          </div>
+          <div id="confirmHexFields" hidden>
+            <label class="field-label" for="confirmHex">
+              Confirmation record (hex)
+              <textarea id="confirmHex" rows="2" spellcheck="false" placeholder="opaque record bytes as hex"></textarea>
+            </label>
+          </div>
+          <label class="field-label" for="confirmSecretHex">
+            Secret (hex, optional — encrypts)
+            <input id="confirmSecretHex" autocomplete="off" spellcheck="false" placeholder="shared secret hex">
+          </label>
+          <button type="submit" class="primary">Attach confirmation</button>
+        </form>
+
+        <form id="paymentsForm" class="stack-form">
+          <h2>Negotiation band</h2>
+          <label class="field-label" for="paymentsSecretHex">
+            Secret (hex, optional — decrypts encrypted records)
+            <input id="paymentsSecretHex" autocomplete="off" spellcheck="false" placeholder="shared secret hex">
+          </label>
+          <button type="submit">List payments and confirmations</button>
+        </form>
+      </section>
+
+      <section id="outputPanel" class="control-section session-panel session-panel-wide" aria-label="Exported output" hidden>
+        <div class="session-output-heading">
+          <h2 id="outputTitle">Output</h2>
+          <button id="outputClose" type="button" aria-label="Close output panel">×</button>
+        </div>
+        <textarea id="outputBody" rows="6" readonly spellcheck="false"></textarea>
+      </section>
+
+      <section class="control-section session-panel session-panel-wide" aria-label="Event log">
+        <h2>Event log</h2>
+        <ol id="sessionLog" class="event-log"></ol>
+      </section>
+    </main>
+
+    <script type="module" src="dist/session/app.js?v=20260708-session-v1"></script>
+  </body>
+</html>
