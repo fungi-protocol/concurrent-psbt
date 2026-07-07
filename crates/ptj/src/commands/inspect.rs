@@ -36,6 +36,12 @@ pub(crate) fn inspect_psbt(psbt: &psbt_v2::v2::Psbt) -> serde_json::Value {
             "mode": sort_mode(psbt.global.sort_deterministic()),
             "seed_hex": psbt.global.sort_seed().map(hex_encode),
         },
+        // The psbt.md unordered PSBT unique id (canonical-sort-then-hash over
+        // the live element sets) — the identity `ptj confirm` records, so a
+        // GUI can show which state a confirmation refers to.
+        "unordered_unique_id_hex": hex_encode(
+            &concurrent_psbt::payments::negotiation::unordered_unique_id(psbt),
+        ),
         "inputs": inputs,
         "outputs": outputs,
         "totals": {
