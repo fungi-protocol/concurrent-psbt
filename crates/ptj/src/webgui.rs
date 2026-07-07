@@ -921,11 +921,38 @@ fn confirm_response_result(body: &[u8]) -> Result<Vec<u8>> {
         .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
     let psbt = request_string(&request, "psbt")?;
     let mut psbt = crate::io::parse_psbt_bytes("request psbt", psbt.as_bytes())?;
-    let record = crate::cli::HexSeed::from_str(request_string(&request, "confirmation_hex")?)
-        .map_err(Error::new)?
-        .into_bytes();
     let secret = optional_hex_field(&request, "secret_hex")?;
-    crate::commands::negotiation::add_opaque_confirmation(&mut psbt, &record, secret.as_deref())?;
+    // Two request variants: an OPAQUE pre-built record (`confirmation_hex`,
+    // the wasm-parity mechanism), or `derive: true`, where THIS route derives
+    // a confirmation of the submitted PSBT's current unordered unique id via
+    // the same builder as `ptj confirm` (optional `peer_id_hex` = the CLI's
+    // --peer-id; defaults to the unspecified/zero id).
+    match request.get("confirmation_hex") {
+        Some(_) => {
+            let record =
+                crate::cli::HexSeed::from_str(request_string(&request, "confirmation_hex")?)
+                    .map_err(Error::new)?
+                    .into_bytes();
+            crate::commands::negotiation::add_opaque_confirmation(
+                &mut psbt,
+                &record,
+                secret.as_deref(),
+            )?;
+        }
+        None if request.get("derive").and_then(serde_json::Value::as_bool) == Some(true) => {
+            let peer_id = optional_hex32_field(&request, "peer_id_hex")?.unwrap_or([0u8; 32]);
+            crate::commands::negotiation::add_derived_confirmation(
+                &mut psbt,
+                peer_id,
+                secret.as_deref(),
+            )?;
+        }
+        None => {
+            return Err(Error::new(
+                "request JSON must contain a `confirmation_hex` record or `derive: true`",
+            ));
+        }
+    }
     Ok(serde_json::json!({
         "psbt": crate::io::encode_psbt(&psbt),
         "inspect": crate::commands::inspect::inspect_psbt(&psbt),
@@ -2130,6 +2157,57 @@ mod tests {
             }),
         );
         assert_eq!(decoded["confirmations"], serde_json::json!(["c0ffee00"]));
+    }
+
+    #[test]
+    fn confirm_endpoint_derives_confirmation_from_current_psbt() {
+        let peer_hex = "22".repeat(32);
+        // One fixture instance: creation shuffles per-output unique ids, so
+        // the derived unique id must be compared against THIS encoding.
+        let source_psbt = encoded_psbt();
+        let confirmed = negotiation_ok(
+            "/api/confirm",
+            &serde_json::json!({
+                "psbt": source_psbt,
+                "derive": true,
+                "peer_id_hex": peer_hex,
+            }),
+        );
+        let confirmed_psbt = confirmed["psbt"].as_str().unwrap();
+
+        let decoded =
+            negotiation_ok("/api/payments", &serde_json::json!({ "psbt": confirmed_psbt }));
+        let confirmations = decoded["confirmations"].as_array().unwrap();
+        assert_eq!(confirmations.len(), 1);
+        let record_hex = confirmations[0].as_str().unwrap();
+        let record_bytes = (0..record_hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&record_hex[i..i + 2], 16).unwrap())
+            .collect::<Vec<_>>();
+        let confirmation =
+            concurrent_psbt::payments::negotiation::Confirmation::decode(&record_bytes).unwrap();
+        assert_eq!(confirmation.peer_id, [0x22; 32]);
+        let source = crate::io::parse_psbt_bytes("fixture", source_psbt.as_bytes()).unwrap();
+        assert_eq!(
+            confirmation.unique_id,
+            concurrent_psbt::payments::negotiation::unordered_unique_id(&source)
+        );
+
+        // Re-deriving the identical confirmation deduplicates (the derived id
+        // matches `ptj confirm`), instead of growing the band.
+        let again = negotiation_ok(
+            "/api/confirm",
+            &serde_json::json!({
+                "psbt": confirmed_psbt,
+                "derive": true,
+                "peer_id_hex": peer_hex,
+            }),
+        );
+        let decoded = negotiation_ok(
+            "/api/payments",
+            &serde_json::json!({ "psbt": again["psbt"].as_str().unwrap() }),
+        );
+        assert_eq!(decoded["confirmations"].as_array().unwrap().len(), 1);
     }
 
     #[test]

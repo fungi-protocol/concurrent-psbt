@@ -289,15 +289,30 @@ fn decode_band_entry(
 
 pub(super) fn run_confirm(config: ConfirmConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
     let mut psbt = io::read_psbt_source(&config.file, stdin)?;
-    let unique_id = unordered_unique_id(&psbt);
     let peer_id = config.peer_id.map(|p| p.into_array()).unwrap_or([0u8; 32]);
-    let confirmation = Confirmation { peer_id, unique_id };
 
     let secret = if config.encrypt {
         Some(require_secret(config.secret.as_ref().map(|s| s.as_bytes()))?)
     } else {
         None
     };
+
+    add_derived_confirmation(&mut psbt, peer_id, secret)?;
+    Ok(psbt)
+}
+
+/// Derive a confirmation of the CURRENT state of `psbt` (its unordered unique
+/// id) for `peer_id` and append it. This is the one confirmation builder: the
+/// CLI (`ptj confirm`) and the webgui derive variant (`/api/confirm` with
+/// `derive: true`) both land here, so the two surfaces produce byte-identical
+/// records and ids.
+pub(crate) fn add_derived_confirmation(
+    psbt: &mut Psbt,
+    peer_id: [u8; 32],
+    secret: Option<&[u8]>,
+) -> Result<()> {
+    let unique_id = unordered_unique_id(psbt);
+    let confirmation = Confirmation { peer_id, unique_id };
 
     // Derived id so a re-emitted identical confirmation deduplicates. Keyed
     // with the secret when encrypting, so observers cannot dictionary-test
@@ -322,7 +337,7 @@ pub(super) fn run_confirm(config: ConfirmConfig, stdin: Option<&[u8]>) -> Result
         None => confirmation.encode(),
     };
     psbt.global.add_confirmation(id, blob);
-    Ok(psbt)
+    Ok(())
 }
 
 pub(super) fn run_payments(config: PaymentsConfig, stdin: Option<&[u8]>) -> Result<String> {
