@@ -83,7 +83,7 @@ impl Role {
     }
 
     /// The lane a peer with THIS role reads from — i.e. the OTHER peer's write
-    /// lane. A peer writes [`Role::role_byte`] of its own role and reads the
+    /// lane. A peer writes `Role::role_byte` of its own role and reads the
     /// peer's.
     pub fn peer(self) -> Role {
         match self {
