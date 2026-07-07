@@ -1811,3 +1811,9 @@ h2 {
   font-size: 12px;
   word-break: break-all;
 }
+
+/* .control-section sets display:grid, which beats the UA [hidden] rule; keep
+   the hidden attribute authoritative for the session panels. */
+.session-panel[hidden] {
+  display: none;
+}
