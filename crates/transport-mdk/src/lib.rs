@@ -1,7 +1,7 @@
 //! transport-mdk — an ATTRIBUTABLE transport over MDK (Nostr MLS group messaging).
 //!
-//! This is ordinary messaging plumbing. It uses the upstream `mdk` crate (the
-//! Nostr Messaging Development Kit: MLS groups carried on Nostr events) to move
+//! This is ordinary messaging plumbing. It uses the upstream `mdk-core` crate
+//! (the Marmot Development Kit: MLS groups carried on Nostr events) to move
 //! OPAQUE bytes between the members of an MLS group. Each application message a
 //! member sends is decrypted by MDK together with the sending member's public
 //! key; that member key is exactly the metadata an
@@ -122,7 +122,7 @@ impl AttributableChannel for MdkChannel {
     async fn send(&mut self, message: Vec<u8>) -> Result<()> {
         #[cfg(feature = "mdk")]
         {
-            self.backend.send(message)
+            self.backend.send(message).await
         }
         #[cfg(not(feature = "mdk"))]
         {
@@ -136,7 +136,7 @@ impl AttributableChannel for MdkChannel {
     async fn recv(&mut self) -> Result<Vec<(SenderId, Vec<u8>)>> {
         #[cfg(feature = "mdk")]
         {
-            self.backend.recv()
+            self.backend.recv().await
         }
         #[cfg(not(feature = "mdk"))]
         {
@@ -152,26 +152,81 @@ impl AttributableChannel for MdkChannel {
 // =============================================================================
 #[cfg(feature = "mdk")]
 mod real {
-    use super::MdkConfig;
-    use nostr::prelude::*;
-    use nostr_sdk::Client;
-    use transport_core::{frame, Error, Result, SenderId};
+    //! # Actor at the edge (why there is no `block_on` here)
+    //!
+    //! The Nostr-SDK relay client owns async I/O (it runs on tokio), and the
+    //! channel seam is async — so, exactly like `transport-iroh`'s backend, the
+    //! live SDK state is confined to an ACTOR pinned to its own runtime:
+    //!
+    //!   * a dedicated OS thread owns a single-threaded tokio runtime and, on
+    //!     it, brings the relay client + MLS state up, then drains a
+    //!     `tokio::mpsc` request loop until every [`Backend`] handle is gone;
+    //!   * [`Backend`] holds only the `mpsc::Sender<Request>`; the async
+    //!     `send`/`recv` push a request carrying a `oneshot` reply channel and
+    //!     `.await` the reply on the CALLER's runtime. The constructor stays
+    //!     sync (it waits once, on a std channel, for bootstrap to finish).
+    //!
+    //! # API grounding (verified against the pinned crate sources)
+    //!
+    //! Read from the registry sources at the versions in `Cargo.lock`
+    //! (`mdk-core 0.8.0`, `mdk-memory-storage 0.8.0`, `nostr 0.44.4`,
+    //! `nostr-sdk 0.44.1`):
+    //!   * `MDK::new(MdkMemoryStorage::default())`; `GroupId::from_slice`
+    //!     (both via `mdk_core::prelude` — mdk-core/src/lib.rs:383, prelude.rs);
+    //!   * `MDK::create_message(&GroupId, UnsignedEvent rumor, Option<Vec<EventTag>>)
+    //!     -> Result<Event>` — the payload rides a nostr RUMOR (an
+    //!     `UnsignedEvent`, string content), and the returned kind-445 wrapper
+    //!     event is what gets published (mdk-core/src/messages/create.rs:110);
+    //!   * `MDK::process_message(&Event) -> Result<MessageProcessingResult>` —
+    //!     no group argument; an application message comes back as
+    //!     `ApplicationMessage(Message { pubkey, content, .. })` where `pubkey`
+    //!     is the sending member and `content` the decrypted rumor content
+    //!     (mdk-core/src/messages/process.rs:325, mod.rs:110);
+    //!   * `MDK::get_group(&GroupId) -> Result<Option<Group>>`; the wrapper
+    //!     events carry `h` = hex(`group.nostr_group_id`) (mdk-core
+    //!     src/groups.rs:520, build_message_event at src/groups.rs:2355);
+    //!   * `Client::{new, add_relay, connect, subscribe(Filter, None),
+    //!     fetch_events(Filter, Duration) -> Events, send_event(&Event)}`
+    //!     (nostr-sdk/src/client/mod.rs); `Events: IntoIterator<Item = Event>`.
 
-    /// A blocking wrapper around the async Nostr-SDK relay client plus the MDK
-    /// MLS group. It converts the SDK's push delivery (events arriving on a
-    /// subscription) into the pull cadence the transport-core channel traits
-    /// expect: incoming application messages are drained into `inbox` and
-    /// `recv` returns a snapshot of it.
-    ///
-    /// transport-core carries no async runtime, so we own a small current-thread
-    /// Tokio runtime here and `block_on` each relay round-trip. This keeps the
-    /// `AttributableChannel` methods synchronous, matching the sync driver's
-    /// `publish`/`collect` cadence.
-    pub struct Backend {
-        rt: tokio::runtime::Runtime,
+    use std::collections::HashSet;
+    use std::time::Duration;
+
+    use mdk_core::prelude::{GroupId, MessageProcessingResult, MDK};
+    use mdk_memory_storage::MdkMemoryStorage;
+    use nostr::{Alphabet, EventBuilder, EventId, Filter, Keys, Kind, PublicKey, SingleLetterTag};
+    use nostr_sdk::Client;
+    use tokio::sync::{mpsc, oneshot};
+    use transport_core::{deframe, frame, Error, Result, SenderId};
+
+    use super::MdkConfig;
+
+    /// One request the async channel methods hand to the actor. Each carries a
+    /// `oneshot` sender the actor replies on; the caller `.await`s the receiver.
+    enum Request {
+        /// Broadcast one opaque application message (from `send`).
+        Send {
+            message: Vec<u8>,
+            reply: oneshot::Sender<Result<()>>,
+        },
+        /// Snapshot every application message seen so far (from `recv`).
+        Recv {
+            reply: oneshot::Sender<Result<Vec<(SenderId, Vec<u8>)>>>,
+        },
+    }
+
+    /// The live SDK state the actor owns for the channel's lifetime: the relay
+    /// client plus the MDK MLS engine. Confined to the actor's runtime thread —
+    /// never sent to a caller.
+    struct Actor {
         client: Client,
-        mdk: mdk::MDK<mdk::memory::MdkMemoryStorage>,
-        group_id: mdk::GroupId,
+        mdk: MDK<MdkMemoryStorage>,
+        group_id: GroupId,
+        /// hex(`nostr_group_id`) — the `h` tag value MDK stamps on the group's
+        /// kind-445 wrapper events; scopes our relay queries to OUR group.
+        group_tag: String,
+        /// Our member pubkey — the author of the rumors we send.
+        pubkey: PublicKey,
         /// Every application message seen so far, paired with its sender's
         /// member pubkey bytes. A fresh snapshot of this is what `recv` returns.
         inbox: Vec<(SenderId, Vec<u8>)>,
@@ -180,55 +235,67 @@ mod real {
         /// a purely local receive-side guard against re-reading the SAME wire
         /// event twice; it is NOT the lattice dedup (which lives outside every
         /// transport and folds by content, not by event id).
-        seen_events: std::collections::HashSet<EventId>,
+        seen_events: HashSet<EventId>,
     }
 
-    impl Backend {
-        /// Open the relay client, load our keys, and bind to the MLS group.
-        pub fn connect(config: &MdkConfig) -> Result<Self> {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| Error::new(format!("mdk: building tokio runtime: {e}")))?;
-
+    impl Actor {
+        /// Load our keys, bind to the MLS group, and open the relay client, on
+        /// the actor's runtime.
+        async fn bootstrap(config: MdkConfig) -> std::result::Result<Self, String> {
             let keys = Keys::parse(&config.secret_key)
-                .map_err(|e| Error::new(format!("mdk: parsing secret key: {e}")))?;
+                .map_err(|e| format!("parsing secret key: {e}"))?;
+            let pubkey = keys.public_key();
 
             // In-memory MLS storage: this transport is a byte-mover, not the
             // durable store; the group state is reloaded per session from the
             // welcome the pairing step delivered (pairing is out of scope here).
-            let mdk = mdk::MDK::new(mdk::memory::MdkMemoryStorage::default());
-            let group_id = mdk::GroupId::from_slice(&config.group_id);
+            let mdk = MDK::new(MdkMemoryStorage::default());
+            let group_id = GroupId::from_slice(&config.group_id);
+
+            // The group must already be in MDK's storage (the pairing step's
+            // welcome puts it there): create_message/process_message both load
+            // it, and its `nostr_group_id` is the `h` tag its wrapper events
+            // carry on the relays — our subscription filter.
+            let group = mdk
+                .get_group(&group_id)
+                .map_err(|e| format!("loading group: {e}"))?
+                .ok_or("MLS group not found in storage (no welcome processed)")?;
+            let group_tag = hex::encode(group.nostr_group_id);
 
             let client = Client::new(keys);
-            rt.block_on(async {
-                for url in &config.relays {
-                    client
-                        .add_relay(url)
-                        .await
-                        .map_err(|e| Error::new(format!("mdk: add_relay {url}: {e}")))?;
-                }
-                client.connect().await;
-
-                // Subscribe to the MLS group message events on the relays. MDK
-                // application messages ride as a dedicated Nostr event kind
-                // addressed to the group.
-                let filter = Filter::new().kind(Kind::MlsGroupMessage);
+            for url in &config.relays {
                 client
-                    .subscribe(filter, None)
+                    .add_relay(url.as_str())
                     .await
-                    .map_err(|e| Error::new(format!("mdk: subscribe: {e}")))?;
-                Ok::<(), Error>(())
-            })?;
+                    .map_err(|e| format!("add_relay {url}: {e}"))?;
+            }
+            client.connect().await;
+
+            // Subscribe to OUR group's MLS message events on the relays. MDK
+            // application messages ride as a dedicated Nostr event kind (445)
+            // tagged with the group's nostr group id.
+            client
+                .subscribe(Self::group_filter(&group_tag), None)
+                .await
+                .map_err(|e| format!("subscribe: {e}"))?;
 
             Ok(Self {
-                rt,
                 client,
                 mdk,
                 group_id,
+                group_tag,
+                pubkey,
                 inbox: Vec::new(),
-                seen_events: std::collections::HashSet::new(),
+                seen_events: HashSet::new(),
             })
+        }
+
+        /// The relay filter for our group's wrapper events: kind 445, `h` tag =
+        /// hex of the group's nostr group id.
+        fn group_filter(group_tag: &str) -> Filter {
+            Filter::new()
+                .kind(Kind::MlsGroupMessage)
+                .custom_tag(SingleLetterTag::lowercase(Alphabet::H), group_tag)
         }
 
         /// Encrypt `message` as an MLS application message and publish it to the
@@ -238,79 +305,187 @@ mod real {
         /// before handing it to MDK so a single MLS application message carries
         /// exactly one delimited record — the SDK gives us message boundaries,
         /// but framing keeps the wire format identical to the stream transports
-        /// and lets a caller pack multiple envelopes if it ever needs to.
-        pub fn send(&mut self, message: Vec<u8>) -> Result<()> {
+        /// and lets a caller pack multiple envelopes if it ever needs to. The
+        /// framed record rides hex-encoded: MDK carries the payload as a nostr
+        /// rumor (an `UnsignedEvent`), whose content is a String.
+        async fn handle_send(&self, message: Vec<u8>) -> Result<()> {
             let framed = frame(&message);
-            let rt = &self.rt;
-            let client = &self.client;
-            let mdk = &self.mdk;
-            let group_id = &self.group_id;
-            rt.block_on(async {
-                // MDK wraps our bytes into an MLS application message and yields
-                // the Nostr event to publish to the group's relays.
-                let event = mdk
-                    .create_message(group_id, framed)
-                    .map_err(|e| Error::new(format!("mdk: create_message: {e}")))?;
-                client
-                    .send_event(&event)
-                    .await
-                    .map_err(|e| Error::new(format!("mdk: send_event: {e}")))?;
-                Ok::<(), Error>(())
-            })
+            let rumor = EventBuilder::new(Kind::TextNote, hex::encode(framed)).build(self.pubkey);
+            // MDK encrypts the rumor into an MLS application message and yields
+            // the signed kind-445 wrapper event to publish to the relays.
+            let event = self
+                .mdk
+                .create_message(&self.group_id, rumor, None)
+                .map_err(|e| Error::new(format!("mdk send: create_message: {e}")))?;
+            self.client
+                .send_event(&event)
+                .await
+                .map_err(|e| Error::new(format!("mdk send: send_event: {e}")))?;
+            Ok(())
         }
 
-        /// Drain any application messages that have arrived on the subscription
-        /// into `inbox`, then return a fresh snapshot of the whole inbox.
+        /// Drain our group's wrapper events from the relays into `inbox`, then
+        /// return a fresh snapshot of the whole inbox.
         ///
         /// Each MLS application message MDK decrypts yields the sending member's
-        /// public key; we surface those pubkey bytes as the `SenderId`. We do NOT
-        /// dedup by content and we do NOT order — the lattice join does that
-        /// outside the transport. `seen_events` only stops us folding the SAME
-        /// relay event twice.
-        pub fn recv(&mut self) -> Result<Vec<(SenderId, Vec<u8>)>> {
-            let rt = &self.rt;
-            let client = &self.client;
-            let mdk = &self.mdk;
-            let group_id = &self.group_id;
-
-            // Non-blocking drain: poll whatever the relays have delivered since
-            // the last call. A short timeout keeps `recv` from blocking the sync
-            // driver's poll loop.
-            let events: Vec<Event> = rt.block_on(async {
-                let filter = Filter::new().kind(Kind::MlsGroupMessage);
-                client
-                    .fetch_events(filter, std::time::Duration::from_millis(200))
-                    .await
-                    .map(|evs| evs.into_iter().collect())
-                    .map_err(|e| Error::new(format!("mdk: fetch_events: {e}")))
-            })?;
+        /// public key (the rumor author); we surface those pubkey bytes as the
+        /// `SenderId`. We do NOT dedup by content and we do NOT order — the
+        /// lattice join does that outside the transport. `seen_events` only
+        /// stops us folding the SAME relay event twice.
+        async fn handle_recv(&mut self) -> Result<Vec<(SenderId, Vec<u8>)>> {
+            // Poll whatever the relays have delivered for our group. A short
+            // timeout keeps `recv` close to the driver's poll cadence.
+            let events = self
+                .client
+                .fetch_events(Self::group_filter(&self.group_tag), Duration::from_millis(200))
+                .await
+                .map_err(|e| Error::new(format!("mdk recv: fetch_events: {e}")))?;
 
             for event in events {
                 if !self.seen_events.insert(event.id) {
                     continue; // already folded this exact relay event
                 }
-                // MDK decrypts the MLS application message and reports which
-                // group member sent it. We only pass along events for our group.
-                match mdk.process_message(group_id, &event) {
-                    Ok(Some(processed)) => {
-                        // The decrypted payload is our framed record; deframe it
-                        // back to the opaque bytes the caller sent.
-                        let mut buf = processed.payload;
-                        while let Some(record) = transport_core::deframe(&mut buf)? {
-                            let sender = SenderId(processed.sender.to_bytes().to_vec());
-                            self.inbox.push((sender, record));
+                match self.mdk.process_message(&event) {
+                    // The decrypted rumor: its author is the sending group
+                    // member, its content our hex-encoded framed record.
+                    Ok(MessageProcessingResult::ApplicationMessage(message)) => {
+                        let sender = SenderId(message.pubkey.to_bytes().to_vec());
+                        let mut buf = hex::decode(&message.content).map_err(|e| {
+                            Error::new(format!("mdk recv: non-hex application payload: {e}"))
+                        })?;
+                        while let Some(record) = deframe(&mut buf)? {
+                            self.inbox.push((sender.clone(), record));
                         }
                     }
-                    // Not an application message for us (a proposal/commit, or a
-                    // message for another group). Skip; not our concern here.
-                    Ok(None) => {}
+                    // Group-management traffic (proposals, commits, ...): MDK
+                    // already folded it into the group state; it carries no
+                    // application payload. Skip; not our concern here.
+                    Ok(_) => {}
                     Err(e) => {
-                        return Err(Error::new(format!("mdk: process_message: {e}")));
+                        return Err(Error::new(format!("mdk recv: process_message: {e}")));
                     }
                 }
             }
 
             Ok(self.inbox.clone())
+        }
+
+        /// Drain requests until every [`Backend`] handle is dropped (the channel
+        /// closes). Runs on the actor's own runtime; the live SDK state stays
+        /// confined here.
+        async fn run(mut self, mut requests: mpsc::Receiver<Request>) {
+            while let Some(request) = requests.recv().await {
+                match request {
+                    Request::Send { message, reply } => {
+                        // A dropped receiver only means the caller went away.
+                        let _ = reply.send(self.handle_send(message).await);
+                    }
+                    Request::Recv { reply } => {
+                        let _ = reply.send(self.handle_recv().await);
+                    }
+                }
+            }
+            // Channel closed: drop `self` (relay client, MLS state), tearing
+            // the connection down on its own runtime.
+        }
+    }
+
+    /// A handle to the live Nostr-MLS actor backing one
+    /// [`MdkChannel`](crate::MdkChannel).
+    ///
+    /// Holds only the request channel to the actor thread; the SDK state lives
+    /// on the actor's runtime. The async channel methods talk to it over
+    /// `mpsc` + `oneshot` — no `block_on`.
+    pub struct Backend {
+        requests: mpsc::Sender<Request>,
+        // The actor thread's join handle. Kept so the thread's lifetime is tied
+        // to this handle; on drop the `requests` sender closes, the actor loop
+        // ends, and the runtime (owned by that thread) winds down.
+        _actor: std::thread::JoinHandle<()>,
+    }
+
+    impl Backend {
+        /// Spawn the actor thread with its own runtime, run the bootstrap on
+        /// it (keys, MLS group, relay client), and return a ready handle.
+        /// Synchronous: this is a constructor, called from the sync
+        /// [`MdkChannel::connect`](crate::MdkChannel::connect).
+        pub fn connect(config: &MdkConfig) -> Result<Self> {
+            let config = config.clone();
+            let (request_tx, request_rx) = mpsc::channel::<Request>(32);
+            // Reports the bootstrap outcome back to this constructor so
+            // `connect` stays synchronous.
+            let (boot_tx, boot_rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
+
+            let actor = std::thread::Builder::new()
+                .name("transport-mdk-actor".to_string())
+                .spawn(move || {
+                    let rt = match tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
+                        Ok(rt) => rt,
+                        Err(error) => {
+                            let _ = boot_tx.send(Err(format!("building tokio runtime: {error}")));
+                            return;
+                        }
+                    };
+                    rt.block_on(async move {
+                        match Actor::bootstrap(config).await {
+                            Ok(actor) => {
+                                // Setup done: report ready, then serve.
+                                if boot_tx.send(Ok(())).is_err() {
+                                    // Constructor gave up already; nothing to serve.
+                                    return;
+                                }
+                                actor.run(request_rx).await;
+                            }
+                            Err(message) => {
+                                let _ = boot_tx.send(Err(message));
+                            }
+                        }
+                    });
+                })
+                .map_err(|error| Error::new(format!("mdk: spawning actor thread: {error}")))?;
+
+            // Wait for bootstrap to finish before returning a usable handle.
+            boot_rx
+                .recv()
+                .map_err(|_| Error::new("mdk: actor thread exited before bootstrap"))?
+                .map_err(|message| Error::new(format!("mdk: {message}")))?;
+
+            Ok(Self {
+                requests: request_tx,
+                _actor: actor,
+            })
+        }
+
+        /// Async publish: hand the actor a `Send` request and await its reply.
+        /// Runs on the CALLER's runtime; the SDK future runs on the actor's.
+        pub async fn send(&mut self, message: Vec<u8>) -> Result<()> {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            self.requests
+                .send(Request::Send {
+                    message,
+                    reply: reply_tx,
+                })
+                .await
+                .map_err(|_| Error::new("mdk send: actor thread is gone"))?;
+            reply_rx
+                .await
+                .map_err(|_| Error::new("mdk send: actor dropped the reply"))?
+        }
+
+        /// Async collect: hand the actor a `Recv` request and await the inbox
+        /// snapshot. Same actor round-trip as [`send`](Self::send).
+        pub async fn recv(&mut self) -> Result<Vec<(SenderId, Vec<u8>)>> {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            self.requests
+                .send(Request::Recv { reply: reply_tx })
+                .await
+                .map_err(|_| Error::new("mdk recv: actor thread is gone"))?;
+            reply_rx
+                .await
+                .map_err(|_| Error::new("mdk recv: actor dropped the reply"))?
         }
     }
 }

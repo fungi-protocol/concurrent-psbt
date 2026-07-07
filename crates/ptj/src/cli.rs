@@ -212,6 +212,38 @@ pub struct SyncConfig {
     /// Milliseconds to wait for iroh peers before joining visible document entries
     #[arg(long = "iroh-wait-ms", default_value_t = 5000)]
     pub iroh_wait_ms: u64,
+    /// WebRTC handshake role for the str0m / webrtc-rs transports. WebRTC is
+    /// asymmetric at setup: exactly one peer must run with `offer` and the
+    /// other with `answer` (who is who is decided out of band, like agreeing
+    /// on the signaling files). Required by both WebRTC transports.
+    #[arg(long = "webrtc-role", value_enum)]
+    pub webrtc_role: Option<WebrtcRoleArg>,
+    /// File this peer APPENDS its outbound signaling blobs to (hex, one per
+    /// line): its SDP offer/answer and any trickle-ICE candidates. Deliver the
+    /// file (or each new line) to the peer — it is their `--signal-in` — over
+    /// any out-of-band channel; blobs are opaque. Manual signaling is the
+    /// stopgap until the oblivious BIP-77 directory transport
+    /// (transport-payjoin-dir) carries this exchange.
+    #[arg(long = "signal-out")]
+    pub signal_out: Option<PathBuf>,
+    /// File this peer polls for the peer's signaling blobs (the peer's
+    /// `--signal-out`, same hex-line format). It may not exist yet at start;
+    /// it is polled until `--signal-timeout-ms` elapses.
+    #[arg(long = "signal-in")]
+    pub signal_in: Option<PathBuf>,
+    /// Local UDP bind address for the str0m transport's ICE host candidate
+    /// (opaque to ptj; str0m parses it). The default lets the OS pick a port.
+    #[arg(long = "webrtc-bind", default_value = "0.0.0.0:0")]
+    pub webrtc_bind: String,
+    /// STUN/TURN server URI for WebRTC ICE (repeatable). Opaque strings passed
+    /// through to the selected WebRTC backend. Empty = host candidates only
+    /// (LAN / already-reachable peers).
+    #[arg(long = "ice-server")]
+    pub ice_servers: Vec<String>,
+    /// Milliseconds to wait for the peer's signaling blobs and for the WebRTC
+    /// data channel to open before giving up.
+    #[arg(long = "signal-timeout-ms", default_value_t = 60_000)]
+    pub signal_timeout_ms: u64,
     /// Keep polling local sources and updating the state PSBT
     #[arg(long, alias = "continual")]
     pub ongoing: bool,
@@ -263,6 +295,17 @@ pub enum TransportKind {
     PayjoinDir,
     // TODO(transport-nostr): unauthored — add a `Nostr` variant (feature
     // `nostr`) when the transport-nostr crate exists.
+}
+
+/// Which end of the WebRTC offer/answer handshake this peer plays (the str0m
+/// and webrtc-rs transports). Plain setup data handed through to the selected
+/// transport crate's own `Role`; ptj never decides a role on its own.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebrtcRoleArg {
+    /// This peer creates the data channel and the SDP offer.
+    Offer,
+    /// This peer receives the offer and produces the SDP answer.
+    Answer,
 }
 
 /// WIP: no options yet. Candidates once the TUI is real: a state/--sources
