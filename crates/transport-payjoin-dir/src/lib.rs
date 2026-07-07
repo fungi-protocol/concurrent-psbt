@@ -66,7 +66,7 @@
 //! directory client + `ohttp` + `bhttp` + a wasm-capable http client) resolve on
 //! `wasm32-unknown-unknown` for the PWA client AND on native for the str0m peer.
 //! The directory is reached with plain HTTP requests (grounded in the browser
-//! via fetch), each OHTTP-encapsulated. See [`imp`] (feature-on) for how the
+//! via fetch), each OHTTP-encapsulated. See `imp` (feature-on) for how the
 //! http client is abstracted so the PWA can inject a fetch-backed sender.
 //!
 //! # Feature gating (mirrors how the ptj CLI gates iroh-sync)
@@ -77,7 +77,7 @@
 //! "built without the `payjoin-dir` feature" error, and the mailbox-addressing,
 //! channel-trait-satisfaction, signaling-record, and framing-roundtrip tests all
 //! run with no network and no SDK. With the feature ON, the same surface
-//! performs real OHTTP-encapsulated POST/GET-poll mailbox I/O via [`imp`].
+//! performs real OHTTP-encapsulated POST/GET-poll mailbox I/O via `imp`.
 
 #![warn(missing_docs)]
 
