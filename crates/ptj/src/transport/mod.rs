@@ -12,6 +12,13 @@
 //! idempotent/commutative/associative, so ordering and duplicates cost nothing.
 
 pub(crate) mod local;
+// Out-of-process plugin host: spawn a plugin binary (its OWN lockfile — for
+// transport stacks that cannot share this workspace's lock) and drive it over
+// child stdio via Cap'n Proto RPC (wire contract: transport-plugin-api). The
+// module is `pub` (re-exported from lib.rs) because the fake-plugin loopback
+// integration test drives `PluginTransport` from outside the crate.
+#[cfg(feature = "plugin-transports")]
+pub mod plugin;
 // Manual file-based SDP/ICE signaling for the WebRTC transports; only those
 // features have a caller, so the module is gated with them (keeping the
 // default build free of dead code).

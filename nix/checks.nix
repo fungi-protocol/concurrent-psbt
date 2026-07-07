@@ -49,6 +49,8 @@
             nativeBuildInputs = [
               pkgs.cargo-mutants
               pkgs.cargo-nextest
+              # capnp for transport-plugin-api's build.rs (clobbers commonArgs)
+              pkgs.capnproto
             ];
             buildPhaseCargoCommand = ''
               cargo mutants --in-place --test-tool nextest --no-default-features --features ${features}
@@ -75,6 +77,8 @@
             nativeBuildInputs = with pkgs; [
               cargo-llvm-cov
               cargo-nextest
+              # capnp for transport-plugin-api's build.rs (clobbers commonArgs)
+              capnproto
             ];
             buildPhaseCargoCommand = ''
               cargo llvm-cov nextest --no-report --no-default-features --features ${features}
