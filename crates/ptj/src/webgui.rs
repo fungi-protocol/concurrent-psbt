@@ -868,9 +868,17 @@ fn pay_response_result(body: &[u8]) -> Result<Vec<u8>> {
         .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
     let psbt = request_string(&request, "psbt")?;
     let mut psbt = crate::io::parse_psbt_bytes("request psbt", psbt.as_bytes())?;
-    let record = crate::cli::HexSeed::from_str(request_string(&request, "payment_hex")?)
-        .map_err(Error::new)?
-        .into_bytes();
+    // Two request variants: an OPAQUE pre-built record (`payment_hex`, the
+    // wasm-parity mechanism), or the address variant (`address` +
+    // `amount_btc`), where THIS route builds the txout-shaped record with the
+    // same network validation as `ptj pay --to` — the frontend never parses
+    // addresses.
+    let record = match request.get("payment_hex") {
+        Some(_) => crate::cli::HexSeed::from_str(request_string(&request, "payment_hex")?)
+            .map_err(Error::new)?
+            .into_bytes(),
+        None => payment_record_from_request(&request)?,
+    };
     let secret = optional_hex_field(&request, "secret_hex")?;
     let dummy = match request.get("dummy") {
         None => 0,
@@ -954,6 +962,46 @@ fn payments_response_result(body: &[u8]) -> Result<Vec<u8>> {
     .into_bytes())
 }
 
+/// Build a real payment record from the `/api/pay` address variant:
+/// `address` + `amount_btc` (BTC denomination string, like create's outputs),
+/// optional `network` (same selector as `/api/create`; defaults to bitcoin
+/// like `ptj pay`), optional `label`, and optional `payer_hex` — an OPAQUE
+/// 32-byte hex id stored in the record unchanged (defaults to the
+/// unspecified/zero id, mirroring `ptj pay` without `--payer`).
+fn payment_record_from_request(request: &serde_json::Value) -> Result<Vec<u8>> {
+    let address = request
+        .get("address")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            Error::new(
+                "request JSON must contain a `payment_hex` record or an `address` + `amount_btc` pair",
+            )
+        })?;
+    let amount_btc = request_string(request, "amount_btc")?;
+    let network = match request.get("network") {
+        Some(value) => {
+            let value = value
+                .as_str()
+                .ok_or_else(|| Error::new("request JSON field `network` must be a string"))?;
+            NetworkArg::from_str(value).map_err(Error::new)?
+        }
+        None => NetworkArg(bitcoin::Network::Bitcoin),
+    };
+    let label = match request.get("label") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .ok_or_else(|| Error::new("request JSON field `label` must be a string"))?,
+        ),
+    };
+    let payer = optional_hex32_field(request, "payer_hex")?;
+    Ok(
+        crate::commands::negotiation::payment_from_parts(address, amount_btc, network, label, payer)?
+            .encode(),
+    )
+}
+
 /// Read a required string field from a request object.
 fn request_string<'a>(request: &'a serde_json::Value, field: &str) -> Result<&'a str> {
     request
@@ -973,6 +1021,21 @@ fn optional_hex_field(request: &serde_json::Value, field: &str) -> Result<Option
                 .ok_or_else(|| Error::new(format!("request JSON field `{field}` must be a string")))
                 .and_then(|hex| crate::cli::HexSeed::from_str(hex).map_err(Error::new))
                 .map(crate::cli::HexSeed::into_bytes)
+        })
+        .transpose()
+}
+
+/// Read an optional 32-byte hex field (`payer_hex`, `peer_id_hex`) with the
+/// CLI's `Hex32` parsing and error text.
+fn optional_hex32_field(request: &serde_json::Value, field: &str) -> Result<Option<[u8; 32]>> {
+    request
+        .get(field)
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| Error::new(format!("request JSON field `{field}` must be a string")))
+                .and_then(|hex| crate::cli::Hex32::from_str(hex).map_err(Error::new))
+                .map(crate::cli::Hex32::into_array)
         })
         .transpose()
 }
@@ -1959,6 +2022,81 @@ mod tests {
             String::from_utf8(response.body)
                 .unwrap()
                 .contains("failed to decrypt")
+        );
+    }
+
+    #[test]
+    fn pay_endpoint_builds_record_from_address() {
+        let payer_hex = "11".repeat(32);
+        let paid = negotiation_ok(
+            "/api/pay",
+            &serde_json::json!({
+                "psbt": encoded_psbt(),
+                "address": regtest_address(3),
+                "amount_btc": "0.00025000",
+                "network": "regtest",
+                "label": "lunch",
+                "payer_hex": payer_hex,
+            }),
+        );
+        let paid_psbt = paid["psbt"].as_str().unwrap();
+
+        let decoded = negotiation_ok("/api/payments", &serde_json::json!({ "psbt": paid_psbt }));
+        let payments = decoded["payments"].as_array().unwrap();
+        assert_eq!(payments.len(), 1);
+        let record_hex = payments[0].as_str().unwrap();
+        let record_bytes = (0..record_hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&record_hex[i..i + 2], 16).unwrap())
+            .collect::<Vec<_>>();
+        let payment =
+            concurrent_psbt::payments::negotiation::Payment::decode(&record_bytes).unwrap();
+        assert!(!payment.is_dummy());
+        assert_eq!(payment.amount_sats, 25_000);
+        assert_eq!(payment.label, "lunch");
+        assert_eq!(payment.payer, [0x11; 32]);
+        let expected_spk = regtest_address(3)
+            .parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
+            .unwrap()
+            .require_network(bitcoin::Network::Regtest)
+            .unwrap()
+            .script_pubkey();
+        assert_eq!(payment.script_pubkey, expected_spk.into_bytes());
+    }
+
+    #[test]
+    fn pay_endpoint_validates_address_network_and_payer() {
+        // Network defaults to bitcoin, exactly like `ptj pay`: a regtest
+        // address must be rejected unless the request selects regtest.
+        let request = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "address": regtest_address(3),
+            "amount_btc": "0.00025000",
+        })
+        .to_string();
+        let response = response_for("POST", "/api/pay", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("address not valid for bitcoin")
+        );
+
+        // payer_hex must be exactly 32 bytes (the CLI's Hex32 error text).
+        let request = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "address": regtest_address(3),
+            "amount_btc": "0.00025000",
+            "network": "regtest",
+            "payer_hex": "1234",
+        })
+        .to_string();
+        let response = response_for("POST", "/api/pay", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("expected 32 bytes")
         );
     }
 

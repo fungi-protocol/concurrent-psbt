@@ -183,6 +183,37 @@ pub(crate) fn random_dummy_payment() -> Payment {
 // negotiation.rs) so HttpBackend and WasmBackend are indistinguishable to the
 // shared frontend.
 
+/// Build a real payment record from address/amount parts (the webgui
+/// `/api/pay` address variant). The txout is constructed server-side with the
+/// exact same validation as `ptj pay --to`: the address must parse and must be
+/// valid for `network`, and the amount is parsed in BTC denomination. `payer`
+/// is an OPAQUE optional 32-byte id copied into the record unchanged (payer
+/// semantics live in the negotiation spec, not in this mechanism).
+#[cfg(feature = "webgui")]
+pub(crate) fn payment_from_parts(
+    address: &str,
+    amount_btc: &str,
+    network: crate::cli::NetworkArg,
+    label: Option<&str>,
+    payer: Option<[u8; 32]>,
+) -> Result<Payment> {
+    let unchecked: bitcoin::Address<bitcoin::address::NetworkUnchecked> = address
+        .parse()
+        .map_err(|error| Error::new(format!("invalid address {address}: {error}")))?;
+    let recipient = unchecked
+        .require_network(network.0)
+        .map_err(|error| Error::new(format!("address not valid for {network}: {error}")))?;
+    let amount = bitcoin::Amount::from_str_in(amount_btc, bitcoin::Denomination::Bitcoin)
+        .map_err(|error| Error::new(format!("invalid amount {amount_btc}: {error}")))?;
+    Ok(Payment {
+        kind: PAYMENT_KIND_REAL,
+        payer: payer.unwrap_or([0u8; 32]),
+        amount_sats: amount.to_sat(),
+        script_pubkey: recipient.script_pubkey().into_bytes(),
+        label: label.unwrap_or_default().to_owned(),
+    })
+}
+
 /// Append an opaque payment record (webgui `/api/pay`). When `secret` is
 /// present the record is encrypted; otherwise it is stored in the clear.
 #[cfg(feature = "webgui")]
