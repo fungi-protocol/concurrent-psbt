@@ -14,10 +14,12 @@
 import type {
   AtomizeResponse,
   ConfirmOptions,
+  ConfirmationRecord,
   CreatePsbtRequest,
   ExportBip174Response,
   InspectResponse,
   PayOptions,
+  PaymentRecord,
   PaymentsOptions,
   PaymentsResponse,
   PsbtResponse,
@@ -51,13 +53,20 @@ export interface Backend {
   importBip174(psbt: string): Promise<PsbtResponse>;
 
   // Negotiation band (ptj pay / confirm / payments). Mechanism-only: the
-  // record bytes are opaque hex the frontend builds; the backend appends to /
-  // decodes the grow-only negotiation set. WASM implements these via
-  // concurrent-psbt-wasm's pay/confirm/payments exports; the webgui serves
-  // /api/{pay,confirm,payments} with the same append/decode semantics; tauri
-  // stubs them like every other op.
-  pay(psbt: string, paymentHex: string, options?: PayOptions): Promise<PsbtResponse>;
-  confirm(psbt: string, confirmationHex: string, options?: ConfirmOptions): Promise<PsbtResponse>;
+  // record bytes are opaque hex, appended to / decoded from the grow-only
+  // negotiation set. Each record argument also admits a build-it-for-me
+  // variant (PayByAddress / DeriveConfirmation) where the BACKEND constructs
+  // the record — the webgui routes do this with the CLI's own builders;
+  // adapters without a native builder (wasm today) reject the variant with a
+  // clear PtjBackendError instead of guessing. WASM implements the opaque
+  // forms via concurrent-psbt-wasm's pay/confirm/payments exports; the webgui
+  // serves /api/{pay,confirm,payments}; tauri stubs them like every other op.
+  pay(psbt: string, payment: PaymentRecord, options?: PayOptions): Promise<PsbtResponse>;
+  confirm(
+    psbt: string,
+    confirmation: ConfirmationRecord,
+    options?: ConfirmOptions,
+  ): Promise<PsbtResponse>;
   payments(psbt: string, options?: PaymentsOptions): Promise<PaymentsResponse>;
 
   // Layer-2 (local lattice fold, always real) + Layer-3 (network, transport-
@@ -76,12 +85,16 @@ export interface Backend {
 export type {
   AtomizeResponse,
   ConfirmOptions,
+  ConfirmationRecord,
   CreateInput,
   CreateOutput,
   CreatePsbtRequest,
+  DeriveConfirmation,
   ExportBip174Response,
   InspectResponse,
   OrderingMode,
+  PayByAddress,
+  PaymentRecord,
   PayOptions,
   PaymentsOptions,
   PaymentsResponse,
