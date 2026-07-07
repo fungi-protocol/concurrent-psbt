@@ -225,7 +225,15 @@
         demo-gui-webgui-assets = pkgs.runCommand "demo-gui-webgui-assets-${rev}" { inherit src; } ''
           test -f "$src/contrib/demo-gui/dist/app.js"
           test -f "$src/contrib/demo-gui/dist/backend.js"
-          grep -q 'backend\.js' "$src/contrib/demo-gui/dist/app.js"
+          test -f "$src/contrib/demo-gui/dist/shared-frontend/backends/http.js"
+          test -f "$src/contrib/demo-gui/dist/shared-frontend/core/types.js"
+          # app.js goes through the canonical shared-frontend Backend seam and
+          # the webgui embeds + serves the modules it loads at runtime.
+          grep -q 'shared-frontend/backends/http\.js' "$src/contrib/demo-gui/dist/app.js"
+          grep -q 'const SHARED_FRONTEND_HTTP_BACKEND_JS' "$src/crates/ptj/src/webgui.rs"
+          grep -q '"/dist/shared-frontend/backends/http\.js"' "$src/crates/ptj/src/webgui.rs"
+          grep -q '"/dist/shared-frontend/core/types\.js"' "$src/crates/ptj/src/webgui.rs"
+          # backend.js stays served (node --test coverage surface).
           grep -q 'const BACKEND_JS' "$src/crates/ptj/src/webgui.rs"
           grep -q '"/dist/backend\.js"' "$src/crates/ptj/src/webgui.rs"
           mkdir -p "$out"
