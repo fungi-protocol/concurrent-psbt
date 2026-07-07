@@ -13,11 +13,13 @@ use crate::{Error, Result, io};
 /// The transport seam is async; `main` and every non-sync command stay sync. So
 /// the ONE place a runtime is created is here, at the `Sync` command edge: this
 /// helper builds a current-thread tokio runtime and `block_on`s the async sync
-/// future. There is NO other `block_on` in ptj (and none in any transport
-/// crate) — the ongoing loop and the `-o`/`--state` runner route their steps
-/// through this same helper (see `commands::run_sync_over_local` and
-/// `lib.rs::run_ongoing_sync`). Current-thread is right: the sync loop is one
-/// logical task; the iroh backend owns its OWN runtime on its actor thread.
+/// future. There is NO other `block_on` in ptj — the ongoing loop and the
+/// `-o`/`--state` runner route their steps through this same helper (see
+/// `commands::run_sync_over_local` and `lib.rs::run_ongoing_sync`). Current-
+/// thread is right: the sync loop is one logical task; the iroh backend owns
+/// its OWN runtime on its actor thread. The webrtc-rs backend `block_on`s an
+/// owned runtime at ITS edge, which is why `build_transport` always runs on
+/// the sync side, never inside a `drive_async` future.
 pub(crate) fn drive_async<F, T>(future: F) -> Result<T>
 where
     F: Future<Output = Result<T>>,
@@ -31,8 +33,27 @@ where
 
 pub(super) fn run(config: SyncConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
     if config.uses_network() {
-        // The single top-edge runtime for a one-shot network sync.
-        return drive_async(run_over_network(config, stdin));
+        // One-shot sync over a real network transport: converge our local
+        // sources, publish that state, wait for peers, then fold the collected
+        // frontier.
+        if config.ongoing {
+            return Err(Error::new("network sync does not support --ongoing yet"));
+        }
+        let local = drive_async(run_once(&config, stdin))?;
+        // The transport is constructed OUTSIDE the runtime, on the sync side of
+        // the boundary (matching the webgui's `/api/sync` path): constructors
+        // may block — str0m runs its manual file-signaling handshake here, and
+        // the webrtc-rs backend `block_on`s its own owned runtime, which tokio
+        // forbids from inside another runtime's context.
+        let mut transport = build_transport(&config)?;
+        let wait_ms = config.iroh_wait_ms;
+        return drive_async(async move {
+            transport
+                .publish(Message::Psbt(io::encode_psbt(&local).into_bytes()).encode())
+                .await?;
+            tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+            sync_once_over(transport.as_mut()).await
+        });
     }
     if config.ongoing {
         return Err(Error::new(
@@ -41,23 +62,6 @@ pub(super) fn run(config: SyncConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
     }
     // The single top-edge runtime for a one-shot local sync.
     drive_async(run_once(&config, stdin))
-}
-
-/// One-shot sync over a real network transport: converge our local sources,
-/// publish that state, wait for peers, then fold the collected frontier. Async:
-/// driven by `drive_async` at the `run` edge.
-async fn run_over_network(config: SyncConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
-    if config.ongoing {
-        return Err(Error::new("network sync does not support --ongoing yet"));
-    }
-
-    let local = run_once(&config, stdin).await?;
-    let mut transport = build_transport(&config)?;
-    transport
-        .publish(Message::Psbt(io::encode_psbt(&local).into_bytes()).encode())
-        .await?;
-    tokio::time::sleep(Duration::from_millis(config.iroh_wait_ms)).await;
-    sync_once_over(transport.as_mut()).await
 }
 
 /// Build the sync transport selected by `--transport`.
@@ -196,23 +200,182 @@ fn build_mdk_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
 }
 
 // The WebRTC transports (str0m / webrtc-rs) need an out-of-band SIGNALING
-// exchange (SDP offer/answer + trickle ICE over the payjoin-dir oblivious
-// mailbox) before a data channel exists, and the payjoin-dir mailbox needs
-// directory/relay/session parameters. `SyncConfig` carries none of those yet,
-// so the feature-ON arms return a clear not-yet-wired error instead of
-// constructing a transport that could never connect. TODO(webgui-transport-
-// wiring): add the signaling/session fields to `SyncConfig` (and the webgui
-// request DTO) and construct the real transports here.
+// exchange (SDP offer/answer + trickle ICE) before a data channel exists. The
+// intended oblivious carrier is the BIP-77 payjoin-directory mailbox over
+// OHTTP (transport-payjoin-dir — owned externally; see the payjoin-dir arm
+// below). Until that lands, the feature-ON arms are wired to the MANUAL
+// signaling mode: `--webrtc-role` names this peer's end of the asymmetric
+// handshake, and `--signal-out`/`--signal-in` name the files the opaque blobs
+// travel through (`crate::transport::signaling`), moved between the peers by
+// any out-of-band means. Missing params yield errors naming the exact flag.
+
+/// Validate the signaling/session parameters both WebRTC transports require
+/// out of `SyncConfig`: the handshake role, and the manual signaling channel
+/// built from the `--signal-out`/`--signal-in` pair (every blocking signaling
+/// wait is bounded by `--signal-timeout-ms`, also returned for the callers'
+/// own open-waits). `name` is the selected transport, for the error text.
+#[cfg(any(feature = "str0m", feature = "webrtc-rs"))]
+fn webrtc_params(
+    config: &SyncConfig,
+    name: &str,
+) -> Result<(
+    crate::cli::WebrtcRoleArg,
+    crate::transport::signaling::FileSignaling,
+    Duration,
+)> {
+    let role = config.webrtc_role.ok_or_else(|| {
+        Error::new(format!(
+            "{name} sync requires --webrtc-role (offer|answer): WebRTC setup is \
+             asymmetric — exactly one peer offers and the other answers"
+        ))
+    })?;
+    let signal_out = config.signal_out.clone().ok_or_else(|| {
+        Error::new(format!(
+            "{name} sync requires --signal-out <file>: this peer's SDP/ICE blobs are \
+             appended there for manual delivery to the peer (oblivious BIP-77/OHTTP \
+             signaling arrives with transport-payjoin-dir)"
+        ))
+    })?;
+    let signal_in = config.signal_in.clone().ok_or_else(|| {
+        Error::new(format!(
+            "{name} sync requires --signal-in <file>: the peer's --signal-out is polled \
+             there for its SDP/ICE blobs (oblivious BIP-77/OHTTP signaling arrives with \
+             transport-payjoin-dir)"
+        ))
+    })?;
+    let timeout = Duration::from_millis(config.signal_timeout_ms);
+    let signaling = crate::transport::signaling::FileSignaling::new(signal_out, signal_in, timeout);
+    Ok((role, signaling, timeout))
+}
+
 #[cfg(feature = "str0m")]
-fn build_str0m_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
-    // Exercise the crate seam so `--features str0m` proves the integration
-    // compiles end to end (the type is a Transport via the blanket impl).
-    fn _is_transport<T: Transport>() {}
-    _is_transport::<transport_str0m::Str0mTransport>();
-    Err(Error::new(
-        "str0m transport is not yet selectable here: WebRTC needs the out-of-band \
-         SDP/ICE signaling exchange (payjoin-dir mailbox) wired into the sync config",
-    ))
+fn build_str0m_transport(config: &SyncConfig) -> Result<Box<dyn Transport>> {
+    use transport_str0m::{Role, Str0mConfig, Str0mTransport};
+
+    let (role, mut signaling, timeout) = webrtc_params(config, "str0m")?;
+    let role = match role {
+        crate::cli::WebrtcRoleArg::Offer => Role::Offerer,
+        crate::cli::WebrtcRoleArg::Answer => Role::Answerer,
+    };
+    // `--webrtc-bind` / `--ice-server` pass through opaquely; str0m parses them.
+    let mut str0m_config = Str0mConfig::new(role, config.webrtc_bind.clone());
+    str0m_config.ice_servers = config.ice_servers.clone();
+    let mut transport = Str0mTransport::new(str0m_config)?;
+
+    // str0m exposes the handshake as manual methods (sans-IO), so ptj drives
+    // the signaling exchange itself, blocking HERE on the sync side of the
+    // boundary until the data channel is open — the driver's publish/collect
+    // then find a ready transport.
+    let early = drive_str0m_handshake(role, &mut transport, &mut signaling, timeout)?;
+    Ok(Box::new(Primed {
+        early,
+        inner: transport,
+    }))
+}
+
+/// Drive str0m's manual signaling handshake to an OPEN data channel: exchange
+/// the SDP blobs over the signal files (the offer/answer already embeds the
+/// host ICE candidate str0m seeds at bind time), forward/apply trickled
+/// candidates, and pump the sans-IO loop until `ChannelOpen`. Returns any data
+/// records a fast peer published during the final pumps, for `Primed` to
+/// prepend to the first `collect` snapshot (dropping them would lose that
+/// peer's one-shot publish).
+#[cfg(feature = "str0m")]
+fn drive_str0m_handshake(
+    role: transport_str0m::Role,
+    transport: &mut transport_str0m::Str0mTransport,
+    signaling: &mut crate::transport::signaling::FileSignaling,
+    timeout: Duration,
+) -> Result<Vec<Vec<u8>>> {
+    use transport_core::AnonymousChannel as _;
+    use transport_str0m::Role;
+
+    match role {
+        Role::Offerer => {
+            let offer = transport.local_handshake()?;
+            signaling.push_blob(&offer)?;
+            let answer = signaling.wait_next_blob("SDP answer")?;
+            // The offerer's accept returns nothing to send back.
+            transport.accept_handshake(&answer)?;
+        }
+        Role::Answerer => {
+            let offer = signaling.wait_next_blob("SDP offer")?;
+            let answer = transport.accept_handshake(&offer)?.ok_or_else(|| {
+                Error::new("str0m answerer produced no SDP answer for the remote offer")
+            })?;
+            signaling.push_blob(&answer)?;
+        }
+    }
+
+    let deadline = std::time::Instant::now() + timeout;
+    let mut early = Vec::new();
+    while !transport.is_open() {
+        if std::time::Instant::now() >= deadline {
+            return Err(Error::new(format!(
+                "str0m data channel did not open within --signal-timeout-ms ({}ms): \
+                 SDP was exchanged but ICE/DTLS did not complete (are both peers \
+                 reachable at their candidate addresses?)",
+                timeout.as_millis()
+            )));
+        }
+        // Trickle: hand newly-discovered local candidates to the peer, apply
+        // the peer's. (Host-only setups complete via the candidates already
+        // embedded in the SDP; this keeps trickled ones flowing regardless.)
+        for candidate in transport.local_candidates()? {
+            signaling.push_blob(&candidate)?;
+        }
+        for candidate in signaling.poll_blobs()? {
+            transport.add_remote_candidate(&candidate)?;
+        }
+        // `recv` pumps the sans-IO loop (a ~20ms socket read window paces this
+        // loop) and is where ICE/DTLS/SCTP actually make progress.
+        early.extend(poll_inline(transport.recv())??);
+    }
+    Ok(early)
+}
+
+/// Complete a never-suspending future on the sync side of the boundary.
+///
+/// str0m's channel methods are async in signature only — each call pumps the
+/// sans-IO loop inline and is immediately `Ready` — so one poll with a no-op
+/// waker completes it without a runtime. (`build_transport` runs outside
+/// `drive_async`, so no runtime is available here by design.)
+#[cfg(feature = "str0m")]
+fn poll_inline<F: Future>(future: F) -> Result<F::Output> {
+    let mut future = std::pin::pin!(future);
+    match future
+        .as_mut()
+        .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+    {
+        std::task::Poll::Ready(output) => Ok(output),
+        std::task::Poll::Pending => Err(Error::new(
+            "str0m channel method suspended unexpectedly (sans-IO methods must complete inline)",
+        )),
+    }
+}
+
+/// A transport with records that arrived during the handshake pump prepended
+/// to its first `collect` snapshot. The str0m open-wait must pump `recv`, and
+/// a fast peer may publish inside the same pump that opened the channel; those
+/// records belong to the driver, not the floor.
+#[cfg(feature = "str0m")]
+struct Primed<T: Transport> {
+    early: Vec<Vec<u8>>,
+    inner: T,
+}
+
+#[cfg(feature = "str0m")]
+#[async_trait::async_trait]
+impl<T: Transport> Transport for Primed<T> {
+    async fn publish(&mut self, message: Vec<u8>) -> transport_core::Result<()> {
+        self.inner.publish(message).await
+    }
+
+    async fn collect(&mut self) -> transport_core::Result<Vec<Vec<u8>>> {
+        let mut records = std::mem::take(&mut self.early);
+        records.extend(self.inner.collect().await?);
+        Ok(records)
+    }
 }
 
 #[cfg(not(feature = "str0m"))]
@@ -223,12 +386,39 @@ fn build_str0m_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
 }
 
 #[cfg(feature = "webrtc-rs")]
-fn build_webrtc_rs_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
-    fn _is_transport<T: Transport>() {}
-    _is_transport::<transport_webrtc_rs::WebrtcRsTransport>();
-    Err(Error::new(
-        "webrtc-rs transport is not yet selectable here: WebRTC needs the out-of-band \
-         SDP/ICE signaling exchange (payjoin-dir mailbox) wired into the sync config",
+fn build_webrtc_rs_transport(config: &SyncConfig) -> Result<Box<dyn Transport>> {
+    // `connect` runs the whole offer/answer + trickle-ICE handshake over the
+    // file signaling port on the crate's OWN runtime and blocks until the data
+    // channel opens (bounded by the crate's internal timeouts). We are on the
+    // sync side of the boundary, so that owned-runtime `block_on` is legal.
+    //
+    // KNOWN LIMIT (crate-owned, pre-existing): the webrtc-rs backend also
+    // `block_on`s inside its channel methods, so DRIVING this transport from
+    // the sync loop's runtime panics until transport-webrtc-rs adopts the
+    // actor-at-the-edge pattern (see the note in its imp.rs; transport-iroh's
+    // backend is the canonical shape). str0m is the primary, exercised WebRTC
+    // backend; this arm proves the config/signaling wiring end to end.
+    let transport = transport_webrtc_rs::WebrtcRsTransport::connect(webrtc_rs_config(config)?)?;
+    Ok(Box::new(transport))
+}
+
+/// Map the validated CLI/webgui params onto `WebrtcRsConfig` — factored out of
+/// the arm so the mapping is unit-testable without a live `connect`. The
+/// timeout from `webrtc_params` still bounds the `FileSignaling` waits, but
+/// webrtc-rs owns its handshake pacing, so it is not used separately here.
+#[cfg(feature = "webrtc-rs")]
+fn webrtc_rs_config(
+    config: &SyncConfig,
+) -> Result<transport_webrtc_rs::WebrtcRsConfig<crate::transport::signaling::FileSignaling>> {
+    let (role, signaling, _timeout) = webrtc_params(config, "webrtc-rs")?;
+    let role = match role {
+        crate::cli::WebrtcRoleArg::Offer => transport_webrtc_rs::Role::Offerer,
+        crate::cli::WebrtcRoleArg::Answer => transport_webrtc_rs::Role::Answerer,
+    };
+    Ok(transport_webrtc_rs::WebrtcRsConfig::new(
+        role,
+        config.ice_servers.clone(),
+        signaling,
     ))
 }
 
@@ -239,13 +429,20 @@ fn build_webrtc_rs_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>>
     ))
 }
 
+// TODO(transport-payjoin-dir): OWNED EXTERNALLY (Damola). Do NOT wire this arm
+// here: the BIP-77 directory mailbox's directory/relay/session parameters and
+// construction land with that crate's implementation. When it arrives it also
+// replaces the manual `--signal-out`/`--signal-in` files above as the
+// OBLIVIOUS signaling path for the WebRTC transports (SDP/ICE blobs over the
+// directory mailbox through an OHTTP relay, instead of hand-moved files).
 #[cfg(feature = "payjoin-dir")]
 fn build_payjoin_dir_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
     fn _is_transport<T: Transport>() {}
     _is_transport::<transport_payjoin_dir::PayjoinDirChannel>();
     Err(Error::new(
         "payjoin-dir transport is not yet selectable here: the BIP-77 directory \
-         mailbox needs directory/relay/session parameters wired into the sync config",
+         mailbox needs directory/relay/session parameters wired into the sync config \
+         (implementation owned externally; arriving with transport-payjoin-dir)",
     ))
 }
 
@@ -348,4 +545,208 @@ pub(crate) fn validate_ongoing(config: &SyncConfig, stdin: Option<&[u8]>) -> Res
 
 pub(crate) fn poll_interval(config: &SyncConfig) -> Duration {
     Duration::from_millis(config.poll_interval_ms)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `SyncConfig` for dispatch tests: the selected transport with every
+    /// optional parameter absent and CLI-default scalars — except the tight
+    /// signal timeout (tests must not wait 60s) and a loopback bind (no
+    /// firewall prompt, no external interface).
+    fn config_for(transport: TransportKind) -> SyncConfig {
+        SyncConfig {
+            transport,
+            state: None,
+            iroh_ticket: None,
+            iroh_ticket_out: None,
+            iroh_wait_ms: 5000,
+            webrtc_role: None,
+            signal_out: None,
+            signal_in: None,
+            webrtc_bind: "127.0.0.1:0".to_string(),
+            ice_servers: Vec::new(),
+            signal_timeout_ms: 50,
+            ongoing: false,
+            poll_interval_ms: 1000,
+            max_iterations: None,
+            sources: Vec::new(),
+        }
+    }
+
+    fn dispatch_error(config: &SyncConfig) -> String {
+        build_transport(config)
+            .err()
+            .expect("dispatch must fail")
+            .to_string()
+    }
+
+    // ---- feature-OFF dispatch: the precise rebuild hint -------------------
+
+    #[cfg(not(feature = "str0m"))]
+    #[test]
+    fn str0m_dispatch_requires_feature() {
+        let error = dispatch_error(&config_for(TransportKind::Str0m));
+        assert!(error.contains("--features str0m"), "got: {error}");
+    }
+
+    #[cfg(not(feature = "webrtc-rs"))]
+    #[test]
+    fn webrtc_rs_dispatch_requires_feature() {
+        let error = dispatch_error(&config_for(TransportKind::WebrtcRs));
+        assert!(error.contains("--features webrtc-rs"), "got: {error}");
+    }
+
+    // ---- feature-ON dispatch, params absent: each missing flag is named ----
+    // (Shared `webrtc_params` shape, exercised through BOTH arms so a future
+    // per-arm divergence cannot silently drop the validation.)
+
+    #[cfg(feature = "str0m")]
+    #[test]
+    fn str0m_dispatch_names_each_missing_param() {
+        let mut config = config_for(TransportKind::Str0m);
+        let error = dispatch_error(&config);
+        assert!(error.contains("--webrtc-role"), "got: {error}");
+        assert!(error.contains("str0m sync requires"), "got: {error}");
+
+        config.webrtc_role = Some(crate::cli::WebrtcRoleArg::Offer);
+        let error = dispatch_error(&config);
+        assert!(error.contains("--signal-out"), "got: {error}");
+
+        config.signal_out = Some(std::path::PathBuf::from("us.sig"));
+        let error = dispatch_error(&config);
+        assert!(error.contains("--signal-in"), "got: {error}");
+    }
+
+    #[cfg(feature = "webrtc-rs")]
+    #[test]
+    fn webrtc_rs_dispatch_names_each_missing_param() {
+        let mut config = config_for(TransportKind::WebrtcRs);
+        let error = dispatch_error(&config);
+        assert!(error.contains("--webrtc-role"), "got: {error}");
+        assert!(error.contains("webrtc-rs sync requires"), "got: {error}");
+
+        config.webrtc_role = Some(crate::cli::WebrtcRoleArg::Answer);
+        let error = dispatch_error(&config);
+        assert!(error.contains("--signal-out"), "got: {error}");
+
+        config.signal_out = Some(std::path::PathBuf::from("us.sig"));
+        let error = dispatch_error(&config);
+        assert!(error.contains("--signal-in"), "got: {error}");
+    }
+
+    // ---- feature-ON dispatch, params present -------------------------------
+
+    /// The str0m arm constructs a REAL transport (binds loopback UDP, creates
+    /// the Rtc), emits the SDP offer through the manual signaling file, and —
+    /// with no peer in a unit test — times out waiting for the answer. Live
+    /// point-to-point syncs are the e2e path's job, not a unit test's.
+    #[cfg(feature = "str0m")]
+    #[test]
+    fn str0m_offerer_emits_sdp_offer_then_times_out_awaiting_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_for(TransportKind::Str0m);
+        config.webrtc_role = Some(crate::cli::WebrtcRoleArg::Offer);
+        config.signal_out = Some(dir.path().join("us.sig"));
+        config.signal_in = Some(dir.path().join("peer.sig"));
+
+        let error = dispatch_error(&config);
+        assert!(error.contains("SDP answer"), "got: {error}");
+        assert!(error.contains("timed out"), "got: {error}");
+
+        // The offer really went out: one hex line decoding to SDP text.
+        let out = std::fs::read_to_string(dir.path().join("us.sig")).unwrap();
+        let line = out.lines().next().expect("an offer line must be present");
+        let sdp: Vec<u8> = (0..line.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&line[i..i + 2], 16).unwrap())
+            .collect();
+        let sdp = String::from_utf8(sdp).unwrap();
+        assert!(sdp.starts_with("v=0"), "expected an SDP offer, got: {sdp}");
+    }
+
+    /// The answerer side blocks first on the peer's offer; with no peer it
+    /// times out naming what it was waiting for.
+    #[cfg(feature = "str0m")]
+    #[test]
+    fn str0m_answerer_times_out_awaiting_offer() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_for(TransportKind::Str0m);
+        config.webrtc_role = Some(crate::cli::WebrtcRoleArg::Answer);
+        config.signal_out = Some(dir.path().join("us.sig"));
+        config.signal_in = Some(dir.path().join("peer.sig"));
+
+        let error = dispatch_error(&config);
+        assert!(error.contains("SDP offer"), "got: {error}");
+        assert!(error.contains("timed out"), "got: {error}");
+    }
+
+    /// The webrtc-rs param mapping lands role/ICE/signaling on the crate's
+    /// config (tested without a live `connect`, which blocks on a peer for up
+    /// to the crate's 30s internal timeout).
+    #[cfg(feature = "webrtc-rs")]
+    #[test]
+    fn webrtc_rs_params_map_onto_the_crate_config() {
+        use transport_webrtc_rs::{SignalBlob, Signaling as _};
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_for(TransportKind::WebrtcRs);
+        config.webrtc_role = Some(crate::cli::WebrtcRoleArg::Answer);
+        config.signal_out = Some(dir.path().join("us.sig"));
+        config.signal_in = Some(dir.path().join("peer.sig"));
+        config.ice_servers = vec!["stun:stun.example.org:3478".to_string()];
+
+        let webrtc_config = webrtc_rs_config(&config).unwrap();
+        assert_eq!(webrtc_config.role, transport_webrtc_rs::Role::Answerer);
+        assert_eq!(
+            webrtc_config.ice_servers,
+            vec!["stun:stun.example.org:3478".to_string()]
+        );
+
+        // The signaling port is the manual file channel: a blob pushed through
+        // the crate-facing trait lands in --signal-out.
+        let mut signaling = webrtc_config.signaling;
+        signaling
+            .push(SignalBlob(b"sdp-json".to_vec()))
+            .expect("push writes the signal-out file");
+        assert!(dir.path().join("us.sig").exists());
+    }
+
+    /// `Primed` prepends handshake-time records to the first collect snapshot
+    /// only, then defers to the inner transport.
+    #[cfg(feature = "str0m")]
+    #[test]
+    fn primed_prepends_early_records_to_first_collect() {
+        struct Recorder {
+            published: Vec<Vec<u8>>,
+        }
+        #[async_trait::async_trait]
+        impl Transport for Recorder {
+            async fn publish(&mut self, message: Vec<u8>) -> transport_core::Result<()> {
+                self.published.push(message);
+                Ok(())
+            }
+            async fn collect(&mut self) -> transport_core::Result<Vec<Vec<u8>>> {
+                Ok(vec![b"live".to_vec()])
+            }
+        }
+
+        let mut primed = Primed {
+            early: vec![b"early".to_vec()],
+            inner: Recorder {
+                published: Vec::new(),
+            },
+        };
+        let (first, second, published) = drive_async(async {
+            primed.publish(b"ours".to_vec()).await?;
+            let first = primed.collect().await?;
+            let second = primed.collect().await?;
+            Ok((first, second, primed.inner.published.clone()))
+        })
+        .unwrap();
+        assert_eq!(first, vec![b"early".to_vec(), b"live".to_vec()]);
+        assert_eq!(second, vec![b"live".to_vec()]);
+        assert_eq!(published, vec![b"ours".to_vec()]);
+    }
 }

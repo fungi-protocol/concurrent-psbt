@@ -283,7 +283,10 @@ fn sync_response_result(body: &[u8]) -> Result<Vec<u8>> {
 /// transport step). The `transport` field maps 1:1 onto the CLI's
 /// `TransportKind` (same `ValueEnum`); absent, it is inferred from the legacy
 /// request shape (a pasted `iroh_ticket` selects Iroh) so the existing
-/// frontend keeps working with no JS change.
+/// frontend keeps working with no JS change. The WebRTC signaling params
+/// (`webrtc_role`, `signal_out`, `signal_in`, `webrtc_bind`, `ice_servers`,
+/// `signal_timeout_ms`) mirror the CLI flags of the same names for the
+/// str0m / webrtc-rs transports.
 fn sync_config_from_request(request: &serde_json::Value) -> Result<crate::cli::SyncConfig> {
     use clap::ValueEnum as _;
 
@@ -335,12 +338,72 @@ fn sync_config_from_request(request: &serde_json::Value) -> Result<crate::cli::S
         _ => None,
     };
 
+    // WebRTC signaling/session params (str0m / webrtc-rs), mirroring the CLI
+    // flags 1:1 — see `SyncConfig` for each field's meaning. All optional and
+    // opaque pass-throughs; the shared selector validates presence per
+    // transport and reports the missing flag. The signal files are paths on
+    // the machine running `ptj webgui` (an offline localhost GUI: the server
+    // IS the user's machine), exactly as the iroh ticket is a server-side
+    // temp file above.
+    let webrtc_role = match request.get("webrtc_role").and_then(serde_json::Value::as_str) {
+        Some(name) => Some(
+            crate::cli::WebrtcRoleArg::from_str(name, /* ignore_case */ true).map_err(|_| {
+                Error::new(format!(
+                    "unknown webrtc_role '{name}' (expected: offer, answer)"
+                ))
+            })?,
+        ),
+        None => None,
+    };
+    let signal_path = |field: &str| -> Result<Option<std::path::PathBuf>> {
+        match request.get(field) {
+            None => Ok(None),
+            Some(value) => value
+                .as_str()
+                .map(|path| Some(std::path::PathBuf::from(path)))
+                .ok_or_else(|| Error::new(format!("request JSON field `{field}` must be a string"))),
+        }
+    };
+    let signal_out = signal_path("signal_out")?;
+    let signal_in = signal_path("signal_in")?;
+    let webrtc_bind = match request.get("webrtc_bind") {
+        None => "0.0.0.0:0".to_string(),
+        Some(value) => value
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| Error::new("request JSON field `webrtc_bind` must be a string"))?,
+    };
+    let ice_servers = match request.get("ice_servers") {
+        None => Vec::new(),
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| Error::new("request JSON field `ice_servers` must be an array"))?
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                value.as_str().map(str::to_string).ok_or_else(|| {
+                    Error::new(format!("request ice_servers[{index}] must be a string"))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+    };
+    let signal_timeout_ms = request
+        .get("signal_timeout_ms")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(60_000);
+
     Ok(crate::cli::SyncConfig {
         transport,
         state: None,
         iroh_ticket,
         iroh_ticket_out: None,
         iroh_wait_ms,
+        webrtc_role,
+        signal_out,
+        signal_in,
+        webrtc_bind,
+        ice_servers,
+        signal_timeout_ms,
         ongoing: false,
         poll_interval_ms: 1000,
         max_iterations: None,
@@ -1572,6 +1635,59 @@ mod tests {
             );
             assert!(body.contains(hint), "expected {hint} rebuild hint, got: {body}");
         }
+    }
+
+    /// The `/api/sync` request DTO carries the WebRTC signaling params through
+    /// to `SyncConfig` 1:1 with the CLI flags (feature-independent mapping —
+    /// presence validation happens later, in the shared selector).
+    #[test]
+    fn sync_request_maps_webrtc_signaling_params() {
+        let request = serde_json::json!({
+            "transport": "str0m",
+            "webrtc_role": "offer",
+            "signal_out": "/tmp/us.sig",
+            "signal_in": "/tmp/peer.sig",
+            "webrtc_bind": "127.0.0.1:0",
+            "ice_servers": ["stun:stun.example.org:3478"],
+            "signal_timeout_ms": 1234,
+        });
+        let config = sync_config_from_request(&request).unwrap();
+        assert_eq!(config.transport, crate::cli::TransportKind::Str0m);
+        assert_eq!(config.webrtc_role, Some(crate::cli::WebrtcRoleArg::Offer));
+        assert_eq!(
+            config.signal_out,
+            Some(std::path::PathBuf::from("/tmp/us.sig"))
+        );
+        assert_eq!(
+            config.signal_in,
+            Some(std::path::PathBuf::from("/tmp/peer.sig"))
+        );
+        assert_eq!(config.webrtc_bind, "127.0.0.1:0");
+        assert_eq!(
+            config.ice_servers,
+            vec!["stun:stun.example.org:3478".to_string()]
+        );
+        assert_eq!(config.signal_timeout_ms, 1234);
+    }
+
+    /// Absent WebRTC fields fall back to the CLI defaults; a bad role is a
+    /// clean error naming the accepted values.
+    #[test]
+    fn sync_request_webrtc_defaults_and_role_validation() {
+        let request = serde_json::json!({ "transport": "webrtc-rs" });
+        let config = sync_config_from_request(&request).unwrap();
+        assert_eq!(config.transport, crate::cli::TransportKind::WebrtcRs);
+        assert_eq!(config.webrtc_role, None);
+        assert_eq!(config.signal_out, None);
+        assert_eq!(config.signal_in, None);
+        assert_eq!(config.webrtc_bind, "0.0.0.0:0");
+        assert!(config.ice_servers.is_empty());
+        assert_eq!(config.signal_timeout_ms, 60_000);
+
+        let request = serde_json::json!({ "transport": "str0m", "webrtc_role": "sideways" });
+        let error = sync_config_from_request(&request).unwrap_err().to_string();
+        assert!(error.contains("unknown webrtc_role"), "got: {error}");
+        assert!(error.contains("offer, answer"), "got: {error}");
     }
 
     /// Test helper: one empty regtest PSBT, encoded (the same shape
