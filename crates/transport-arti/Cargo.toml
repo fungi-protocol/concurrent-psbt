@@ -25,17 +25,41 @@ edition = "2024"
 # pulls the in-process Tor client (arti-client) and its async runtime shim
 # (tor-rtcompat) plus tokio, and lights up the real send/recv over a Tor stream.
 default = []
-arti = []
+arti = [
+    "dep:arti-client",
+    "dep:tor-rtcompat",
+    "dep:tor-hsservice",
+    "dep:tor-proto",
+    "dep:tor-cell",
+    "dep:tokio",
+    "dep:futures",
+    "dep:safelog",
+]
 
 [dependencies]
-# TODO(ground-deps): defer the network SDK until pinned to a resolvable
-# crate/version (arti-client/tor-rtcompat/tor-hsservice/tor-proto/tor-cell 0.28.x). The `arti` feature is declared but empty so the
-# default skeleton (channel trait + framing) compiles; the feature-on network
-# path in the crate source stays authored-but-unverified until then.
 transport-core = { path = "../transport-core" }
 # Desugars the async `AnonymousChannel` impl to boxed futures so the seam stays
 # dyn-compatible. A proc-macro only — no runtime, no network SDK.
 async-trait = "0.1"
+
+# External-network stack — optional, gated behind `arti`. The arti workspace
+# releases its crates in lockstep: arti-client 0.44 resolves the whole tor-*
+# family at 0.44.0. `onion-service-service` runs our onion service;
+# `onion-service-client` lets `connect` dial peer `.onion` addresses (and turns
+# the `allow_onion_addrs` config default to true). The tor-* companions are only
+# the ones the backend names directly (hs request types, incoming-stream enum,
+# CONNECTED/END cells, the runtime shim). `safelog` is arti's redaction layer:
+# rendering an `HsId` as a string requires its `DisplayRedacted` trait in scope.
+# `static-sqlite` compiles sqlite from source (`rusqlite/bundled`) so linking
+# does not need a system libsqlite3 — the hermetic devshell has none.
+arti-client = { version = "0.44", features = ["onion-service-service", "onion-service-client", "static-sqlite"], optional = true }
+tor-rtcompat = { version = "0.44", optional = true }
+tor-hsservice = { version = "0.44", optional = true }
+tor-proto = { version = "0.44", optional = true }
+tor-cell = { version = "0.44", optional = true }
+tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"], optional = true }
+futures = { version = "0.3", optional = true }
+safelog = { version = "0.9", optional = true }
 
 [dev-dependencies]
 # `futures::executor::block_on` drives the async skeleton test (which has no
