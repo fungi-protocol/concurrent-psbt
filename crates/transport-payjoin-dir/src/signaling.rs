@@ -102,7 +102,7 @@ impl SignalingMsg {
 /// record; [`poll`](SignalingChannel::poll) drains the channel and decodes every
 /// available handshake record. Because the underlying channel is anonymous and
 /// broadcast-shaped (recv returns our OWN sends too, per the channel contract),
-/// [`poll`] filters out records this peer itself just sent for the offer/answer
+/// [`poll`](SignalingChannel::poll) filters out records this peer itself just sent for the offer/answer
 /// steps would otherwise echo; ICE candidates are idempotent so echoes are
 /// harmless. We keep it simple: the caller decides which decoded records are for
 /// it (an Initiator ignores `Offer`, applies `Answer`+`IceCandidate`; a
