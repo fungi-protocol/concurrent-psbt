@@ -12,16 +12,16 @@
 //!
 //! TODO checklist (roughly in order):
 //! - [ ] Ground the deps: pin tauri 2.x (+ tauri-build) or bare wry + tao via
-//!       `cargo add --dry-run`; populate the `tauri` feature with them.
+//!   `cargo add --dry-run`; populate the `tauri` feature with them.
 //! - [ ] tauri.conf.json: replace the placeholder (window geometry, identifier,
-//!       CSP for the local asset server, bundle targets).
+//!   CSP for the local asset server, bundle targets).
 //! - [ ] Embed the webgui: depend on ptj (feature `webgui`), bind its asset
-//!       server on an ephemeral localhost port in-process, and point the wry
-//!       webview at it (no fixed :8035 assumption).
+//!   server on an ephemeral localhost port in-process, and point the wry
+//!   webview at it (no fixed :8035 assumption).
 //! - [ ] Build wiring: tauri-build in build.rs, icons, `just`/nix targets so
-//!       the shell only builds behind the feature (default build stays clean).
+//!   the shell only builds behind the feature (default build stays clean).
 //! - [ ] Lifecycle: shut the asset server down when the window closes; single
-//!       instance; window title reflecting the open PSBT document.
+//!   instance; window title reflecting the open PSBT document.
 //! - [ ] Decide packaging: sidecar `ptj` binary vs library-linking the core.
 
 fn main() {
