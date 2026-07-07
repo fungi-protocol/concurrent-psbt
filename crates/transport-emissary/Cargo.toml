@@ -15,7 +15,10 @@ edition = "2024"
 #
 # Like transport-arti's in-process Tor client, emissary-core is an EMBEDDED I2P
 # router: it runs inside our process. There is NO separate i2pd/Java-router
-# daemon and NO SAMv3 bridge to reach — we bring the router up ourselves.
+# daemon to install — we bring the router up ourselves. (Grounded against the
+# real emissary-core 0.4 API: the embedded router's client surface is the SAMv3
+# listener it hosts in-process, so the backend talks SAMv3 to our OWN router on
+# a loopback port — never to an external bridge.)
 #
 # ALL external-network dependency usage is gated behind the `emissary` feature,
 # mirroring how the ptj CLI gates iroh-sync. With the feature OFF the crate
@@ -28,17 +31,30 @@ edition = "2024"
 default = []
 # Pulls in the embedded I2P router and its async runtime, and lights up the real
 # network send/recv path.
-emissary = []
+emissary = [
+    "dep:emissary-core",
+    "dep:emissary-util",
+    "dep:yosemite",
+    "dep:rand",
+    "dep:tokio",
+]
 
 [dependencies]
-# TODO(ground-deps): defer the network SDK until pinned to a resolvable
-# crate/version (emissary-core). The `emissary` feature is declared but empty so the
-# default skeleton (channel trait + framing) compiles; the feature-on network
-# path in the crate source stays authored-but-unverified until then.
 transport-core = { path = "../transport-core" }
 # Desugars the async `AnonymousChannel` impl to boxed futures so the seam stays
 # dyn-compatible. Proc-macro only — no runtime, no network SDK.
 async-trait = "0.1"
+# The embedded I2P router (runtime-agnostic protocol stack).
+emissary-core = { version = "0.4", optional = true }
+# The tokio `Runtime` impl emissary-core's `Router<R>` is instantiated over.
+emissary-util = { version = "0.4", optional = true }
+# SAMv3 client for the router's in-process listener — the same crate
+# emissary-core's own integration tests use to drive streaming.
+yosemite = { version = "0.7", optional = true }
+# Random NTCP2 iv/key material for the embedded router (emissary-core's rand pin).
+rand = { version = "0.10", optional = true }
+# The actor thread's runtime + the mpsc/oneshot seam to it.
+tokio = { version = "1", features = ["rt", "sync", "time", "io-util"], optional = true }
 
 [lints]
 workspace = true
