@@ -1651,3 +1651,163 @@ h2 {
     grid-template-columns: 1fr;
   }
 }
+
+/* --- session UI (session.html — the real webgui page) ---------------------- */
+
+.session-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 16px;
+  padding: 16px;
+  align-items: start;
+}
+
+.session-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+
+.session-panel-wide {
+  grid-column: 1 / -1;
+}
+
+.session-demo-link {
+  display: inline-block;
+  min-height: 36px;
+  line-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 0 12px;
+  text-decoration: none;
+}
+
+.session-demo-link:hover {
+  border-color: var(--accent);
+}
+
+.session-status {
+  min-height: 18px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.session-status-error {
+  color: var(--red);
+}
+
+.session-load {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.session-load-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.session-upload {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.session-upload input[type="file"] {
+  width: auto;
+  min-height: 0;
+  border: 0;
+  padding: 0;
+  background: none;
+}
+
+.session-fragment-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.session-fragment-row input[type="checkbox"] {
+  width: auto;
+  min-height: 0;
+}
+
+.session-fragment-row .item-title {
+  flex: 1 1 auto;
+}
+
+.session-fragment-detail {
+  width: 100%;
+  margin: 8px 0 0;
+  padding: 8px;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.session-ops {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.session-ops .item-meta {
+  align-self: center;
+  margin-right: 4px;
+}
+
+.session-seed {
+  max-width: 180px;
+}
+
+.session-rows {
+  display: grid;
+  gap: 8px;
+}
+
+.session-mode-row {
+  display: flex;
+  gap: 16px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.session-mode-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.session-mode-row input[type="radio"] {
+  width: auto;
+  min-height: 0;
+}
+
+.session-output-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+#outputBody {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}

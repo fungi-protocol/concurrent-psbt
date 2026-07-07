@@ -49,6 +49,8 @@ export type FragmentOrigin =
   | "make-unordered"
   | "atomize"
   | "concatenate"
+  | "pay"
+  | "confirm"
   | "sync";
 
 export interface SessionFragment {
