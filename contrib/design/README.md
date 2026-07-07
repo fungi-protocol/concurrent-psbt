@@ -191,6 +191,7 @@ introduction mechanisms and payment instruction formats).
 - [Scenarios](scenarios.md): 14 detailed use cases
 - [Protocol reference](ptj-net.md): full 5-layer protocol stack, session lifecycle, wallet integration guide
 - [Transports](transports.md): per-transport analysis and environment suitability
+- [Transport plugins](transport-plugins.md): out-of-process transports (separate binaries, own lockfiles) over Cap'n Proto stdio RPC, and why lockfile conflicts force them
 - [Environments](environments.md): POSIX/web/mobile platform matrix, user story taxonomy
 - [App suite](app-suite.md): per-platform app architecture (CLI, web, Android, iOS)
 - [Traits](traits.md): library interface boundaries (Cap'n Proto, WIT)
