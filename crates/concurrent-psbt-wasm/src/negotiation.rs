@@ -1,7 +1,7 @@
 //! Negotiation band helpers (pay / confirm / payments), mechanism-only.
 //!
 //! The wasm core stores/reads OPAQUE payment and confirmation records; the
-//! frontend builds the record bytes (matching `concurrent_psbt::negotiation::
+//! frontend builds the record bytes (matching `concurrent_psbt::payments::negotiation::
 //! Payment::encode` / `Confirmation::encode`) and the core never invents
 //! policy. This keeps the browser core to the transport-agnostic mechanism.
 //!
@@ -21,7 +21,7 @@
 use bitcoin::hashes::{Hash as _, HashEngine as _, sha256t_hash_newtype};
 use chacha20poly1305::aead::{Aead as _, KeyInit as _, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-use concurrent_psbt::negotiation::{
+use concurrent_psbt::payments::negotiation::{
     FORMAT_ENCRYPTED, GlobalNegotiationExt as _, PSBT_GLOBAL_CONFIRMATION_SUBTYPE,
     PSBT_GLOBAL_PAYMENT_SUBTYPE,
 };
@@ -126,7 +126,7 @@ pub fn add_confirmation(
 /// the dummy shape ptj builds: a 22-byte v0 witness program script + random
 /// payer/amount, encoded via the same `Payment::encode`.
 pub fn random_dummy_payment() -> Vec<u8> {
-    use concurrent_psbt::negotiation::{PAYMENT_KIND_DUMMY, Payment};
+    use concurrent_psbt::payments::negotiation::{PAYMENT_KIND_DUMMY, Payment};
     let mut spk = vec![0u8; 22];
     spk[0] = 0x00;
     spk[1] = 0x14;

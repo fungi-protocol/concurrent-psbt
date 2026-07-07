@@ -16,14 +16,14 @@
 //!                  missing)
 //! ```
 //!
-//! The confirmation logic is entirely in [`crate::readiness`] over the payment
-//! graph in [`crate::graph`]; the confirmation and payment *wire* fields are
+//! The confirmation logic is entirely in [`crate::payments::readiness`] over the payment
+//! graph in [`crate::payments::graph`]; the confirmation and payment *wire* fields are
 //! the pre-existing `PSBT_GLOBAL_CONFIRMATION`/`PSBT_GLOBAL_PAYMENT` sets in
-//! [`crate::negotiation`]. This module only sequences them.
+//! [`crate::payments::negotiation`]. This module only sequences them.
 
-use crate::graph::{ParticipantId, PaymentGraph, RecipientResolver};
+use crate::payments::graph::{ParticipantId, PaymentGraph, RecipientResolver};
 use crate::lattice::join::Join;
-use crate::negotiation::{Confirmation, unordered_unique_id};
+use crate::payments::negotiation::{Confirmation, unordered_unique_id};
 use crate::tx::{ResultUnorderedPsbt, UnorderedPsbt, UnorderedPsbtError};
 
 use psbt_v2::v2::Psbt;
@@ -191,7 +191,7 @@ impl<'r> Session<'r> {
         // `add_confirmation`. A peer's embedded attestation therefore advances
         // readiness with no side channel (review caveat).
         let extra: Vec<Confirmation> = self.confirmations.values().cloned().collect();
-        if crate::readiness::is_ready_from_global(&graph, &psbt.global, &extra, &uid) {
+        if crate::payments::readiness::is_ready_from_global(&graph, &psbt.global, &extra, &uid) {
             Phase::Ready
         } else {
             Phase::Confirming
@@ -202,11 +202,11 @@ impl<'r> Session<'r> {
     ///
     /// Non-empty means a [`Phase::Ready`] verdict is *provisional*: some payee is
     /// unidentified and cannot attest, so it is excluded from the readiness gate
-    /// (see [`crate::readiness::required_confirmers`]). The caller should treat
+    /// (see [`crate::payments::readiness::required_confirmers`]). The caller should treat
     /// readiness as conditional on resolving these. Empty while the join is
     /// conflicted.
-    pub fn unresolved_recipients(&self) -> Vec<crate::graph::ParticipantId> {
-        crate::readiness::unresolved_recipients(&self.payment_graph())
+    pub fn unresolved_recipients(&self) -> Vec<crate::payments::graph::ParticipantId> {
+        crate::payments::readiness::unresolved_recipients(&self.payment_graph())
     }
 
     /// The order-independent unique id of the current joined PSBT, or `None`
@@ -275,7 +275,7 @@ fn empty_state() -> ResultUnorderedPsbt {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::negotiation::{GlobalNegotiationExt, PAYMENT_KIND_REAL, Payment};
+    use crate::payments::negotiation::{GlobalNegotiationExt, PAYMENT_KIND_REAL, Payment};
     use crate::output::{OutputUniqueIdExt, UniqueId};
 
     fn resolve_by_first_byte(script: &[u8]) -> Option<ParticipantId> {
