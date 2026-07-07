@@ -17,20 +17,13 @@ pub use roles::sorter as sort;
 pub use lattice::join::{Join, JoinMut};
 pub use lattice::partial::{Conflict, JoinResult, PartialJoin};
 pub use psbt::global;
-pub use psbt::negotiation;
 pub use psbt::fee;
 pub use psbt::removal;
 pub use psbt::input;
 pub use psbt::output;
 pub use psbt::tx;
 
-// Pure-logic layer over the existing PSBT_GLOBAL_PAYMENT (0x20) and
-// PSBT_GLOBAL_CONFIRMATION (0x21) fields. These define NO new PSBT field; they
-// read the grow-only payment/confirmation sets out of a Global and sequence
-// join → confirmation → export.
-pub mod graph;
-pub mod readiness;
-pub mod session;
+pub mod payments;
 
 /// Proprietary field prefix for all concurrent-psbt extensions.
 ///
