@@ -1,20 +1,58 @@
-# Partial Transaction Joiner Demo GUI
+# Partial Transaction Joiner web GUI
 
-This is a WIP browser surface for explaining collaborative PSBT construction
-without committing to a wallet API or network transport yet. It is a static
-demo: all PSBTs are represented by small in-browser payloads containing inputs,
-outputs, and deterministic ordering seeds.
+This directory is the browser surface served by `ptj webgui`. It contains TWO
+pages:
+
+- **Session UI — the real application** (`/`, from `session.html` +
+  `src/session/`): every operation runs on REAL PSBT bytes through the
+  shared-frontend Backend seam against the server's own `/api/*` routes. No
+  fixtures, no synthetic UTXOs, no fake chain source.
+- **Demo sandbox** (`/demo`, from `index.html` + `src/app.ts`): the original
+  explanatory mockup, retained unchanged behind an explicit route. All PSBTs
+  there are small in-browser payloads containing inputs, outputs, and
+  deterministic ordering seeds — useful for explaining the collaboration
+  model without a wallet API, but not the product surface.
+
+## Session UI (`/`)
+
+Strictly typed TypeScript (no `@ts-nocheck`): the pure presenter lives in
+`src/session/state.ts` (fragment-set bookkeeping, defensive `ptj inspect`
+projections, validated request builders — unit-tested by
+`test/session.test.mjs`) and the thin DOM shell in `src/session/app.ts`
+drives ONE `HttpBackend` instance. Screens:
+
+- **Session**: paste or upload real PSBTs (v2 via `/api/inspect`, BIP 174 via
+  `/api/import-bip174`); the fragment list is exactly the loaded set, each
+  with its full inspect JSON on demand; join / concatenate / sort /
+  make-unordered / atomize over the selection; export v2 and BIP 174.
+- **Create**: outpoint input rows plus address+amount output rows — address
+  and amount validity is the create route's real network validation — with
+  ordering mode and seed.
+- **Sync**: transport picker driving `/api/sync`: local (server-side source
+  paths and a read-only state PSBT), iroh (paste a document ticket, or
+  request a fresh document and receive its ticket back), and the str0m /
+  webrtc-rs WebRTC transports with the manual signaling-file params.
+- **Negotiation**: pay (address+amount — the route builds the txout; the
+  payer id is an OPAQUE optional 32-byte hex field — or a raw record hex;
+  optional secret encrypts, dummy padding requires it), confirm
+  (derive-from-current via the route, or a raw record hex), and a payments
+  listing (optional secret decrypts) showing the raw payments/confirmations
+  lists plus the PSBT's unordered unique id. Deliberately no readiness/phase
+  logic: those semantics are being reworked; counts are the ceiling here.
 
 ## Run
 
-Build the TypeScript once, then open `contrib/demo-gui/index.html` directly, or
-serve the directory:
+`cargo run -p ptj -- webgui` serves both pages with the compiled assets
+embedded. To rebuild the TypeScript (`dist/`), or to work on the demo page
+directly:
 
 ```sh
 nix build --no-link --print-out-paths .#checks.aarch64-darwin.demo-gui
 nix build --no-link --print-out-paths .#checks.aarch64-darwin.demo-gui-playwright
 python3 -m http.server 8034 -d contrib/demo-gui
 ```
+
+## Demo mode (`/demo`)
 
 The page starts with a small sample graph. All peers in a session must be
 trusted with privacy, because anything they can read can be leaked, and with
