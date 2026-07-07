@@ -1,0 +1,62 @@
+# ptj-transport-nym: the nym mixnet transport as an OUT-OF-PROCESS PLUGIN.
+#
+# This package is EXCLUDED from the workspace (root Cargo.toml
+# `workspace.exclude`) and commits its OWN Cargo.lock — that separation is its
+# entire reason to exist: nym-sdk needs libsqlite3-sys ^0.30.1 while the
+# workspace lock already pins 0.37 for arti's static-sqlite, and
+# `links = "sqlite3"` permits exactly one version per lockfile (optional deps
+# still resolve into the lock, which is why the in-workspace transport-nym
+# crate's `nym` feature sits empty). Being excluded, nothing here can inherit
+# `workspace.package` values — the version below is literal by necessity.
+#
+# ptj spawns this binary via `--transport plugin --plugin ptj-transport-nym`
+# and drives it over stdio; the wire contract is crates/transport-plugin-api.
+# See contrib/design/transport-plugins.md.
+
+[package]
+name = "ptj-transport-nym"
+version = "0.1.0"
+edition = "2024"
+
+# This package is its OWN workspace root (the point of the exclusion): cargo
+# run inside this directory must resolve against THIS package's Cargo.lock,
+# never walk up into the concurrent-psbt workspace.
+[workspace]
+
+[features]
+# Same skeleton convention as the in-workspace transport crates: with `nym`
+# OFF this builds (fast, network-free) as a protocol-complete plugin whose
+# publish/collect report "built without `nym`"; turning it ON compiles the
+# real mixnet backend. Either way nym-sdk is grounded in THIS package's
+# Cargo.lock, where it cannot collide with arti.
+nym = ["dep:nym-sdk"]
+
+[dependencies]
+# futures::io::{BufReader, BufWriter} wrap our stdio for the capnp twoparty
+# vat (which speaks the futures IO traits). Grounded via `cargo add` (2026-07).
+futures = "0.3.32"
+# The real mixnet client, `nym` feature only — grounded via `cargo add`
+# (2026-07) in THIS package's own lock (nym-sdk 1.21 is exactly the version
+# the workspace lock cannot hold; see the header). The backend usage is
+# ported from the transport-grounding lane's transport-nym imp (vqqyuxys),
+# whose API citations were verified against these pinned registry sources.
+nym-sdk = { version = "1.21.2", optional = true }
+# The plugin's single current-thread runtime: rt + LocalSet for the vat,
+# io-std/io-util for our stdio RPC stream, time for the mixnet drain poll
+# window, sync out of caution for the SDK's channel types. Grounded via
+# `cargo add` (2026-07).
+tokio = { version = "1.52.3", features = ["rt", "io-std", "io-util", "sync", "time"] }
+# tokio<->futures IO compat for the vat over stdio. Grounded via `cargo add`
+# (2026-07).
+tokio-util = { version = "0.7.18", features = ["compat"] }
+# frame/deframe: the length-prefixed record framing the in-workspace
+# transports put on the wire — kept IDENTICAL here so a plugin peer is
+# wire-compatible with an in-process transport-nym peer.
+transport-core = { path = "../../crates/transport-core" }
+# The host<->plugin wire contract (schema bindings + re-exported
+# capnp/capnp-rpc, shared grounded RPC stack with the host).
+transport-plugin-api = { path = "../../crates/transport-plugin-api" }
+
+[lints.rust]
+# Mirrors the workspace lint table (not inheritable from an excluded package).
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(coverage_nightly)'] }
