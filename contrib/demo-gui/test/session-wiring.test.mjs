@@ -18,11 +18,13 @@ import {
   mintPeer,
   mintSession,
   mintUtxo,
+  nodeDisplayName,
   overviewFocus,
   peerByKey,
   sessionByKey,
   sessionFocus,
   validateFocus,
+  wireDisposition,
   wireVerdict,
 } from "../dist/session/wiring.js";
 
@@ -216,6 +218,91 @@ test("undefined pairs are refused with a reason", () => {
   const descriptorPeer = wireVerdict(ref("descriptor", "descriptor-1"), ref("peer", "peer-1"), state);
   assert.equal(descriptorPeer.kind, "none");
   assert.match(descriptorPeer.reason, /no join is defined/);
+});
+
+// --- action labels + target vocabulary ----------------------------------------
+
+test("wire verdicts carry concrete action labels built from display names", () => {
+  let state = emptyObjects();
+  state = mintSession(state, "lunch", "iroh").state;
+  state = mintPeer(state, "alice", "iroh", "doc-abc").state;
+  state = mintPayment(state, "bitcoin:bcrt1qx?amount=0.001", "bcrt1qx", 100000, "rent").state;
+  state = mintUtxo(state, "020000dead").state;
+  state = mintDescriptor(state, "wpkh(xpub6...)", false).state;
+
+  assert.equal(nodeDisplayName(ref("fragment", "psbt-7"), state), "psbt-7");
+  assert.equal(nodeDisplayName(ref("session", "session-1"), state), "lunch");
+  assert.equal(nodeDisplayName(ref("peer", "peer-2"), state), "alice");
+  assert.equal(nodeDisplayName(ref("payment", "payment-3"), state), "rent");
+  // Unknown keys and label-less objects fall back to the key.
+  assert.equal(nodeDisplayName(ref("session", "session-404"), state), "session-404");
+
+  assert.equal(
+    wireVerdict(ref("fragment", "psbt-1"), ref("fragment", "psbt-2"), state).label,
+    "Join psbt-1 into psbt-2",
+  );
+  assert.equal(
+    wireVerdict(ref("fragment", "psbt-1"), ref("session", "session-1"), state).label,
+    "Publish psbt-1 to session lunch",
+  );
+  // Symmetric pairs label the same action regardless of direction.
+  assert.equal(
+    wireVerdict(ref("session", "session-1"), ref("fragment", "psbt-1"), state).label,
+    "Publish psbt-1 to session lunch",
+  );
+  assert.equal(
+    wireVerdict(ref("peer", "peer-2"), ref("session", "session-1"), state).label,
+    "Sync session lunch over peer alice",
+  );
+  assert.equal(
+    wireVerdict(ref("payment", "payment-3"), ref("fragment", "psbt-1"), state).label,
+    "Attach payment rent to psbt-1",
+  );
+  assert.equal(
+    wireVerdict(ref("utxo", "utxo-4"), ref("create", "create"), state).label,
+    "Use utxo-4 as a create-form input",
+  );
+  assert.equal(
+    wireVerdict(ref("session", "session-1"), ref("session", "session-9"), state).label,
+    "Merge sessions lunch and session-9",
+  );
+  assert.equal(
+    wireVerdict(ref("peer", "peer-2"), ref("peer", "peer-9"), state).label,
+    "Bridge peers alice, peer-9",
+  );
+  assert.equal(
+    wireVerdict(ref("descriptor", "descriptor-5"), ref("fragment", "psbt-1"), state).label,
+    "Attribute descriptor-5 scripts to psbt-1",
+  );
+
+  // Undefined pairs carry no action label.
+  assert.equal(wireVerdict(ref("peer", "peer-2"), ref("fragment", "psbt-1"), state).label, null);
+  assert.equal(
+    wireVerdict(ref("fragment", "psbt-1"), ref("fragment", "psbt-1"), state).label,
+    null,
+  );
+});
+
+test("wire disposition: compatible / blocked / unbacked three-way vocabulary", () => {
+  let state = emptyObjects();
+  state = mintSession(state, "s", "iroh").state;
+  state = addFragmentToSession(state, "session-1", "psbt-1");
+  state = mintPeer(state, "npub", "nostr", "npub1xyz").state;
+
+  // allowed && backed → compatible.
+  const join = wireVerdict(ref("fragment", "psbt-1"), ref("fragment", "psbt-2"), state);
+  assert.equal(wireDisposition(join), "compatible");
+
+  // backed but refused right now → blocked (red vocabulary).
+  const member = wireVerdict(ref("fragment", "psbt-1"), ref("session", "session-1"), state);
+  assert.equal(wireDisposition(member), "blocked");
+
+  // Defined pair waiting on a seam → unbacked (dim vocabulary)…
+  const nostr = wireVerdict(ref("peer", "peer-2"), ref("session", "session-1"), state);
+  assert.equal(wireDisposition(nostr), "unbacked");
+  // …and so are pairs with no join defined at all.
+  const none = wireVerdict(ref("peer", "peer-2"), ref("fragment", "psbt-1"), state);
+  assert.equal(wireDisposition(none), "unbacked");
 });
 
 // --- wire gesture ------------------------------------------------------------

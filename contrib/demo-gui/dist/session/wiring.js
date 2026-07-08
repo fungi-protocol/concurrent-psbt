@@ -245,60 +245,94 @@ export function dropFragmentKey(state, fragmentKey) {
             : session),
     };
 }
-function verdict(kind, allowed, backed, reason = null, needs = null) {
-    return { kind, allowed, backed, reason, needs };
+function verdict(kind, allowed, backed, reason = null, needs = null, label = null) {
+    return { kind, allowed, backed, reason, needs, label };
 }
 function unordered(a, b, x, y) {
     return (a === x && b === y) || (a === y && b === x);
 }
+// Display name for a node in wire action labels: sessions and peers carry
+// human names, payments a user label; fragments (and everything else) go by
+// their key, which is already the visible card title.
+export function nodeDisplayName(ref, state) {
+    switch (ref.kind) {
+        case "session":
+            return sessionByKey(state, ref.key)?.name ?? ref.key;
+        case "peer":
+            return peerByKey(state, ref.key)?.name ?? ref.key;
+        case "payment": {
+            const payment = state.payments.find((candidate) => candidate.key === ref.key);
+            return payment && payment.label ? payment.label : ref.key;
+        }
+        default:
+            return ref.key;
+    }
+}
+export function wireDisposition(v) {
+    if (v.allowed && v.backed)
+        return "compatible";
+    if (v.backed)
+        return "blocked";
+    return "unbacked";
+}
 export function wireVerdict(source, target, state) {
     const a = source.kind;
     const b = target.kind;
+    const sourceName = nodeDisplayName(source, state);
+    const targetName = nodeDisplayName(target, state);
     if (a === b && source.key === target.key) {
         return verdict("none", false, false, `cannot wire a ${a} to itself`);
     }
     if (a === "fragment" && b === "fragment") {
-        return verdict("fragment-join", true, true);
+        const label = `Join ${sourceName} into ${targetName}`;
+        return verdict("fragment-join", true, true, null, null, label);
     }
     if (unordered(a, b, "fragment", "session")) {
         const sessionKey = a === "session" ? source.key : target.key;
         const fragmentKey = a === "fragment" ? source.key : target.key;
         const session = sessionByKey(state, sessionKey);
+        const label = `Publish ${fragmentKey} to session ${a === "session" ? sourceName : targetName}`;
         if (session && session.fragmentKeys.includes(fragmentKey)) {
-            return verdict("fragment-into-session", false, true, "fragment is already in the session");
+            return verdict("fragment-into-session", false, true, "fragment is already in the session", null, label);
         }
-        return verdict("fragment-into-session", true, true);
+        return verdict("fragment-into-session", true, true, null, null, label);
     }
     if (unordered(a, b, "peer", "session")) {
         const peerKey = a === "peer" ? source.key : target.key;
         const peer = peerByKey(state, peerKey);
+        const sessionName = a === "session" ? sourceName : targetName;
+        const peerName = a === "peer" ? sourceName : targetName;
+        const label = `Sync session ${sessionName} over peer ${peerName}`;
         if (peer && peer.transport === "nostr") {
             // The nostr transport is not served by /api/sync yet; keep the pair
             // visible but honestly unwired.
-            return verdict("peer-into-session", false, false, null, "a nostr transport behind /api/sync (npub peers cannot sync yet)");
+            return verdict("peer-into-session", false, false, null, "a nostr transport behind /api/sync (npub peers cannot sync yet)", label);
         }
         if (peer && (peer.transport === "unknown" || !peer.identity)) {
-            return verdict("peer-into-session", false, true, "peer has no usable transport identity (configure a ticket or signaling files)");
+            return verdict("peer-into-session", false, true, "peer has no usable transport identity (configure a ticket or signaling files)", null, label);
         }
-        return verdict("peer-into-session", true, true);
+        return verdict("peer-into-session", true, true, null, null, label);
     }
     if (unordered(a, b, "payment", "fragment")) {
-        return verdict("attach-payment", true, true);
+        const paymentRef = a === "payment" ? source : target;
+        const fragmentKey = a === "fragment" ? source.key : target.key;
+        const label = `Attach payment ${nodeDisplayName(paymentRef, state)} to ${fragmentKey}`;
+        return verdict("attach-payment", true, true, null, null, label);
     }
     if (a === "utxo" && b === "create") {
-        return verdict("add-create-input", true, true);
+        return verdict("add-create-input", true, true, null, null, `Use ${sourceName} as a create-form input`);
     }
     if (a === "utxo" || b === "utxo") {
         return verdict("none", false, false, "spendable outputs feed the create form (chain sources stay manual for now)");
     }
     if (a === "session" && b === "session") {
-        return verdict("session-merge", false, false, null, "a session-state merge seam (lattice join of two converging session states)");
+        return verdict("session-merge", false, false, null, "a session-state merge seam (lattice join of two converging session states)", `Merge sessions ${sourceName} and ${targetName}`);
     }
     if (a === "peer" && b === "peer") {
-        return verdict("peer-channel", false, false, null, "a standalone peer-to-peer channel establishment seam");
+        return verdict("peer-channel", false, false, null, "a standalone peer-to-peer channel establishment seam", `Bridge peers ${sourceName}, ${targetName}`);
     }
     if (a === "descriptor" && (b === "fragment" || b === "session")) {
-        return verdict("attribute-scripts", false, false, null, "descriptor derivation (Backend.classifyPaste) to match fragment scripts to the descriptor");
+        return verdict("attribute-scripts", false, false, null, "descriptor derivation (Backend.classifyPaste) to match fragment scripts to the descriptor", `Attribute ${sourceName} scripts to ${targetName}`);
     }
     if (unordered(a, b, "peer", "fragment")) {
         return verdict("none", false, false, "wire the peer to a session; fragments sync through sessions");
