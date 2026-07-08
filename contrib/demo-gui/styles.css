@@ -2374,3 +2374,159 @@ img.session-lifehash {
 #createWireTarget[hidden] {
   display: none;
 }
+
+/* =============================================================
+   Session wiring vocabulary (wiring lane).
+   Three-way wire-target vocabulary on cards, porting the demo's
+   halo colors (styles.css .wire-halo/.wire-halo.invalid):
+   compatible = green outline (.session-wire-target above),
+   blocked    = red-tinted outline (defined pair, rule refuses),
+   unbacked   = dimmed (.session-wire-blocked above).
+   Plus the transient rejected-tap pulse + reason chip (the card
+   analog of the demo's .wire-failed pulse).
+   ============================================================= */
+
+.session-wire-incompatible {
+  outline: 2px dashed var(--red);
+  outline-offset: 2px;
+  background: color-mix(in srgb, var(--red) 5%, var(--surface));
+}
+
+.session-wire-rejected {
+  animation: session-wire-rejected-pulse 0.9s ease-in-out 2;
+}
+
+@keyframes session-wire-rejected-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(179, 38, 30, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(179, 38, 30, 0.45);
+  }
+}
+
+.session-wire-reason {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 8px;
+  border: 1px solid var(--red);
+  border-radius: 10px;
+  background: rgba(179, 38, 30, 0.07);
+  color: var(--red);
+  font-size: 12px;
+}
+
+/* Pending-wire queue (wiring lane): the queue panel under the wire status
+   bar, and the animated pending-edge vocabulary on participating cards
+   (the demo's .pending-wire orange dashes, card-shaped). */
+
+.session-wire-queue {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 2px dashed var(--orange);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--orange) 6%, var(--surface));
+}
+
+.session-wire-queue-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.session-wire-queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.session-wire-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.session-wire-queue-label {
+  flex: 1;
+  min-width: 0;
+  color: var(--orange);
+  font-weight: 600;
+}
+
+.session-wire-pending {
+  outline: 2px dashed var(--orange);
+  outline-offset: 2px;
+  animation: session-wire-pending-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes session-wire-pending-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(182, 92, 0, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(182, 92, 0, 0.28);
+  }
+}
+
+.session-wire-queue[hidden] {
+  display: none;
+}
+
+/* Peer bridge groups (wiring lane): a bridged group renders as ONE peer —
+   the card analog of the demo's .peer-bridge-block green grouping. */
+
+.session-bridge-group {
+  border: 1.5px solid rgba(15, 123, 79, 0.42);
+  background: rgba(15, 123, 79, 0.06);
+}
+
+.session-bridge-member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 4px 0 4px 12px;
+  padding: 4px 8px;
+  border-left: 2px solid rgba(15, 123, 79, 0.42);
+  font-size: 13px;
+}
+
+/* MINE pseudo-peer + published-session areas (wiring lane, Q6): the
+   fragments panel partitions into a large peer-like Mine rectangle
+   (sessionless local fragments) and one container per session with
+   published members, so Mine -> session wiring reads as a visible move. */
+
+.session-mine-area,
+.session-published-area {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 10px;
+  margin-bottom: 10px;
+}
+
+.session-mine-area {
+  border: 2px solid var(--ink);
+  background: var(--surface-2);
+}
+
+.session-published-area {
+  border: 1.5px solid rgba(15, 123, 79, 0.42);
+  background: rgba(15, 123, 79, 0.04);
+}
+
+.session-mine-area > .session-card-list,
+.session-published-area > .session-card-list {
+  margin-top: 8px;
+}
+
+.session-area-hint {
+  display: block;
+  font-size: 12px;
+}

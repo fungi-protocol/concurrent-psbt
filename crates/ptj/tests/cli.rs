@@ -684,6 +684,189 @@ fn inspect_reports_transaction_details_and_totals() {
 }
 
 #[test]
+fn inspect_reports_declared_fee_totals() {
+    use concurrent_psbt::fee::{FeeContribution, GlobalFeeExt as _};
+    use concurrent_psbt::payments::negotiation::FORMAT_ENCRYPTED;
+
+    let temp = tempfile::tempdir().unwrap();
+    let mut psbt = create_psbt(TXID, 7, 1, 123_456);
+
+    // No contributions: zero total, zero unreadable.
+    let clean = write_psbt(temp.path(), "clean.psbt", psbt.clone());
+    let inspected = inspect_json(&clean);
+    assert_eq!(inspected["totals"]["declared_fee_sats"], 0);
+    assert_eq!(inspected["totals"]["declared_fee_undecoded_count"], 0);
+
+    // Plaintext contributions sum; an encrypted-format blob is stored in the
+    // band but cannot be counted without the group secret — it must show up
+    // in the undecoded count instead of silently vanishing.
+    psbt.global
+        .add_fee_contribution([1u8; 16], FeeContribution { amount_sats: 700 }.encode());
+    psbt.global
+        .add_fee_contribution([2u8; 16], FeeContribution { amount_sats: 42 }.encode());
+    let mut opaque = FeeContribution { amount_sats: 9_999 }.encode();
+    opaque[0] = FORMAT_ENCRYPTED;
+    psbt.global.add_fee_contribution([3u8; 16], opaque);
+
+    let declared = write_psbt(temp.path(), "declared.psbt", psbt);
+    let inspected = inspect_json(&declared);
+    assert_eq!(inspected["totals"]["declared_fee_sats"], 742);
+    assert_eq!(inspected["totals"]["declared_fee_undecoded_count"], 1);
+    // The band entries also remain visible as raw proprietary keymap rows.
+    assert_eq!(
+        inspected["raw"]["global"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["proprietary"]["subtype"]
+                == concurrent_psbt::fee::PSBT_GLOBAL_EXPLICIT_FEE_CONTRIBUTION_SUBTYPE)
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn inspect_reports_size_estimates_by_script_kind() {
+    let temp = tempfile::tempdir().unwrap();
+
+    // No UTXO data at all: the 68 vB default-input fallback. The created
+    // p2wpkh output is exact (its bytes are fully known); totals add the
+    // fixed transaction bytes (version + locktime + count compact sizes,
+    // ×4 WU) plus the 2 WU segwit marker the assumed witness implies.
+    let unknown = write_psbt(temp.path(), "unknown.psbt", create_psbt(TXID, 7, 1, 123_456));
+    let inspected = inspect_json(&unknown);
+    let input_size = &inspected["inputs"][0]["size"];
+    assert_eq!(input_size["weight"], 272);
+    assert_eq!(input_size["vbytes"], 68);
+    assert_eq!(input_size["exact"], false);
+    assert_eq!(input_size["basis"], "fallback");
+    let output_size = &inspected["outputs"][0]["size"];
+    assert_eq!(output_size["weight"], 124);
+    assert_eq!(output_size["vbytes"], 31);
+    assert_eq!(output_size["exact"], true);
+    assert_eq!(output_size["basis"], "script_pubkey");
+    let totals = &inspected["totals"]["size"];
+    assert_eq!(totals["input_weight"], 272);
+    assert_eq!(totals["output_weight"], 124);
+    assert_eq!(totals["overhead_weight"], 42);
+    assert_eq!(totals["weight"], 438);
+    assert_eq!(totals["vbytes"], 110);
+    assert_eq!(totals["exact"], false);
+
+    // A witness UTXO pins the script kind: p2wpkh.
+    let mut p2wpkh = create_psbt(TXID, 7, 1, 123_456);
+    let mut p2wpkh_spk = vec![0x00, 0x14];
+    p2wpkh_spk.extend([7u8; 20]);
+    p2wpkh.inputs[0].witness_utxo = Some(bitcoin::TxOut {
+        value: bitcoin::Amount::from_sat(200_000),
+        script_pubkey: bitcoin::ScriptBuf::from_bytes(p2wpkh_spk),
+    });
+    let p2wpkh = write_psbt(temp.path(), "p2wpkh.psbt", p2wpkh);
+    let input_size = &inspect_json(&p2wpkh)["inputs"][0]["size"];
+    assert_eq!(input_size["weight"], 272);
+    assert_eq!(input_size["basis"], "p2wpkh");
+    assert_eq!(input_size["exact"], false);
+
+    // Taproot with no leaf scripts: the key-spend estimate.
+    let mut p2tr = create_psbt(TXID, 7, 1, 123_456);
+    let mut p2tr_spk = vec![0x51, 0x20];
+    p2tr_spk.extend([0xabu8; 32]);
+    p2tr.inputs[0].witness_utxo = Some(bitcoin::TxOut {
+        value: bitcoin::Amount::from_sat(200_000),
+        script_pubkey: bitcoin::ScriptBuf::from_bytes(p2tr_spk.clone()),
+    });
+    let key_spend = write_psbt(temp.path(), "p2tr-key.psbt", p2tr.clone());
+    let input_size = &inspect_json(&key_spend)["inputs"][0]["size"];
+    assert_eq!(input_size["weight"], 230);
+    assert_eq!(input_size["vbytes"], 58);
+    assert_eq!(input_size["basis"], "p2tr_key_spend");
+
+    // Taproot with a leaf script attached may spend via the script path:
+    // floor the estimate at the 68 vB default instead of the smaller
+    // key-spend figure.
+    let secp = bitcoin::secp256k1::Secp256k1::new();
+    let keypair = bitcoin::secp256k1::Keypair::from_secret_key(
+        &secp,
+        &bitcoin::secp256k1::SecretKey::from_slice(&[5u8; 32]).unwrap(),
+    );
+    let (internal_key, _parity) = keypair.x_only_public_key();
+    let mut control = vec![0xc0];
+    control.extend(internal_key.serialize());
+    p2tr.inputs[0].tap_scripts.insert(
+        bitcoin::taproot::ControlBlock::decode(&control).unwrap(),
+        (
+            bitcoin::ScriptBuf::new(),
+            bitcoin::taproot::LeafVersion::TapScript,
+        ),
+    );
+    let script_path = write_psbt(temp.path(), "p2tr-script.psbt", p2tr);
+    let input_size = &inspect_json(&script_path)["inputs"][0]["size"];
+    assert_eq!(input_size["weight"], 272);
+    assert_eq!(input_size["basis"], "p2tr_script_path_floor");
+
+    // Legacy p2pkh, resolved through the non-witness UTXO's spent output.
+    let mut p2pkh = create_psbt(TXID, 0, 1, 123_456);
+    let mut p2pkh_spk = vec![0x76, 0xa9, 0x14];
+    p2pkh_spk.extend([9u8; 20]);
+    p2pkh_spk.extend([0x88, 0xac]);
+    p2pkh.inputs[0].non_witness_utxo = Some(bitcoin::Transaction {
+        version: bitcoin::transaction::Version::TWO,
+        lock_time: bitcoin::absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(200_000),
+            script_pubkey: bitcoin::ScriptBuf::from_bytes(p2pkh_spk),
+        }],
+    });
+    let p2pkh = write_psbt(temp.path(), "p2pkh.psbt", p2pkh);
+    let input_size = &inspect_json(&p2pkh)["inputs"][0]["size"];
+    assert_eq!(input_size["weight"], 592);
+    assert_eq!(input_size["vbytes"], 148);
+    assert_eq!(input_size["basis"], "p2pkh");
+}
+
+#[test]
+fn inspect_size_estimates_are_exact_with_final_scripts() {
+    let temp = tempfile::tempdir().unwrap();
+
+    // Segwit-final: empty scriptSig, measured witness (1 count byte + a
+    // 71-byte signature push + a 33-byte pubkey push = 107 WU) — the input
+    // and the whole-transaction totals turn exact.
+    let mut finalized = create_psbt(TXID, 7, 1, 123_456);
+    finalized.inputs[0].final_script_witness = Some(bitcoin::Witness::from_slice(&[
+        vec![0u8; 71],
+        vec![1u8; 33],
+    ]));
+    let finalized = write_psbt(temp.path(), "final-segwit.psbt", finalized);
+    let inspected = inspect_json(&finalized);
+    let input_size = &inspected["inputs"][0]["size"];
+    assert_eq!(input_size["weight"], 271);
+    assert_eq!(input_size["vbytes"], 68);
+    assert_eq!(input_size["exact"], true);
+    assert_eq!(input_size["basis"], "final_scripts");
+    let totals = &inspected["totals"]["size"];
+    assert_eq!(totals["overhead_weight"], 42);
+    assert_eq!(totals["weight"], 437);
+    assert_eq!(totals["exact"], true);
+
+    // Legacy-final: measured scriptSig, no witness — the segwit marker
+    // drops out of the overhead and everything stays exact.
+    let mut legacy = create_psbt(TXID, 7, 1, 123_456);
+    legacy.inputs[0].final_script_sig = Some(bitcoin::ScriptBuf::from_bytes(vec![0u8; 107]));
+    let legacy = write_psbt(temp.path(), "final-legacy.psbt", legacy);
+    let inspected = inspect_json(&legacy);
+    let input_size = &inspected["inputs"][0]["size"];
+    assert_eq!(input_size["weight"], 592);
+    assert_eq!(input_size["vbytes"], 148);
+    assert_eq!(input_size["exact"], true);
+    let totals = &inspected["totals"]["size"];
+    assert_eq!(totals["overhead_weight"], 40);
+    assert_eq!(totals["weight"], 756);
+    assert_eq!(totals["vbytes"], 189);
+    assert_eq!(totals["exact"], true);
+}
+
+#[test]
 fn join_is_idempotent_on_real_psbt_files() {
     let temp = tempfile::tempdir().unwrap();
     let a = write_psbt(temp.path(), "a.psbt", create_psbt(TXID, 0, 1, 50_000));
@@ -2220,4 +2403,95 @@ fn sort_strips_negotiation_band() {
         "ptj", "payments", "--json", path_str(&sorted),
     ])).unwrap();
     assert!(report["payments"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn sort_strips_fee_band() {
+    // Regression armor: two independent reviews mis-filed a "fee leaks through
+    // sort" bug off a stale doc. The sorter's clear_removal_and_fee() strips
+    // the 0x22 band; prove it end to end.
+    let temp = tempfile::tempdir().unwrap();
+    let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let declared = write_psbt(temp.path(), "declared.psbt", run_to_psbt([
+        "ptj", "fee", "--amount-sats", "700", path_str(&base),
+    ]));
+    let before: serde_json::Value = serde_json::from_str(&run_to_string([
+        "ptj", "inspect", path_str(&declared),
+    ])).unwrap();
+    assert_eq!(before["totals"]["declared_fee_sats"].as_u64(), Some(700));
+    let sorted = write_psbt(temp.path(), "sorted.psbt", run_to_psbt(["ptj", "sort", path_str(&declared)]));
+    let after: serde_json::Value = serde_json::from_str(&run_to_string([
+        "ptj", "inspect", path_str(&sorted),
+    ])).unwrap();
+    assert_eq!(after["totals"]["declared_fee_sats"].as_u64(), Some(0));
+    assert_eq!(after["totals"]["declared_fee_undecoded_count"].as_u64(), Some(0));
+}
+
+// ---- fee: explicit fee contributions ----
+
+#[test]
+fn fee_declares_explicit_contribution_and_inspect_counts_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let declared = run_to_psbt(["ptj", "fee", "--amount-sats", "700", path_str(&base)]);
+    assert_eq!(
+        concurrent_psbt::fee::total_declared_fee(&declared.global),
+        700
+    );
+
+    // Grow-only: a second declaration adds a fresh entry under its own id.
+    let first = write_psbt(temp.path(), "first.psbt", declared);
+    let again = run_to_psbt(["ptj", "fee", "--amount-sats", "42", path_str(&first)]);
+    {
+        use concurrent_psbt::fee::GlobalFeeExt as _;
+        assert_eq!(again.global.fee_contributions().len(), 2);
+    }
+    assert_eq!(concurrent_psbt::fee::total_declared_fee(&again.global), 742);
+
+    // The CLI round-trip: `ptj fee` then `ptj inspect` shows the total.
+    let both = write_psbt(temp.path(), "both.psbt", again);
+    let inspected = inspect_json(&both);
+    assert_eq!(inspected["totals"]["declared_fee_sats"], 742);
+    assert_eq!(inspected["totals"]["declared_fee_undecoded_count"], 0);
+}
+
+#[test]
+fn fee_encrypts_with_group_secret() {
+    use concurrent_psbt::fee::GlobalFeeExt as _;
+    use concurrent_psbt::payments::negotiation::FORMAT_ENCRYPTED;
+
+    let temp = tempfile::tempdir().unwrap();
+    let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let declared = run_to_psbt([
+        "ptj", "fee", "--amount-sats", "9999", "--encrypt", "--secret", "aabb",
+        path_str(&base),
+    ]);
+    let contributions = declared.global.fee_contributions();
+    assert_eq!(contributions.len(), 1);
+    assert_eq!(contributions[0].1.first(), Some(&FORMAT_ENCRYPTED));
+    // Sealed: the plaintext termination sum cannot count it, and inspect
+    // reports the unreadable entry instead of hiding it.
+    assert_eq!(concurrent_psbt::fee::total_declared_fee(&declared.global), 0);
+    let sealed = write_psbt(temp.path(), "sealed.psbt", declared);
+    let inspected = inspect_json(&sealed);
+    assert_eq!(inspected["totals"]["declared_fee_sats"], 0);
+    assert_eq!(inspected["totals"]["declared_fee_undecoded_count"], 1);
+}
+
+#[test]
+fn fee_encrypt_requires_secret() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let error = run_error(["ptj", "fee", "--amount-sats", "1", "--encrypt", path_str(&base)]);
+    assert!(error.to_string().contains("--secret"));
+}
+
+#[test]
+fn fee_reads_stdin_psbt_source_marker() {
+    let base = create_psbt(TXID, 0, 1, 50_000);
+    let declared = run_to_psbt_with_stdin(
+        ["ptj", "fee", "--amount-sats", "5", "-"],
+        encode_psbt(&base).as_bytes(),
+    );
+    assert_eq!(concurrent_psbt::fee::total_declared_fee(&declared.global), 5);
 }

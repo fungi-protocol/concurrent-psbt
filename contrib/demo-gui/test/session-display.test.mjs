@@ -425,10 +425,17 @@ test("balanceSheet consumes the declared-fee and size seams when present", () =>
   assert.equal(allDeclared.outputTotalElidedByDeclaredFees, true);
 });
 
-test("seam readers accept the tolerated size_estimate shapes", () => {
+test("seam readers accept the emitted totals.size and tolerated size_estimate shapes", () => {
   assert.equal(declaredFeeSatsFromInspect(INSPECT), null);
   assert.equal(declaredFeeSatsFromInspect(null), null);
+  assert.equal(declaredFeeSatsFromInspect({ totals: { declared_fee_sats: 700 } }), 700);
   assert.equal(sizeEstimateVbytesFromInspect(null), null);
+  // The REAL emitter shape (ptj commands/inspect.rs size_totals): totals.size
+  // is an object whose vbytes = ceil(weight / 4).
+  assert.equal(
+    sizeEstimateVbytesFromInspect({ totals: { size: { weight: 560, vbytes: 140, exact: false } } }),
+    140,
+  );
   assert.equal(sizeEstimateVbytesFromInspect({ totals: { size_estimate: 140 } }), 140);
   assert.equal(sizeEstimateVbytesFromInspect({ totals: { size_estimate: { vbytes: 141 } } }), 141);
   assert.equal(sizeEstimateVbytesFromInspect({ size_estimate: 142 }), 142);
