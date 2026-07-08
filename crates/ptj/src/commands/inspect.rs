@@ -1,3 +1,4 @@
+use concurrent_psbt::fee::{FeeContribution, GlobalFeeExt as _};
 use concurrent_psbt::global::GlobalSortExt;
 use concurrent_psbt::output::OutputUniqueIdExt;
 use serde_json::json;
@@ -50,6 +51,16 @@ pub(crate) fn inspect_psbt(psbt: &psbt_v2::v2::Psbt) -> serde_json::Value {
             "fee_sats_if_inputs_known": known_input_sats.map(|input_sats| {
                 i128::from(input_sats) - i128::from(output_sats)
             }),
+            // Sum of the plaintext PSBT_GLOBAL_EXPLICIT_FEE_CONTRIBUTION
+            // entries — the spec § Termination quantity, via the library's
+            // read projection (`fee::total_declared_fee`). That projection
+            // only reads contributions it can decode: encrypted or malformed
+            // entries are skipped, so `declared_fee_undecoded_count` reports
+            // how many entries the total could NOT count — a viewer can say
+            // "N contributions unreadable" instead of presenting a partial
+            // sum as the whole.
+            "declared_fee_sats": concurrent_psbt::fee::total_declared_fee(&psbt.global),
+            "declared_fee_undecoded_count": undecoded_fee_contribution_count(&psbt.global),
         },
         // The RAW keymap entries (global / per-input / per-output), including
         // the pairs the typed fields above parse — the fragment viewer/editor
@@ -150,6 +161,17 @@ fn inspect_output(output: &psbt_v2::v2::Output) -> serde_json::Value {
         "script_pubkey_hex": hex_encode(output.script_pubkey.as_bytes()),
         "unique_id_hex": output.unique_id().map(|id| hex_encode(id.as_bytes())),
     })
+}
+
+/// Fee-contribution entries that are present in the 0x22 band but do not
+/// decode as plaintext [`FeeContribution`] records (encrypted blobs or
+/// malformed values) — the entries `total_declared_fee` skipped.
+fn undecoded_fee_contribution_count(global: &psbt_v2::v2::Global) -> usize {
+    global
+        .fee_contributions()
+        .iter()
+        .filter(|(_, blob)| FeeContribution::decode(blob).is_err())
+        .count()
 }
 
 fn known_input_total_sats(inputs: &[psbt_v2::v2::Input]) -> Option<u64> {
