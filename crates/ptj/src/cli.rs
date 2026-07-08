@@ -314,6 +314,17 @@ pub struct SyncConfig {
     /// data channel to open before giving up.
     #[arg(long = "signal-timeout-ms", default_value_t = 60_000)]
     pub signal_timeout_ms: u64,
+    /// The transport plugin binary to spawn for `--transport plugin`: a path,
+    /// or a bare name resolved on PATH (the OS spawn does the resolving; ptj
+    /// passes it through). The binary must speak the transport-plugin-api
+    /// Cap'n Proto protocol over its stdio.
+    #[arg(long = "plugin")]
+    pub plugin: Option<PathBuf>,
+    /// `key=value` config entry passed through to the plugin's handshake
+    /// (repeatable). Opaque to ptj — keys and values mean whatever the
+    /// selected plugin says they mean (peer addresses, credential paths, ...).
+    #[arg(long = "plugin-config")]
+    pub plugin_config: Vec<String>,
     /// Keep polling local sources and updating the state PSBT
     #[arg(long, alias = "continual")]
     pub ongoing: bool,
@@ -363,6 +374,11 @@ pub enum TransportKind {
     WebrtcRs,
     /// BIP-77 payjoin-directory mailbox over OHTTP (feature `payjoin-dir`).
     PayjoinDir,
+    /// An out-of-process transport plugin (feature `plugin-transports`): a
+    /// separate binary named by `--plugin`, spawned by ptj and driven over
+    /// its stdio via Cap'n Proto RPC. For transport stacks whose dependency
+    /// trees cannot share this workspace's Cargo.lock.
+    Plugin,
     // TODO(transport-nostr): unauthored — add a `Nostr` variant (feature
     // `nostr`) when the transport-nostr crate exists.
 }
