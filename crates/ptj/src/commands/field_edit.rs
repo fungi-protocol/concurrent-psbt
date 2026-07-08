@@ -122,18 +122,13 @@ pub(crate) fn apply_edits(psbt: &Psbt, edits: &[FieldEdit]) -> Result<Psbt> {
             }
         }
     }
-    // The constitutive re-parse. Wrapped in catch_unwind because psbt_v2
-    // 0.3.0 panics (todo!()) while DISPLAYING some deserialize errors —
-    // io::parse_psbt_bytes catches the deserialize panic itself, but not one
-    // raised when the returned error is formatted. A malformed edit must be
-    // a clean 400, never a server panic.
+    // The constitutive re-parse. io::parse_psbt_bytes is the crate's single
+    // panic boundary for BIP 370 parsing: psbt_v2 0.3.0 panics (todo!())
+    // while DISPLAYING some deserialize errors, so the boundary formats the
+    // error inside its own catch_unwind. A malformed edit is therefore a
+    // clean 400, never a server panic.
     let bytes = rawmap::serialize_maps(&maps);
-    std::panic::catch_unwind(move || crate::io::parse_psbt_bytes("edited psbt", &bytes))
-        .unwrap_or_else(|_| {
-            Err(Error::new(
-                "parsing edited psbt: unsupported or malformed PSBT",
-            ))
-        })
+    crate::io::parse_psbt_bytes("edited psbt", &bytes)
 }
 
 /// A save-time validation violation. `override_param` names the request
