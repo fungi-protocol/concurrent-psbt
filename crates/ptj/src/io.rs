@@ -185,11 +185,21 @@ pub(crate) fn parse_psbt_bytes(label: &str, raw: &[u8]) -> Result<Psbt> {
         )));
     }
 
-    match std::panic::catch_unwind(|| Psbt::deserialize(&bytes)) {
+    // The crate's single panic boundary for BIP 370 parsing. psbt_v2 0.3.0
+    // panics (todo!()) not only inside `deserialize` but also while
+    // DISPLAYING some deserialize errors (e.g. v2::error::DeserializeError's
+    // `fmt` impl), so the error must be formatted inside the same
+    // catch_unwind that guards the deserialize itself. The `move` closure
+    // owns `bytes`, keeping it UnwindSafe without AssertUnwindSafe. Callers
+    // (webgui handlers, field_edit's constitutive re-parse) rely on this
+    // function returning Err instead of unwinding on any malformed input.
+    match std::panic::catch_unwind(move || {
+        Psbt::deserialize(&bytes).map_err(|error| error.to_string())
+    }) {
         Ok(Ok(psbt)) => Ok(psbt),
         Ok(Err(error)) => Err(Error::new(format!("parsing {label}: {error}"))),
         Err(_) => Err(Error::new(format!(
-            "parsing {label}: unsupported or malformed PSBT"
+            "parsing {label}: invalid PSBT (deserialization failed)"
         ))),
     }
 }

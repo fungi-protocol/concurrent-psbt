@@ -166,6 +166,11 @@ pub(crate) fn response_for(method: &str, path: &str, body: &[u8]) -> Response {
             "/api/payments" => return payments_response(body),
             "/api/sort" => return sort_response(body),
             "/api/sync" => return sync_response(body),
+            // Test-only route proving the per-request panic net turns a
+            // handler panic into a 500 without killing the server. Compiled
+            // out of real binaries.
+            #[cfg(test)]
+            "/api/test-panic" => panic!("test-induced handler panic"),
             _ => {}
         }
     }
@@ -196,6 +201,40 @@ pub(crate) fn response_for(method: &str, path: &str, body: &[u8]) -> Response {
         } else {
             asset.body.to_vec()
         },
+    }
+}
+
+/// The server-wide panic net: every request passes through here, so ANY
+/// handler panic becomes a logged 500 JSON `{error}` instead of unwinding
+/// through `serve`'s accept loop and killing the process. Availability is
+/// the product for an offline GUI. `io::parse_psbt_bytes` is the intended
+/// panic boundary for PSBT parsing; this net catches whatever that policy
+/// misses (upstream `todo!()` panics are a class, not an instance). The
+/// captured `&str`/`&[u8]` references are UnwindSafe, so no
+/// AssertUnwindSafe is needed (same posture as the parse boundary's owned
+/// `move` closure).
+pub(crate) fn guarded_response_for(method: &str, path: &str, body: &[u8]) -> Response {
+    std::panic::catch_unwind(move || response_for(method, path, body)).unwrap_or_else(|panic| {
+        eprintln!(
+            "ptj webgui: handler panicked on {method} {path}: {}",
+            panic_message(panic.as_ref())
+        );
+        json_error_response(
+            500,
+            "Internal Server Error",
+            "internal error: request handler panicked (the server is still running)",
+        )
+    })
+}
+
+/// Best-effort extraction of a panic payload's message for the server log.
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
+    if let Some(message) = panic.downcast_ref::<&'static str>() {
+        message
+    } else if let Some(message) = panic.downcast_ref::<String>() {
+        message.as_str()
+    } else {
+        "non-string panic payload"
     }
 }
 
@@ -244,7 +283,7 @@ fn handle_connection(mut stream: TcpStream) -> Result<()> {
     let body_start = header_end + b"\r\n\r\n".len();
     let content_length = content_length(headers)?;
     let body_end = body_start.saturating_add(content_length).min(request.len());
-    let response = response_for(parts[0], parts[1], &request[body_start..body_end]);
+    let response = guarded_response_for(parts[0], parts[1], &request[body_start..body_end]);
     write_http_response(&mut stream, &response)
 }
 
@@ -2884,6 +2923,106 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(response.contains("Content-Type: application/json; charset=utf-8\r\n"));
         assert!(response.contains(r#""ordering":"unordered""#));
+    }
+
+    /// "notapsbt" is valid base64 charset (it decodes to 6 bytes) but not a
+    /// PSBT. psbt_v2 0.3.0's `DeserializeError` Display impl is `todo!()`,
+    /// so until io::parse_psbt_bytes formatted the error inside its
+    /// catch_unwind boundary this payload panicked the whole server (the
+    /// non-decodable `"not a psbt"` variant 400ed fine).
+    #[test]
+    fn base64_decodable_invalid_psbt_is_a_clean_400() {
+        let inspect = response_for("POST", "/api/inspect", br#"{"psbt":"notapsbt"}"#);
+        assert_eq!(inspect.status, 400);
+        let body = String::from_utf8(inspect.body).unwrap();
+        assert!(body.contains("invalid PSBT (deserialization failed)"), "{body}");
+
+        // A mutating route funnels through the same parse boundary.
+        let edit = response_for("POST", "/api/edit", br#"{"psbt":"notapsbt","edits":[]}"#);
+        assert_eq!(edit.status, 400);
+        let body = String::from_utf8(edit.body).unwrap();
+        assert!(body.contains("invalid PSBT (deserialization failed)"), "{body}");
+    }
+
+    /// The aliveness property: poison payloads get 400s AND the same server
+    /// instance keeps answering afterwards.
+    #[test]
+    fn poison_psbt_then_valid_request_on_same_server_instance() {
+        let (addr, server) = serve_like(3);
+
+        let response = send_request(addr, &post_request("/api/inspect", r#"{"psbt":"notapsbt"}"#));
+        assert!(response.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{response}");
+        assert!(response.contains("invalid PSBT (deserialization failed)"), "{response}");
+
+        let response = send_request(
+            addr,
+            &post_request("/api/edit", r#"{"psbt":"notapsbt","edits":[]}"#),
+        );
+        assert!(response.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{response}");
+
+        let valid_body = serde_json::json!({ "psbt": encoded_psbt() }).to_string();
+        let response = send_request(addr, &post_request("/api/inspect", &valid_body));
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+
+        server.join().unwrap();
+    }
+
+    /// The server-wide net: ANY handler panic (here the test-only
+    /// /api/test-panic route) becomes a 500 JSON `{error}` and the server
+    /// keeps serving.
+    #[test]
+    fn handler_panic_returns_500_json_and_server_survives() {
+        let (addr, server) = serve_like(2);
+
+        let response = send_request(addr, &post_request("/api/test-panic", "{}"));
+        assert!(
+            response.starts_with("HTTP/1.1 500 Internal Server Error\r\n"),
+            "{response}"
+        );
+        assert!(
+            response.contains("Content-Type: application/json; charset=utf-8\r\n"),
+            "{response}"
+        );
+        assert!(response.contains(r#"{"error":"#), "{response}");
+
+        let valid_body = serde_json::json!({ "psbt": encoded_psbt() }).to_string();
+        let response = send_request(addr, &post_request("/api/inspect", &valid_body));
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+
+        server.join().unwrap();
+    }
+
+    /// Accepts `connections` sequential connections on one listener,
+    /// mirroring `serve`'s accept loop (request errors are logged, never
+    /// fatal). Returns the bound address and the server thread.
+    fn serve_like(connections: usize) -> (SocketAddr, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            for _ in 0..connections {
+                let (stream, _) = listener.accept().unwrap();
+                if let Err(error) = handle_connection(stream) {
+                    eprintln!("ptj webgui request error: {error}");
+                }
+            }
+        });
+        (addr, server)
+    }
+
+    fn post_request(path: &str, body: &str) -> String {
+        format!(
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn send_request(addr: SocketAddr, request: &str) -> String {
+        let mut client = TcpStream::connect(addr).unwrap();
+        client.write_all(request.as_bytes()).unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        response
     }
 
     fn round_trip_http(request: &str) -> String {
