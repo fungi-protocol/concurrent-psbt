@@ -2324,3 +2324,22 @@ img.session-lifehash {
 .session-wire-queue[hidden] {
   display: none;
 }
+
+/* Peer bridge groups (wiring lane): a bridged group renders as ONE peer —
+   the card analog of the demo's .peer-bridge-block green grouping. */
+
+.session-bridge-group {
+  border: 1.5px solid rgba(15, 123, 79, 0.42);
+  background: rgba(15, 123, 79, 0.06);
+}
+
+.session-bridge-member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 4px 0 4px 12px;
+  padding: 4px 8px;
+  border-left: 2px solid rgba(15, 123, 79, 0.42);
+  font-size: 13px;
+}

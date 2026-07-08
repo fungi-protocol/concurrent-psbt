@@ -3,16 +3,19 @@ import assert from "node:assert/strict";
 
 import {
   actionState,
+  addBridge,
   addFragmentToSession,
   addPeerToSession,
   applyTxOutputs,
   beginWire,
+  bridgeGroupContaining,
   completeWire,
   dropFragmentKey,
   emptyObjects,
   enrichDescriptor,
   enrichPayment,
   idleWire,
+  mergeSessions,
   mintDescriptor,
   mintPayment,
   mintPeer,
@@ -22,12 +25,15 @@ import {
   nodeDisplayName,
   nodeExists,
   overviewFocus,
+  peerBridgeGroups,
   peerByKey,
+  peerUsableForSync,
   pruneWires,
   queueWire,
-  remapFragmentRef,
+  remapWireRef,
   sessionByKey,
   sessionFocus,
+  unionBridgedPeersIntoSessions,
   unqueueWire,
   validateFocus,
   wireComponents,
@@ -199,18 +205,30 @@ test("payment and utxo wiring rows", () => {
   assert.match(toSession.reason, /to a fragment/);
 });
 
-test("unbacked pairs are visible with the missing seam named", () => {
-  const state = emptyObjects();
+test("session merge and peer bridge are wired; attribute-scripts still names its seam", () => {
+  let state = emptyObjects();
+  state = mintSession(state, "a", "iroh").state;
+  state = mintSession(state, "b", "local").state;
+
+  // Q3: session ⋈ session = MERGE, client-orchestrated (join the fragment
+  // states via the join route + union the peer connections in UI state).
   const merge = wireVerdict(ref("session", "session-1"), ref("session", "session-2"), state);
   assert.equal(merge.kind, "session-merge");
-  assert.equal(merge.allowed, false);
-  assert.equal(merge.backed, false);
-  assert.match(merge.needs, /session-state merge seam/);
+  assert.equal(merge.allowed, true);
+  assert.equal(merge.backed, true);
 
-  const channel = wireVerdict(ref("peer", "peer-1"), ref("peer", "peer-2"), state);
-  assert.equal(channel.kind, "peer-channel");
-  assert.equal(channel.backed, false);
-  assert.match(channel.needs, /channel establishment seam/);
+  // A vanished session (already merged away) blocks instead of queueing.
+  const gone = wireVerdict(ref("session", "session-1"), ref("session", "session-9"), state);
+  assert.equal(gone.kind, "session-merge");
+  assert.equal(gone.allowed, false);
+  assert.equal(gone.backed, true);
+  assert.match(gone.reason, /no longer exists/);
+
+  // Q3: peer ⋈ peer = BRIDGE (UI grouping; the group renders as one peer).
+  const bridge = wireVerdict(ref("peer", "peer-1"), ref("peer", "peer-2"), state);
+  assert.equal(bridge.kind, "peer-bridge");
+  assert.equal(bridge.allowed, true);
+  assert.equal(bridge.backed, true);
 
   const attribute = wireVerdict(ref("descriptor", "descriptor-1"), ref("fragment", "psbt-1"), state);
   assert.equal(attribute.kind, "attribute-scripts");
@@ -369,10 +387,10 @@ test("queueWire refuses non-compatible verdicts and returns them for reporting",
   assert.deepEqual(blocked.wires, []);
   assert.match(blocked.verdict.reason, /already in the session/);
 
-  // Unbacked (session merge before the seam): not queued either.
-  const unbacked = queueWire([], ref("session", "session-1"), ref("session", "session-9"), state);
+  // Unbacked (descriptor attribution before its seam): not queued either.
+  const unbacked = queueWire([], ref("descriptor", "descriptor-1"), ref("fragment", "psbt-1"), state);
   assert.equal(unbacked.queued, false);
-  assert.match(unbacked.verdict.needs, /session-state merge seam/);
+  assert.match(unbacked.verdict.needs, /classifyPaste/);
 });
 
 test("unqueueWire removes exactly the keyed wire", () => {
@@ -464,19 +482,26 @@ test("componentPlan collapses fragment-join clusters into n-ary groups", () => {
   assert.equal(plan.rest.length, 1);
   assert.equal(plan.rest[0].target.kind, "session");
 
-  // The rest wire executes against the cluster's join result.
+  // The rest wire executes against the cluster's join result. Remap keys
+  // are kind-qualified: fragment joins and session merges share one map.
   const remap = new Map([
-    ["psbt-1", "psbt-4"],
-    ["psbt-2", "psbt-4"],
-    ["psbt-3", "psbt-4"],
+    ["fragment:psbt-1", "psbt-4"],
+    ["fragment:psbt-2", "psbt-4"],
+    ["fragment:psbt-3", "psbt-4"],
+    ["session:session-8", "session-10"],
   ]);
-  assert.deepEqual(remapFragmentRef(plan.rest[0].source, remap), {
+  assert.deepEqual(remapWireRef(plan.rest[0].source, remap), {
     kind: "fragment",
     key: "psbt-4",
   });
-  // Non-fragment refs and unmapped fragments pass through untouched.
-  assert.deepEqual(remapFragmentRef(ref("session", "session-1"), remap), ref("session", "session-1"));
-  assert.deepEqual(remapFragmentRef(ref("fragment", "psbt-7"), remap), ref("fragment", "psbt-7"));
+  assert.deepEqual(remapWireRef(ref("session", "session-8"), remap), {
+    kind: "session",
+    key: "session-10",
+  });
+  // Unmapped refs pass through untouched; the namespaces cannot collide.
+  assert.deepEqual(remapWireRef(ref("session", "session-1"), remap), ref("session", "session-1"));
+  assert.deepEqual(remapWireRef(ref("fragment", "psbt-7"), remap), ref("fragment", "psbt-7"));
+  assert.deepEqual(remapWireRef(ref("session", "psbt-1"), remap), ref("session", "psbt-1"));
 
   // A component with no fragment-join edges plans no join groups.
   const publishOnly = wireComponents(
@@ -502,6 +527,170 @@ test("wireQueueSummary counts wires and components", () => {
   assert.equal(two.wireCount, 2);
   assert.equal(two.componentCount, 2);
   assert.equal(two.text, "2 pending wires in 2 components");
+});
+
+// --- session merge (Q3: join contents + union peer connections) -----------------
+
+test("mergeSessions unions fragments and peers and retires the sources", () => {
+  let state = emptyObjects();
+  state = mintSession(state, "alpha", "iroh").state; // session-1
+  state = mintSession(state, "beta", "local").state; // session-2
+  state = addFragmentToSession(state, "session-1", "psbt-1");
+  state = addFragmentToSession(state, "session-1", "psbt-2");
+  state = addFragmentToSession(state, "session-2", "psbt-2");
+  state = addFragmentToSession(state, "session-2", "psbt-3");
+  state = addPeerToSession(state, "session-1", "peer-a");
+  state = addPeerToSession(state, "session-2", "peer-b");
+
+  const merge = mergeSessions(state, "session-1", "session-2");
+  assert.notEqual(merge.merged, null);
+  assert.equal(merge.merged.key, "session-3"); // fresh key from the shared counter
+  assert.equal(merge.merged.name, "alpha+beta");
+  // Content union, duplicates collapsed; peers of BOTH see the combined session.
+  assert.deepEqual(merge.merged.fragmentKeys, ["psbt-1", "psbt-2", "psbt-3"]);
+  assert.deepEqual(merge.merged.peerKeys, ["peer-a", "peer-b"]);
+  // The left session's transport wins; the conflict is an honest note.
+  assert.equal(merge.merged.transport, "iroh");
+  assert.ok(merge.notes.some((note) => /transport conflict/.test(note)));
+  // The UI-model merge always names what it cannot merge (the future
+  // backend session-state seam).
+  assert.ok(merge.notes.some((note) => /session-state merge seam|NOT merged/.test(note)));
+  // The sources are retired; only the merged session remains.
+  assert.deepEqual(
+    merge.state.sessions.map((sessionObject) => sessionObject.key),
+    ["session-3"],
+  );
+
+  // Missing keys and self-merges are no-ops.
+  assert.equal(mergeSessions(state, "session-1", "session-9").merged, null);
+  assert.equal(mergeSessions(state, "session-1", "session-1").merged, null);
+  assert.deepEqual(mergeSessions(state, "session-1", "session-9").state, state);
+});
+
+test("mergeSessions keeps identity material and says which ticket survives", () => {
+  let state = emptyObjects();
+  const s1 = mintSession(state, "a", "iroh");
+  state = s1.state;
+  const s2 = mintSession(state, "b", "iroh");
+  state = s2.state;
+  state = {
+    ...state,
+    sessions: state.sessions.map((sessionObject) =>
+      sessionObject.key === "session-1"
+        ? { ...sessionObject, irohTicket: "doc-left" }
+        : { ...sessionObject, irohTicket: "doc-right" },
+    ),
+  };
+  const merge = mergeSessions(state, "session-1", "session-2");
+  assert.equal(merge.merged.irohTicket, "doc-left");
+  assert.ok(merge.notes.some((note) => /iroh ticket/.test(note)));
+
+  // No conflict when only one side carries a ticket: it is simply kept.
+  let oneSided = emptyObjects();
+  oneSided = mintSession(oneSided, "a", "iroh").state;
+  oneSided = mintSession(oneSided, "b", "iroh").state;
+  oneSided = {
+    ...oneSided,
+    sessions: oneSided.sessions.map((sessionObject) =>
+      sessionObject.key === "session-2"
+        ? { ...sessionObject, irohTicket: "doc-only" }
+        : sessionObject,
+    ),
+  };
+  const kept = mergeSessions(oneSided, "session-1", "session-2");
+  assert.equal(kept.merged.irohTicket, "doc-only");
+  assert.ok(!kept.notes.some((note) => /iroh ticket/.test(note)));
+  assert.ok(!kept.notes.some((note) => /transport conflict/.test(note)));
+});
+
+// --- peer bridges (Q3: the group renders as one peer) ----------------------------
+
+test("addBridge is grow-only and groups are transitive", () => {
+  let state = emptyObjects();
+  state = mintPeer(state, "alice", "iroh", "doc-a").state; // peer-1
+  state = mintPeer(state, "bob", "iroh", "doc-b").state; // peer-2
+  state = mintPeer(state, "carol", "iroh", "doc-c").state; // peer-3
+  state = mintPeer(state, "dave", "iroh", "doc-d").state; // peer-4
+
+  // Everyone starts in their own singleton group.
+  assert.deepEqual(peerBridgeGroups(state), [["peer-1"], ["peer-2"], ["peer-3"], ["peer-4"]]);
+
+  state = addBridge(state, "peer-1", "peer-2");
+  state = addBridge(state, "peer-2", "peer-1"); // duplicate either direction
+  state = addBridge(state, "peer-1", "peer-1"); // self is a no-op
+  assert.equal(state.bridges.length, 1);
+
+  state = addBridge(state, "peer-2", "peer-3"); // transitive: {1,2,3}
+  assert.deepEqual(peerBridgeGroups(state), [["peer-1", "peer-2", "peer-3"], ["peer-4"]]);
+  assert.deepEqual(bridgeGroupContaining(state, "peer-3"), ["peer-1", "peer-2", "peer-3"]);
+  assert.deepEqual(bridgeGroupContaining(state, "peer-4"), ["peer-4"]);
+  // Unknown peers fall back to a singleton of themselves.
+  assert.deepEqual(bridgeGroupContaining(state, "peer-9"), ["peer-9"]);
+});
+
+test("bridging wires the sessions of any member to every member", () => {
+  let state = emptyObjects();
+  state = mintSession(state, "s", "iroh").state; // session-1
+  state = mintPeer(state, "alice", "iroh", "doc-a").state; // peer-2
+  state = mintPeer(state, "bob", "iroh", "doc-b").state; // peer-3
+  state = addPeerToSession(state, "session-1", "peer-2");
+
+  state = addBridge(state, "peer-2", "peer-3");
+  state = unionBridgedPeersIntoSessions(state);
+  // The Q3 equivalence: a session wired to any member is wired to all.
+  assert.deepEqual(sessionByKey(state, "session-1").peerKeys, ["peer-2", "peer-3"]);
+
+  // Idempotent, and sessions with no member stay untouched.
+  const again = unionBridgedPeersIntoSessions(state);
+  assert.deepEqual(sessionByKey(again, "session-1").peerKeys, ["peer-2", "peer-3"]);
+});
+
+test("peer-bridge verdicts: bridgeable, already bridged, and group-aware session sync", () => {
+  let state = emptyObjects();
+  state = mintSession(state, "s", "iroh").state; // session-1
+  state = mintPeer(state, "alice", "iroh", "doc-a").state; // peer-2
+  state = mintPeer(state, "npub", "nostr", "npub1xyz").state; // peer-3
+  state = mintPeer(state, "npub2", "nostr", "npub1abc").state; // peer-4
+
+  const bridge = wireVerdict(ref("peer", "peer-2"), ref("peer", "peer-3"), state);
+  assert.equal(bridge.kind, "peer-bridge");
+  assert.equal(bridge.allowed, true);
+  assert.equal(bridge.backed, true);
+
+  state = addBridge(state, "peer-2", "peer-3");
+  const again = wireVerdict(ref("peer", "peer-2"), ref("peer", "peer-3"), state);
+  assert.equal(again.allowed, false);
+  assert.equal(again.backed, true);
+  assert.match(again.reason, /already bridged/);
+
+  // Group-aware session wiring: the nostr member alone is unbacked, but the
+  // BRIDGE containing a usable iroh member is admissible — broadcasts reach
+  // the usable transports now, the rest are marked pending by the shell.
+  const throughNostr = wireVerdict(ref("peer", "peer-3"), ref("session", "session-1"), state);
+  assert.equal(throughNostr.kind, "peer-into-session");
+  assert.equal(throughNostr.allowed, true);
+  assert.match(throughNostr.label, /bridge alice\+npub/);
+
+  // An all-nostr BRIDGE GROUP stays honestly unbacked…
+  state = mintPeer(state, "npub3", "nostr", "npub1def").state; // peer-5
+  state = addBridge(state, "peer-4", "peer-5");
+  const nostrGroup = wireVerdict(ref("peer", "peer-4"), ref("session", "session-1"), state);
+  assert.equal(nostrGroup.allowed, false);
+  assert.equal(nostrGroup.backed, false);
+  assert.match(nostrGroup.needs, /nostr transport/);
+  assert.match(nostrGroup.label, /bridge npub2\+npub3/);
+
+  // …and a group whose members exist but have no usable identity blocks.
+  state = mintPeer(state, "blank1", "unknown", "").state; // peer-6
+  state = mintPeer(state, "blank2", "unknown", "").state; // peer-7
+  state = addBridge(state, "peer-6", "peer-7");
+  const blankGroup = wireVerdict(ref("peer", "peer-6"), ref("session", "session-1"), state);
+  assert.equal(blankGroup.allowed, false);
+  assert.equal(blankGroup.backed, true);
+  assert.match(blankGroup.reason, /no bridged peer has a usable transport identity/);
+
+  assert.equal(peerUsableForSync(peerByKey(state, "peer-2")), true);
+  assert.equal(peerUsableForSync(peerByKey(state, "peer-3")), false);
 });
 
 // --- contextual enablement ----------------------------------------------------

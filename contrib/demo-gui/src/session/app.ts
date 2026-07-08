@@ -60,10 +60,12 @@ import type { Network } from "./encoding.js";
 import { classifyPaste, mintFromPaste, type PasteClassification } from "./ingest.js";
 import {
   actionState,
+  addBridge,
   addFragmentToSession,
   addPeerToSession,
   applyTxOutputs,
   beginWire,
+  bridgeGroupContaining,
   completeWire,
   componentPlan,
   dropFragmentKey,
@@ -71,13 +73,17 @@ import {
   enrichDescriptor,
   enrichPayment,
   idleWire,
+  mergeSessions,
   mintSession,
   overviewFocus,
+  peerBridgeGroups,
   peerByKey,
+  peerUsableForSync,
   pruneWires,
   queueWire,
   sessionByKey,
   sessionFocus,
+  unionBridgedPeersIntoSessions,
   unqueueWire,
   validateFocus,
   wireComponents,
@@ -85,11 +91,12 @@ import {
   wireKey,
   wireQueueSummary,
   wireVerdict,
-  remapFragmentRef,
+  remapWireRef,
   type FocusState,
   type FragmentJoinGroup,
   type NodeRef,
   type ObjectsState,
+  type PeerObject,
   type PendingWire,
   type SessionAction,
   type WireGesture,
@@ -478,7 +485,14 @@ function wireTo(target: NodeRef): void {
 // Execute ONE wire now (per-edge Join, or a component's non-join edge).
 // The verdict is recomputed at execution time — queued wires can go stale —
 // and a failure pulses the target card. Returns whether the wire applied.
-async function executeWire(source: NodeRef, target: NodeRef): Promise<boolean> {
+// When the toolbar Join passes a remap, wires that consume nodes (session
+// merges) record their result there so later wires in the same component
+// follow the consumed endpoints.
+async function executeWire(
+  source: NodeRef,
+  target: NodeRef,
+  remaps?: Map<string, string>,
+): Promise<boolean> {
   const v = wireVerdict(source, target, objects);
   if (wireDisposition(v) !== "compatible") {
     const text =
@@ -513,9 +527,19 @@ async function executeWire(source: NodeRef, target: NodeRef): Promise<boolean> {
       case "peer-into-session": {
         const sessionKey = source.kind === "session" ? source.key : target.key;
         const peerKey = source.kind === "peer" ? source.key : target.key;
-        objects = addPeerToSession(objects, sessionKey, peerKey);
-        logEvent(`wired ${peerKey} into ${sessionKey}; syncing`);
-        await syncSessionOverPeer(sessionKey, peerKey);
+        // A bridged peer stands for its whole group: the session is wired
+        // to EVERY member (the Q3 equivalence), and the broadcast goes
+        // through the existing per-member sync where a transport exists.
+        const group = bridgeGroupContaining(objects, peerKey);
+        for (const memberKey of group) {
+          objects = addPeerToSession(objects, sessionKey, memberKey);
+        }
+        logEvent(
+          group.length > 1
+            ? `wired bridge group [${group.join(", ")}] into ${sessionKey}; broadcasting`
+            : `wired ${peerKey} into ${sessionKey}; syncing`,
+        );
+        await broadcastSessionToPeers(sessionKey, group);
         break;
       }
       case "attach-payment": {
@@ -555,6 +579,58 @@ async function executeWire(source: NodeRef, target: NodeRef): Promise<boolean> {
               "(deep classify pending or unavailable) — enter txid:vout manually",
           );
         }
+        break;
+      }
+      case "session-merge": {
+        // Client-orchestrated merge (Q3): the UI model unions memberships
+        // and retires the sources; the fragment states join through the
+        // existing /api/join route. Every decision and every limit of the
+        // merge is logged honestly.
+        const leftName = sessionByKey(objects, source.key)?.name ?? source.key;
+        const rightName = sessionByKey(objects, target.key)?.name ?? target.key;
+        const merge = mergeSessions(objects, source.key, target.key);
+        if (!merge.merged) return false;
+        objects = merge.state;
+        remaps?.set(`session:${source.key}`, merge.merged.key);
+        remaps?.set(`session:${target.key}`, merge.merged.key);
+        logEvent(
+          `merged sessions ${leftName} ⋈ ${rightName} → ${merge.merged.name} ` +
+            `(${merge.merged.fragmentKeys.length} fragment(s), ` +
+            `${merge.merged.peerKeys.length} peer(s) unioned)`,
+        );
+        for (const note of merge.notes) {
+          logEvent(`session merge: ${note}`);
+        }
+        const members = merge.merged.fragmentKeys
+          .map((key) => fragmentByKey(key))
+          .filter((fragment): fragment is SessionFragment => fragment !== null);
+        if (members.length >= 2) {
+          const joined = await addResponse(
+            await backend.joinPsbts(members.map((fragment) => fragment.psbt)),
+            "join",
+            `⊔ session merge of ${leftName}, ${rightName}`,
+          );
+          objects = addFragmentToSession(objects, merge.merged.key, joined.key);
+          logEvent(
+            `session merge joined ${members.map((fragment) => fragment.key).join(" ⋈ ")} → ` +
+              `${joined.key} via /api/join (added to ${merge.merged.name})`,
+          );
+        } else {
+          logEvent(
+            "session merge: fewer than two member fragment states loaded — nothing to join",
+          );
+        }
+        break;
+      }
+      case "peer-bridge": {
+        objects = addBridge(objects, source.key, target.key);
+        objects = unionBridgedPeersIntoSessions(objects);
+        const group = bridgeGroupContaining(objects, source.key);
+        logEvent(
+          `bridged ${source.key} and ${target.key}: group [${group.join(", ")}] now renders ` +
+            "as one peer; broadcasts address every member (sessions wired to any member are " +
+            "wired to all)",
+        );
         break;
       }
       default:
@@ -647,16 +723,19 @@ async function joinAllWires(): Promise<void> {
           consumed.add(wireKey(wireEntry.source, wireEntry.target));
         }
         for (const memberKey of group.fragments) {
-          remap.set(memberKey, resultKey);
+          remap.set(`fragment:${memberKey}`, resultKey);
         }
       } else {
         failed += group.wires.length;
       }
     }
     for (const wireEntry of plan.rest) {
+      // Session merges in this component record their result into the
+      // remap, so later wires follow the merged session.
       const ok = await executeWire(
-        remapFragmentRef(wireEntry.source, remap),
-        remapFragmentRef(wireEntry.target, remap),
+        remapWireRef(wireEntry.source, remap),
+        remapWireRef(wireEntry.target, remap),
+        remap,
       );
       if (ok) {
         applied += 1;
@@ -986,28 +1065,19 @@ function renderObjects(): void {
     list.append(item);
   }
 
-  for (const peer of objects.peers) {
-    const item = document.createElement("li");
-    item.className = "list-item session-card";
-    decorateWireTarget(item, { kind: "peer", key: peer.key });
-    const head = document.createElement("div");
-    head.className = "session-fragment-row";
-    head.append(
-      span("item-title", peer.name),
-      badge(`peer · ${peer.transport}`, "session-badge"),
-    );
-    const identity = span("item-meta session-identity", peer.identity.slice(0, 24) + (peer.identity.length > 24 ? "…" : ""));
-    identity.title = peer.identity;
-    head.append(identity);
-    item.append(head);
-    const actions = document.createElement("div");
-    actions.className = "session-card-actions";
-    actions.append(
-      button("Copy id", "Copy the full transport identity", () => copyText(peer.identity, `${peer.key} identity`)),
-      button("Wire", "Connect this peer to a session", () => startWire("peer", peer.key)),
-    );
-    item.append(actions);
-    list.append(item);
+  // Peers render by BRIDGE GROUP (Q3): a bridged group is one card — one
+  // peer node to the wire gesture (any member ref stands for the group) —
+  // listing its members; unbridged peers render as single cards.
+  for (const group of peerBridgeGroups(objects)) {
+    const members = group
+      .map((key) => peerByKey(objects, key))
+      .filter((member): member is PeerObject => member !== null);
+    if (!members.length) continue;
+    if (members.length === 1) {
+      list.append(renderPeerCard(members[0]));
+    } else {
+      list.append(renderBridgeGroupCard(members));
+    }
   }
 
   for (const payment of objects.payments) {
@@ -1137,6 +1207,83 @@ function renderObjects(): void {
     }
     list.append(item);
   }
+}
+
+function renderPeerCard(peer: PeerObject): HTMLLIElement {
+  const item = document.createElement("li");
+  item.className = "list-item session-card";
+  decorateWireTarget(item, { kind: "peer", key: peer.key });
+  const head = document.createElement("div");
+  head.className = "session-fragment-row";
+  head.append(
+    span("item-title", peer.name),
+    badge(`peer · ${peer.transport}`, "session-badge"),
+  );
+  const identity = span("item-meta session-identity", peer.identity.slice(0, 24) + (peer.identity.length > 24 ? "…" : ""));
+  identity.title = peer.identity;
+  head.append(identity);
+  item.append(head);
+  const actions = document.createElement("div");
+  actions.className = "session-card-actions";
+  actions.append(
+    button("Copy id", "Copy the full transport identity", () => copyText(peer.identity, `${peer.key} identity`)),
+    button("Wire", "Connect this peer to a session or bridge it with another peer", () =>
+      startWire("peer", peer.key),
+    ),
+  );
+  item.append(actions);
+  return item;
+}
+
+// A bridged peer group renders as ONE peer node (the demo's green bridge
+// block): one card, member chips inside, wired as a unit through its first
+// member (the presenter expands any member ref to the whole group).
+function renderBridgeGroupCard(members: PeerObject[]): HTMLLIElement {
+  const item = document.createElement("li");
+  item.className = "list-item session-card session-bridge-group";
+  decorateWireTarget(item, { kind: "peer", key: members[0].key });
+  const head = document.createElement("div");
+  head.className = "session-fragment-row";
+  head.append(
+    span("item-title", members.map((member) => member.name).join(" + ")),
+    badge(`bridge · ${members.length} peers`, "session-badge session-badge-good"),
+    span("item-meta", "one peer to the session: every member receives every broadcast"),
+  );
+  item.append(head);
+  for (const member of members) {
+    const row = document.createElement("div");
+    row.className = "session-bridge-member";
+    row.append(
+      span("item-title", member.name),
+      badge(`peer · ${member.transport}`, "session-badge"),
+    );
+    if (!peerUsableForSync(member)) {
+      row.append(
+        badge("broadcast pending-backend (no usable transport)", "session-badge session-badge-warn"),
+      );
+    }
+    const identity = span(
+      "item-meta session-identity",
+      member.identity.slice(0, 24) + (member.identity.length > 24 ? "…" : ""),
+    );
+    identity.title = member.identity;
+    row.append(identity);
+    row.append(
+      button("Copy id", "Copy the full transport identity", () =>
+        copyText(member.identity, `${member.key} identity`),
+      ),
+    );
+    item.append(row);
+  }
+  const actions = document.createElement("div");
+  actions.className = "session-card-actions";
+  actions.append(
+    button("Wire", "Connect this bridge group to a session (as one peer)", () =>
+      startWire("peer", members[0].key),
+    ),
+  );
+  item.append(actions);
+  return item;
 }
 
 // --- wire status + focus bar ---------------------------------------------------------
@@ -1895,6 +2042,27 @@ async function syncSessionOverPeer(sessionKey: string, peerKey: string | null): 
     return;
   }
   await runSyncRequest(members, `session ${sessionObject.name} (${members.length} fragment(s))`);
+}
+
+// Broadcast semantics for a bridged peer group (Q3): every member receives
+// every broadcast. Today's transport reality: members with a configured
+// transport sync one by one through the existing /api/sync (sequential —
+// the sync form is shared state); members without one are honestly marked
+// pending-backend instead of being silently skipped.
+async function broadcastSessionToPeers(sessionKey: string, peerKeys: string[]): Promise<void> {
+  for (const memberKey of peerKeys) {
+    const member = peerByKey(objects, memberKey);
+    if (!member) continue;
+    if (peerUsableForSync(member)) {
+      await syncSessionOverPeer(sessionKey, memberKey);
+    } else {
+      logEvent(
+        `broadcast to ${member.name} (${member.transport}) is pending-backend: ` +
+          "no usable transport behind /api/sync yet — the member stays wired and " +
+          "receives the session when its transport lands",
+      );
+    }
+  }
 }
 
 // --- negotiation panel -----------------------------------------------------------
