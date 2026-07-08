@@ -16,6 +16,7 @@ import {
   type ApplyEditsResponse,
   type AssignIdsOptions,
   type AtomizeResponse,
+  type ClassifyResponse,
   type ConfirmationRecord,
   type ConfirmOptions,
   type CreatePsbtRequest,
@@ -184,6 +185,10 @@ export class HttpBackend implements Backend {
       throw new PtjBackendError(response.status, errorMessage(response.status, payload));
     }
     return payload as ApplyEditsResponse;
+  }
+
+  classifyPaste(payload: string, network?: string): Promise<ClassifyResponse> {
+    return this.postJson("/api/classify", { payload, network });
   }
 
   // Negotiation band: served by the webgui's /api/{pay,confirm,payments}

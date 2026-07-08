@@ -5,10 +5,13 @@ import {
   actionState,
   addFragmentToSession,
   addPeerToSession,
+  applyTxOutputs,
   beginWire,
   completeWire,
   dropFragmentKey,
   emptyObjects,
+  enrichDescriptor,
+  enrichPayment,
   idleWire,
   mintDescriptor,
   mintPayment,
@@ -378,4 +381,112 @@ test("focus state validates against the live session list", () => {
   assert.deepEqual(dropped, { mode: "overview", sessionKey: null });
 
   assert.deepEqual(validateFocus(overviewFocus(), []), { mode: "overview", sessionKey: null });
+});
+
+// --- deep-classification enrichment ---------------------------------------------
+
+test("enrichDescriptor folds the miniscript details into the shallow node", () => {
+  let state = emptyObjects();
+  state = mintDescriptor(state, "wpkh(xprv.../0/*)", true).state;
+
+  state = enrichDescriptor(state, "descriptor-1", {
+    kind: "descriptor",
+    descriptor: "wpkh(xpub.../0/*)#checksum",
+    descriptor_type: "Wpkh",
+    has_private_keys: true,
+    is_ranged: true,
+    is_multipath: false,
+    derived: [
+      { index: 0, script_pubkey_hex: "0014" + "11".repeat(20), address: "bcrt1qaaa" },
+      { index: 1, script_pubkey_hex: "0014" + "22".repeat(20) },
+      { script_pubkey_hex: "junk with no index" },
+    ],
+  });
+
+  const enriched = state.descriptors[0];
+  // The pasted text is retained; the normalized PUBLIC form rides alongside.
+  assert.equal(enriched.descriptor, "wpkh(xprv.../0/*)");
+  assert.equal(enriched.normalized, "wpkh(xpub.../0/*)#checksum");
+  assert.equal(enriched.descriptorType, "Wpkh");
+  assert.equal(enriched.hasPrivateKeys, true);
+  assert.equal(enriched.isPrivate, true); // deep flag is authoritative
+  assert.equal(enriched.isRanged, true);
+  assert.deepEqual(enriched.derived, [
+    { index: 0, scriptPubkeyHex: "0014" + "11".repeat(20), address: "bcrt1qaaa" },
+    { index: 1, scriptPubkeyHex: "0014" + "22".repeat(20), address: null },
+  ]);
+
+  // Wrong kind or unknown key: untouched state, never a throw.
+  assert.deepEqual(enrichDescriptor(state, "descriptor-1", { kind: "payment" }), state);
+  assert.deepEqual(enrichDescriptor(state, "descriptor-404", { kind: "descriptor" }), state);
+});
+
+test("enrichPayment folds variant, methods, and description in", () => {
+  let state = emptyObjects();
+  state = mintPayment(state, "bitcoin:bcrt1qx?amount=0.001", "bcrt1qx", 100000, "lunch").state;
+
+  state = enrichPayment(state, "payment-1", {
+    kind: "payment",
+    variant: "fixed_amount",
+    description: "lunch money",
+    methods: [
+      { type: "onchain", address: "bcrt1qx" },
+      { type: "bolt11", invoice: "lnbcrt1..." },
+      { type: "cashu" },
+      { no_type: true },
+    ],
+  });
+
+  const enriched = state.payments[0];
+  assert.equal(enriched.variant, "fixed_amount");
+  assert.equal(enriched.description, "lunch money");
+  assert.deepEqual(enriched.methods, [
+    "onchain: bcrt1qx",
+    "bolt11: lnbcrt1...",
+    "cashu",
+  ]);
+  // The shallow-parsed URI fields stay authoritative for what they carried.
+  assert.equal(enriched.address, "bcrt1qx");
+  assert.equal(enriched.amountSats, 100000);
+
+  assert.deepEqual(enrichPayment(state, "payment-1", { kind: "transaction" }), state);
+});
+
+test("applyTxOutputs updates the pending node and mints per-output siblings", () => {
+  let state = emptyObjects();
+  state = mintUtxo(state, "020000dead").state;
+
+  const txid = "ab".repeat(32);
+  const applied = applyTxOutputs(state, "utxo-1", {
+    kind: "transaction",
+    txid,
+    input_count: 1,
+    output_count: 2,
+    fully_signed: true,
+    outputs: [
+      { outpoint: `${txid}:0`, vout: 0, amount_sats: 70000, script_pubkey_hex: "0014aa", address: "bcrt1qfirst" },
+      { outpoint: `${txid}:1`, vout: 1, amount_sats: 30000, script_pubkey_hex: "0014bb" },
+    ],
+  });
+  state = applied.state;
+
+  assert.equal(applied.utxos.length, 2);
+  // First output updates the ORIGINAL node in place (its key was logged).
+  assert.equal(state.utxos[0].key, "utxo-1");
+  assert.equal(state.utxos[0].txid, txid);
+  assert.equal(state.utxos[0].vout, 0);
+  assert.equal(state.utxos[0].amountSats, 70000);
+  assert.equal(state.utxos[0].address, "bcrt1qfirst");
+  assert.equal(state.utxos[0].fullySigned, true);
+  // Further outputs mint sibling nodes carrying the same raw hex.
+  assert.equal(state.utxos[1].key, "utxo-2");
+  assert.equal(state.utxos[1].vout, 1);
+  assert.equal(state.utxos[1].amountSats, 30000);
+  assert.equal(state.utxos[1].address, null);
+  assert.equal(state.utxos[1].rawTxHex, "020000dead");
+
+  // Wrong kind, unknown node, or an undecodable response: untouched.
+  assert.deepEqual(applyTxOutputs(state, "utxo-1", { kind: "descriptor" }).utxos, []);
+  assert.deepEqual(applyTxOutputs(state, "utxo-404", { kind: "transaction" }).utxos, []);
+  assert.deepEqual(applyTxOutputs(state, "utxo-1", { kind: "transaction", outputs: [] }).utxos, []);
 });

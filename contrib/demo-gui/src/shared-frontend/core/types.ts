@@ -10,7 +10,7 @@
 // Provenance: request/response DTOs match the ptj webgui *_response_result JSON
 // contract in crates/ptj/src/webgui.rs (POST /api/{inspect,create,join,sort,
 // make-unordered,atomize,concatenate,export-bip174,import-bip174,assign-ids,
-// edit,sync}) and the concurrent-psbt command set in
+// edit,classify,sync}) and the concurrent-psbt command set in
 // crates/ptj/src/commands/*.rs.
 
 export type OrderingMode = "unset" | "deterministic" | "explicit";
@@ -112,6 +112,27 @@ export interface ApplyEditsOptions {
   applyFixes?: string[];
   // Violation override_params to assert true on this save.
   overrides?: string[];
+}
+
+// The /api/classify response: universal paste classification,
+// `{kind, ...details}` from ptj's classify command. Kinds today:
+//   "descriptor"  — normalized public form (private material never echoes),
+//                   descriptor_type, has_private_keys, is_ranged,
+//                   is_multipath, paths?, derived[] {index,
+//                   script_pubkey_hex, address?}
+//   "transaction" — txid, input_count, output_count, fully_signed,
+//                   outputs[] {outpoint, vout, amount_sats,
+//                   script_pubkey_hex, address?}
+//   "payment"     — variant (fixed_amount|configurable_amount), amount
+//                   bounds, methods[] {type, ...}, description?, label?,
+//                   message?
+//   "peer_id"     — format ("npub"), id_hex
+// The details stay loosely typed (the session presenter reads them
+// defensively, like inspect JSON); PSBT pastes are REDIRECTED by the route
+// (400 pointing at the PSBT flows) rather than half-classified.
+export interface ClassifyResponse {
+  kind: string;
+  [key: string]: unknown;
 }
 
 // The /api/edit response. Success (HTTP 200) carries the NEW fragment
