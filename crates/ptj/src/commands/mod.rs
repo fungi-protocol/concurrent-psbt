@@ -5,6 +5,7 @@ pub(crate) mod classify;
 pub(crate) mod concatenate;
 pub(crate) mod create;
 pub(crate) mod export_bip174;
+pub(crate) mod fee;
 #[cfg(feature = "webgui")]
 pub(crate) mod field_edit;
 pub(crate) mod import_bip174;
@@ -44,6 +45,7 @@ pub(crate) fn run_with_stdin(command: Command, stdin: Option<&[u8]>) -> Result<S
         Command::MakeUnordered(config) => {
             make_unordered::run(config, stdin).map(|psbt| crate::io::encode_psbt(&psbt))
         }
+        Command::Fee(config) => fee::run(config, stdin).map(|psbt| crate::io::encode_psbt(&psbt)),
         Command::Pay(config) => {
             negotiation::run_pay(config, stdin).map(|psbt| crate::io::encode_psbt(&psbt))
         }
