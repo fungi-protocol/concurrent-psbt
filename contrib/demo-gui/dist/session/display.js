@@ -377,3 +377,57 @@ export function fragmentCardModel(inspect, network, provenance) {
 export function elisionLabel(shown, total) {
     return total > shown ? `+${total - shown} more` : null;
 }
+export function fragmentBadges(card) {
+    const { summary, uidPresent, uidTotal } = card;
+    const badges = [];
+    badges.push({
+        emoji: null,
+        text: summary.format ?? "not decoded",
+        tone: "neutral",
+        title: "PSBT serialization format",
+    });
+    badges.push(summary.ordering === "unordered"
+        ? {
+            emoji: "🔀",
+            text: "unordered",
+            tone: "good",
+            title: "unordered PSBT fragment: joinable before sorting",
+        }
+        : {
+            emoji: null,
+            text: summary.ordering ?? "ordering unknown",
+            tone: "neutral",
+            title: "ordering discipline",
+        });
+    if (summary.seedHex) {
+        badges.push({
+            emoji: "🌱",
+            text: "seeded",
+            tone: "neutral",
+            title: "global deterministic sort seed set",
+        });
+    }
+    if (summary.modifiableInputs === true || summary.modifiableOutputs === true) {
+        const which = summary.modifiableInputs === true && summary.modifiableOutputs === true
+            ? "both"
+            : summary.modifiableInputs === true
+                ? "inputs"
+                : "outputs";
+        badges.push({
+            emoji: "✏️",
+            text: `modifiable ${which}`,
+            tone: "neutral",
+            title: `BIP 370 modifiable ${which}`,
+        });
+    }
+    if (uidTotal !== null) {
+        const complete = uidPresent !== null && uidPresent >= uidTotal;
+        badges.push({
+            emoji: null,
+            text: `ids ${uidPresent ?? "?"}/${uidTotal}`,
+            tone: complete ? "good" : "warn",
+            title: "outputs carrying PSBT_OUT_UNIQUE_ID",
+        });
+    }
+    return badges;
+}
