@@ -1829,6 +1829,8 @@ h2 {
   position: relative;
   display: grid;
   gap: 6px;
+  /* Badge pills collapse to emoji-only against the card's width. */
+  container-type: inline-size;
 }
 
 .session-card-body {
@@ -1867,6 +1869,34 @@ h2 {
 .session-badge-warn {
   border-color: var(--orange);
   color: var(--orange);
+}
+
+/* Emoji + text pills: the demo's status emoji set merged into the pills.
+   In a narrow card, pills that carry an emoji collapse to emoji-only (the
+   title keeps the words); pills whose text IS the content (format name,
+   ids count) have no emoji and never collapse. */
+.session-badge-emoji {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.session-badge-icon {
+  font-style: normal;
+  line-height: 1;
+}
+
+@container (max-width: 520px) {
+  .session-badge-emoji .session-badge-label {
+    display: none;
+  }
+}
+
+/* Fallback for engines without container queries. */
+@media (max-width: 480px) {
+  .session-badge-emoji .session-badge-label {
+    display: none;
+  }
 }
 
 .session-lifehash {
