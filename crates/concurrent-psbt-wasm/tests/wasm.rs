@@ -84,14 +84,19 @@ fn local_sync_folds_in_browser_with_no_network() {
 
 #[wasm_bindgen_test]
 fn sort_takes_positional_psbt_and_optional_seed() {
-    // Canonical two-arg sort arity (Backend.sortPsbt(psbt, seedHex?)).
+    // Canonical sort arity (Backend.sortPsbt(psbt, seedHex?, allowShortSeed?)).
     let req = js_obj(&[("network", JsValue::from_str("regtest"))]);
     let created = create(req).unwrap();
     let psbt = js_sys::Reflect::get(&created, &JsValue::from_str("psbt"))
         .unwrap()
         .as_string()
         .unwrap();
-    let sorted = sort(psbt, Some("abcd".to_string())).expect("sort in browser");
+    let sorted = sort(
+        psbt,
+        Some("abcdabcdabcdabcdabcdabcdabcdabcd".to_string()),
+        None,
+    )
+    .expect("sort in browser");
     let out = js_sys::Reflect::get(&sorted, &JsValue::from_str("psbt")).unwrap();
     assert!(out.as_string().is_some());
 }

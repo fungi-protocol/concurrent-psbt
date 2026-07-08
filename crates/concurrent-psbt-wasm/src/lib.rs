@@ -39,6 +39,7 @@
 
 use wasm_bindgen::prelude::*;
 
+mod bytes_arg;
 mod dto;
 mod negotiation;
 mod ops;
@@ -113,11 +114,19 @@ pub fn join(psbts: JsValue) -> Result<JsValue, JsError> {
 /// `POST /api/sort` — order an unordered PSBT; optional seed.
 ///
 /// Canonical Backend arity: `sort(psbt, seedHex?)` — two positional args, NOT a
-/// request object (matches `Backend.sortPsbt(psbt, seedHex?)` in the shared
-/// frontend). Response: `{ psbt, inspect }`.
+/// request object (matches `Backend.sortPsbt(psbt, seedHex?, allowShortSeed?)`
+/// in the shared frontend). Response: `{ psbt, inspect }`.
 #[wasm_bindgen(js_name = sort)]
-pub fn sort(psbt: String, seed_hex: Option<String>) -> Result<JsValue, JsError> {
-    finish(ops::sort(&psbt, seed_hex.as_deref()))
+pub fn sort(
+    psbt: String,
+    seed_hex: Option<String>,
+    allow_short_seed: Option<bool>,
+) -> Result<JsValue, JsError> {
+    finish(ops::sort(
+        &psbt,
+        seed_hex.as_deref(),
+        allow_short_seed.unwrap_or(false),
+    ))
 }
 
 /// `POST /api/make-unordered` — clear ordering, returning an unordered PSBT.
