@@ -17,6 +17,7 @@ import {
   type ApplyEditsResponse,
   type AssignIdsOptions,
   type AtomizeResponse,
+  type ClassifyResponse,
   type ConfirmationRecord,
   type ConfirmOptions,
   type CreatePsbtRequest,
@@ -140,6 +141,10 @@ export class TauriBackend implements Backend {
       args[param] = true;
     }
     return this.call("ptj_edit", args);
+  }
+
+  classifyPaste(payload: string, network?: string): Promise<ClassifyResponse> {
+    return this.call("ptj_classify", { payload, network });
   }
 
   pay(psbt: string, payment: PaymentRecord, options?: PayOptions): Promise<PsbtResponse> {

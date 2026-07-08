@@ -30,7 +30,8 @@
 // the shell arms explicitly, with a warning, and the backend stays the final
 // authority. Nothing is bypassed silently.
 
-import type { FragmentSummary, SyncTransport } from "./state.js";
+import type { ClassifyResponse } from "../shared-frontend/core/backend.js";
+import { asArray, asNumber, asObject, asString, type FragmentSummary, type SyncTransport } from "./state.js";
 
 // ---------------------------------------------------------------------------
 // Object graph: node kinds and the session/peer object models layered over
@@ -80,30 +81,59 @@ export interface PeerObject {
   identity: string;
 }
 
-// Payment instruction minted from a BIP 21 / BIP 321 URI paste.
+// Payment instruction minted from a BIP 21 / BIP 321 URI paste. The deep
+// fields arrive from Backend.classifyPaste (bitcoin-payment-instructions):
+// null/[] until the enrichment lands (or when it fails — the shallow parse
+// stays authoritative for the fields it produced).
 export interface PaymentObject {
   key: string;
   uri: string;
   address: string;
   amountSats: number;
   label: string;
+  // "fixed_amount" | "configurable_amount" (deep).
+  variant: string | null;
+  // Payment methods the instruction carries, one display line each (deep).
+  methods: string[];
+  description: string | null;
 }
 
-// Spendable output minted from a pasted fully-signed transaction. Until the
-// backend classify/decode seam lands, the txid/vout fields may be pending
-// (deep decode is NOT done in the frontend); the raw hex is retained.
+// Spendable output minted from a pasted fully-signed transaction. The
+// txid/vout/amount fields are pending until Backend.classifyPaste decodes
+// the transaction (deep decode is NOT done in the frontend); the raw hex is
+// retained either way.
 export interface UtxoObject {
   key: string;
   rawTxHex: string;
   txid: string | null;
   vout: number | null;
   amountSats: number | null;
+  // Deep decode extras (null until enriched).
+  address: string | null;
+  // The classify heuristic: every input carries a witness/scriptSig.
+  fullySigned: boolean | null;
 }
 
 export interface DescriptorObject {
   key: string;
   descriptor: string;
   isPrivate: boolean;
+  // Deep fields from Backend.classifyPaste (miniscript): the normalized
+  // PUBLIC form (private material never echoes back from the backend), the
+  // descriptor type, the authoritative private-key-material flag, and the
+  // first derived scripts/addresses. null/[] until enriched.
+  normalized: string | null;
+  descriptorType: string | null;
+  hasPrivateKeys: boolean | null;
+  isRanged: boolean | null;
+  derived: DerivedScript[];
+}
+
+// One derived script from a descriptor (classify's derived[] entries).
+export interface DerivedScript {
+  index: number;
+  scriptPubkeyHex: string;
+  address: string | null;
 }
 
 export interface ObjectsState {
@@ -169,7 +199,16 @@ export function mintPayment(
   label: string,
 ): { state: ObjectsState; payment: PaymentObject } {
   const next = nextKey(state, "payment");
-  const payment: PaymentObject = { key: next.key, uri, address, amountSats, label };
+  const payment: PaymentObject = {
+    key: next.key,
+    uri,
+    address,
+    amountSats,
+    label,
+    variant: null,
+    methods: [],
+    description: null,
+  };
   return { state: { ...next.state, payments: [...next.state.payments, payment] }, payment };
 }
 
@@ -178,7 +217,15 @@ export function mintUtxo(
   rawTxHex: string,
 ): { state: ObjectsState; utxo: UtxoObject } {
   const next = nextKey(state, "utxo");
-  const utxo: UtxoObject = { key: next.key, rawTxHex, txid: null, vout: null, amountSats: null };
+  const utxo: UtxoObject = {
+    key: next.key,
+    rawTxHex,
+    txid: null,
+    vout: null,
+    amountSats: null,
+    address: null,
+    fullySigned: null,
+  };
   return { state: { ...next.state, utxos: [...next.state.utxos, utxo] }, utxo };
 }
 
@@ -188,11 +235,141 @@ export function mintDescriptor(
   isPrivate: boolean,
 ): { state: ObjectsState; descriptor: DescriptorObject } {
   const next = nextKey(state, "descriptor");
-  const minted: DescriptorObject = { key: next.key, descriptor: descriptor.trim(), isPrivate };
+  const minted: DescriptorObject = {
+    key: next.key,
+    descriptor: descriptor.trim(),
+    isPrivate,
+    normalized: null,
+    descriptorType: null,
+    hasPrivateKeys: null,
+    isRanged: null,
+    derived: [],
+  };
   return {
     state: { ...next.state, descriptors: [...next.state.descriptors, minted] },
     descriptor: minted,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Deep-classification enrichment: fold a Backend.classifyPaste response into
+// the shallow-minted node. Pure and defensive (the details are read like
+// inspect JSON); a response of the wrong kind leaves the state untouched, so
+// a failed/misrouted enrichment can never damage the shallow card.
+// ---------------------------------------------------------------------------
+
+export function enrichDescriptor(
+  state: ObjectsState,
+  key: string,
+  classified: ClassifyResponse,
+): ObjectsState {
+  if (classified.kind !== "descriptor") return state;
+  const derived = (asArray(classified.derived) ?? []).flatMap((raw): DerivedScript[] => {
+    const entry = asObject(raw);
+    const index = asNumber(entry?.index);
+    const scriptPubkeyHex = asString(entry?.script_pubkey_hex);
+    if (index === null || scriptPubkeyHex === null) return [];
+    return [{ index, scriptPubkeyHex, address: asString(entry?.address) }];
+  });
+  const hasPrivateKeys = asObject(classified)?.has_private_keys === true;
+  return {
+    ...state,
+    descriptors: state.descriptors.map((descriptor) =>
+      descriptor.key === key
+        ? {
+            ...descriptor,
+            normalized: asString(classified.descriptor),
+            descriptorType: asString(classified.descriptor_type),
+            hasPrivateKeys,
+            // The deep flag is authoritative: the shallow regex heuristic
+            // only guessed.
+            isPrivate: hasPrivateKeys,
+            isRanged: asObject(classified)?.is_ranged === true,
+            derived,
+          }
+        : descriptor,
+    ),
+  };
+}
+
+export function enrichPayment(
+  state: ObjectsState,
+  key: string,
+  classified: ClassifyResponse,
+): ObjectsState {
+  if (classified.kind !== "payment") return state;
+  const methods = (asArray(classified.methods) ?? []).flatMap((raw): string[] => {
+    const entry = asObject(raw);
+    const type = asString(entry?.type);
+    if (type === null) return [];
+    const detail =
+      asString(entry?.address) ?? asString(entry?.invoice) ?? asString(entry?.offer);
+    return [detail ? `${type}: ${detail}` : type];
+  });
+  return {
+    ...state,
+    payments: state.payments.map((payment) =>
+      payment.key === key
+        ? {
+            ...payment,
+            variant: asString(classified.variant),
+            methods,
+            description: asString(classified.description),
+          }
+        : payment,
+    ),
+  };
+}
+
+// Fold a transaction decode into the pending utxo node: the FIRST output
+// updates the node in place (its key is what the paste flow logged/focused),
+// every further output mints a sibling node carrying the same raw hex.
+export function applyTxOutputs(
+  state: ObjectsState,
+  key: string,
+  classified: ClassifyResponse,
+): { state: ObjectsState; utxos: UtxoObject[] } {
+  if (classified.kind !== "transaction") return { state, utxos: [] };
+  const source = state.utxos.find((utxo) => utxo.key === key);
+  if (!source) return { state, utxos: [] };
+  const txid = asString(classified.txid);
+  const fullySigned = asObject(classified)?.fully_signed === true;
+  const outputs = (asArray(classified.outputs) ?? []).flatMap(
+    (raw): { vout: number; amountSats: number | null; address: string | null }[] => {
+      const entry = asObject(raw);
+      const vout = asNumber(entry?.vout);
+      if (vout === null) return [];
+      return [{ vout, amountSats: asNumber(entry?.amount_sats), address: asString(entry?.address) }];
+    },
+  );
+  if (txid === null || outputs.length === 0) return { state, utxos: [] };
+
+  const enriched: UtxoObject[] = [];
+  let next = state;
+  outputs.forEach((output, position) => {
+    const fields = {
+      rawTxHex: source.rawTxHex,
+      txid,
+      vout: output.vout,
+      amountSats: output.amountSats,
+      address: output.address,
+      fullySigned,
+    };
+    if (position === 0) {
+      const updated: UtxoObject = { ...source, ...fields };
+      next = {
+        ...next,
+        utxos: next.utxos.map((utxo) => (utxo.key === key ? updated : utxo)),
+      };
+      enriched.push(updated);
+    } else {
+      const minted = nextKey(next, "utxo");
+      const sibling: UtxoObject = { key: minted.key, ...fields };
+      next = { ...minted.state, utxos: [...minted.state.utxos, sibling] };
+      enriched.push(sibling);
+    }
+  });
+  return { state: next, utxos: enriched };
 }
 
 export function sessionByKey(state: ObjectsState, key: string): SessionObject | null {

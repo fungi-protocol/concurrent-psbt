@@ -57,15 +57,18 @@ import {
   type OutputView,
 } from "./display.js";
 import type { Network } from "./encoding.js";
-import { classifyPaste, mintFromPaste } from "./ingest.js";
+import { classifyPaste, mintFromPaste, type PasteClassification } from "./ingest.js";
 import {
   actionState,
   addFragmentToSession,
   addPeerToSession,
+  applyTxOutputs,
   beginWire,
   completeWire,
   dropFragmentKey,
   emptyObjects,
+  enrichDescriptor,
+  enrichPayment,
   idleWire,
   mintSession,
   overviewFocus,
@@ -485,8 +488,8 @@ async function performWire(v: WireVerdict, target: NodeRef): Promise<void> {
           logEvent(`wired ${source.key} → create: input row prefilled`);
         } else {
           logEvent(
-            `wired ${source.key} → create: added an input row, but the transaction is not decoded yet ` +
-              "(needs backend: classifyPaste tx decode) — enter txid:vout manually",
+            `wired ${source.key} → create: added an input row, but the transaction is not decoded ` +
+              "(deep classify pending or unavailable) — enter txid:vout manually",
           );
         }
         break;
@@ -820,6 +823,16 @@ function renderObjects(): void {
       amountSpan(payment.amountSats),
     );
     item.append(head);
+    // Deep classification details (bitcoin-payment-instructions): variant,
+    // recipient description, and the instruction's payment methods.
+    if (payment.variant || payment.description || payment.methods.length) {
+      const parts = [
+        payment.variant,
+        payment.description,
+        ...payment.methods,
+      ].filter((part): part is string => part !== null && part !== "");
+      item.append(span("item-meta", parts.join(" · ")));
+    }
     const actions = document.createElement("div");
     actions.className = "session-card-actions";
     actions.append(
@@ -848,10 +861,15 @@ function renderObjects(): void {
         "item-meta",
         utxo.txid
           ? `${utxo.txid.slice(0, 16)}…:${utxo.vout ?? "?"}`
-          : "outputs pending backend decode (classifyPaste)",
+          : "outputs not decoded (deep classify pending or unavailable)",
       ),
     );
+    if (utxo.amountSats !== null) head.append(amountSpan(utxo.amountSats));
+    if (utxo.fullySigned === false) {
+      head.append(badge("inputs not fully signed", "session-badge session-badge-warn"));
+    }
     item.append(head);
+    if (utxo.address) item.append(span("item-meta session-address", utxo.address));
     const actions = document.createElement("div");
     actions.className = "session-card-actions";
     actions.append(
@@ -875,13 +893,41 @@ function renderObjects(): void {
       badge(descriptor.isPrivate ? "descriptor · PRIVATE" : "descriptor", descriptor.isPrivate ? "session-badge session-badge-warn" : "session-badge"),
       text,
     );
+    if (descriptor.descriptorType) {
+      head.append(badge(descriptor.descriptorType, "session-badge"));
+    }
     item.append(head);
-    item.append(
-      span(
-        "item-meta",
-        "attribution/grouping by this descriptor needs backend: classifyPaste (miniscript derivation)",
-      ),
-    );
+    // Deep classification details (miniscript): the authoritative
+    // private-key warning and the first derived addresses/scripts.
+    if (descriptor.hasPrivateKeys === true) {
+      item.append(
+        span(
+          "item-meta session-gate-warning",
+          "contains PRIVATE key material — anyone holding this descriptor can spend from it",
+        ),
+      );
+    }
+    if (descriptor.derived.length) {
+      const derived = descriptor.derived
+        .map((entry) => entry.address ?? `${entry.scriptPubkeyHex.slice(0, 18)}…`)
+        .join(", ");
+      item.append(
+        span(
+          "item-meta",
+          `derives${descriptor.isRanged ? " (ranged)" : ""}: ${derived}`,
+        ),
+      );
+      item.append(
+        span(
+          "item-meta",
+          "matching these scripts to fragments still needs backend (descriptor → fragment wiring)",
+        ),
+      );
+    } else {
+      item.append(
+        span("item-meta", "deep classification pending — script derivation folds in when /api/classify answers"),
+      );
+    }
     list.append(item);
   }
 }
@@ -1154,10 +1200,59 @@ async function addObject(): Promise<void> {
       logEvent(`${minted.minted.key}: deep parsing pending — needs backend: ${pasted.needsBackend}`);
     }
     showStatus("", false);
+    void enrichFromClassify(minted.minted, pasted);
   } else {
     showStatus(pasted.detail, true);
   }
   render();
+}
+
+// Deep classification (Backend.classifyPaste -> /api/classify): the shallow
+// node renders instantly and the deep details fold in when the backend
+// answers — miniscript-validated descriptors (normalized public form,
+// derived scripts, the authoritative private-key flag), payment-method
+// details, and transaction decodes into per-output utxo nodes. Failure
+// degrades to the shallow card with an event-log note (an adapter without
+// the seam, e.g. wasm today, rejects with a clear error).
+async function enrichFromClassify(node: NodeRef, pasted: PasteClassification): Promise<void> {
+  if (
+    pasted.kind !== "descriptor" &&
+    pasted.kind !== "payment-uri" &&
+    pasted.kind !== "transaction-hex"
+  ) {
+    return;
+  }
+  try {
+    const classified = await backend.classifyPaste(pasted.payload, displayNetwork());
+    switch (node.kind) {
+      case "descriptor":
+        objects = enrichDescriptor(objects, node.key, classified);
+        logEvent(`${node.key}: deep classification folded in (${classified.kind})`);
+        break;
+      case "payment":
+        objects = enrichPayment(objects, node.key, classified);
+        logEvent(`${node.key}: deep classification folded in (${classified.kind})`);
+        break;
+      case "utxo": {
+        const applied = applyTxOutputs(objects, node.key, classified);
+        objects = applied.state;
+        logEvent(
+          applied.utxos.length
+            ? `${node.key}: transaction decoded — ${applied.utxos.length} output(s) as spendable outpoints`
+            : `${node.key}: deep classification returned no decodable outputs`,
+        );
+        break;
+      }
+      default:
+        break;
+    }
+    render();
+  } catch (error) {
+    logEvent(
+      `${node.key}: deep classification unavailable — ` +
+        (error instanceof Error ? error.message : String(error)),
+    );
+  }
 }
 
 async function addPasted(kind: "v2" | "bip174"): Promise<void> {

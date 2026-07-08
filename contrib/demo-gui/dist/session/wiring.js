@@ -29,6 +29,7 @@
 // interop needs escape hatches) is OVERRIDABLE: the gate carries a stable id
 // the shell arms explicitly, with a warning, and the backend stays the final
 // authority. Nothing is bypassed silently.
+import { asArray, asNumber, asObject, asString } from "./state.js";
 export function emptyObjects() {
     return { sessions: [], peers: [], payments: [], utxos: [], descriptors: [], counter: 0 };
 }
@@ -64,21 +65,153 @@ export function mintPeer(state, name, transport, identity) {
 }
 export function mintPayment(state, uri, address, amountSats, label) {
     const next = nextKey(state, "payment");
-    const payment = { key: next.key, uri, address, amountSats, label };
+    const payment = {
+        key: next.key,
+        uri,
+        address,
+        amountSats,
+        label,
+        variant: null,
+        methods: [],
+        description: null,
+    };
     return { state: { ...next.state, payments: [...next.state.payments, payment] }, payment };
 }
 export function mintUtxo(state, rawTxHex) {
     const next = nextKey(state, "utxo");
-    const utxo = { key: next.key, rawTxHex, txid: null, vout: null, amountSats: null };
+    const utxo = {
+        key: next.key,
+        rawTxHex,
+        txid: null,
+        vout: null,
+        amountSats: null,
+        address: null,
+        fullySigned: null,
+    };
     return { state: { ...next.state, utxos: [...next.state.utxos, utxo] }, utxo };
 }
 export function mintDescriptor(state, descriptor, isPrivate) {
     const next = nextKey(state, "descriptor");
-    const minted = { key: next.key, descriptor: descriptor.trim(), isPrivate };
+    const minted = {
+        key: next.key,
+        descriptor: descriptor.trim(),
+        isPrivate,
+        normalized: null,
+        descriptorType: null,
+        hasPrivateKeys: null,
+        isRanged: null,
+        derived: [],
+    };
     return {
         state: { ...next.state, descriptors: [...next.state.descriptors, minted] },
         descriptor: minted,
     };
+}
+// ---------------------------------------------------------------------------
+// Deep-classification enrichment: fold a Backend.classifyPaste response into
+// the shallow-minted node. Pure and defensive (the details are read like
+// inspect JSON); a response of the wrong kind leaves the state untouched, so
+// a failed/misrouted enrichment can never damage the shallow card.
+// ---------------------------------------------------------------------------
+export function enrichDescriptor(state, key, classified) {
+    if (classified.kind !== "descriptor")
+        return state;
+    const derived = (asArray(classified.derived) ?? []).flatMap((raw) => {
+        const entry = asObject(raw);
+        const index = asNumber(entry?.index);
+        const scriptPubkeyHex = asString(entry?.script_pubkey_hex);
+        if (index === null || scriptPubkeyHex === null)
+            return [];
+        return [{ index, scriptPubkeyHex, address: asString(entry?.address) }];
+    });
+    const hasPrivateKeys = asObject(classified)?.has_private_keys === true;
+    return {
+        ...state,
+        descriptors: state.descriptors.map((descriptor) => descriptor.key === key
+            ? {
+                ...descriptor,
+                normalized: asString(classified.descriptor),
+                descriptorType: asString(classified.descriptor_type),
+                hasPrivateKeys,
+                // The deep flag is authoritative: the shallow regex heuristic
+                // only guessed.
+                isPrivate: hasPrivateKeys,
+                isRanged: asObject(classified)?.is_ranged === true,
+                derived,
+            }
+            : descriptor),
+    };
+}
+export function enrichPayment(state, key, classified) {
+    if (classified.kind !== "payment")
+        return state;
+    const methods = (asArray(classified.methods) ?? []).flatMap((raw) => {
+        const entry = asObject(raw);
+        const type = asString(entry?.type);
+        if (type === null)
+            return [];
+        const detail = asString(entry?.address) ?? asString(entry?.invoice) ?? asString(entry?.offer);
+        return [detail ? `${type}: ${detail}` : type];
+    });
+    return {
+        ...state,
+        payments: state.payments.map((payment) => payment.key === key
+            ? {
+                ...payment,
+                variant: asString(classified.variant),
+                methods,
+                description: asString(classified.description),
+            }
+            : payment),
+    };
+}
+// Fold a transaction decode into the pending utxo node: the FIRST output
+// updates the node in place (its key is what the paste flow logged/focused),
+// every further output mints a sibling node carrying the same raw hex.
+export function applyTxOutputs(state, key, classified) {
+    if (classified.kind !== "transaction")
+        return { state, utxos: [] };
+    const source = state.utxos.find((utxo) => utxo.key === key);
+    if (!source)
+        return { state, utxos: [] };
+    const txid = asString(classified.txid);
+    const fullySigned = asObject(classified)?.fully_signed === true;
+    const outputs = (asArray(classified.outputs) ?? []).flatMap((raw) => {
+        const entry = asObject(raw);
+        const vout = asNumber(entry?.vout);
+        if (vout === null)
+            return [];
+        return [{ vout, amountSats: asNumber(entry?.amount_sats), address: asString(entry?.address) }];
+    });
+    if (txid === null || outputs.length === 0)
+        return { state, utxos: [] };
+    const enriched = [];
+    let next = state;
+    outputs.forEach((output, position) => {
+        const fields = {
+            rawTxHex: source.rawTxHex,
+            txid,
+            vout: output.vout,
+            amountSats: output.amountSats,
+            address: output.address,
+            fullySigned,
+        };
+        if (position === 0) {
+            const updated = { ...source, ...fields };
+            next = {
+                ...next,
+                utxos: next.utxos.map((utxo) => (utxo.key === key ? updated : utxo)),
+            };
+            enriched.push(updated);
+        }
+        else {
+            const minted = nextKey(next, "utxo");
+            const sibling = { key: minted.key, ...fields };
+            next = { ...minted.state, utxos: [...minted.state.utxos, sibling] };
+            enriched.push(sibling);
+        }
+    });
+    return { state: next, utxos: enriched };
 }
 export function sessionByKey(state, key) {
     return state.sessions.find((session) => session.key === key) ?? null;

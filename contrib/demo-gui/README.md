@@ -30,8 +30,12 @@ route, with marked placeholders until it lands. Surfaces:
 
 - **Session**: paste ANYTHING — PSBT (base64 or hex), `bitcoin:` URI,
   output descriptor, npub, iroh ticket, signed tx hex — and the right object
-  is minted (deep parsing of descriptors/URIs/transactions awaits the
-  `classifyPaste` backend seam). Fragments render as cards: LifeHash
+  is minted instantly; deep parsing of descriptors/URIs/transactions folds
+  in asynchronously through the `classifyPaste` Backend seam
+  (`/api/classify`): miniscript-validated descriptors with derived scripts
+  and the authoritative private-key warning, payment-method details, and
+  transaction decodes into per-output spendable outpoints. Fragments render
+  as cards: LifeHash
   fingerprints for digest-like values, inputs/outputs grouped by provenance
   or script template with BTC subtotals, unique-id presence indicators,
   ordering badges, a fee line, and the raw inspect JSON one click away.

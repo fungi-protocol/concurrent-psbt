@@ -107,3 +107,35 @@ test("applyPsbtEdits still throws PtjBackendError on non-violation errors", asyn
       /not base64/.test(error.message),
   );
 });
+
+test("classifyPaste posts {payload, network} to /api/classify", async () => {
+  const classified = {
+    kind: "descriptor",
+    descriptor: "wpkh(xpub.../0/*)#checksum",
+    has_private_keys: false,
+  };
+  const { fetch, calls } = recordingFetch(jsonResponse(200, classified));
+  const backend = new HttpBackend(fetch);
+
+  const response = await backend.classifyPaste("wpkh(xpub.../0/*)", "regtest");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, "/api/classify");
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    payload: "wpkh(xpub.../0/*)",
+    network: "regtest",
+  });
+  assert.deepEqual(response, classified);
+});
+
+test("classifyPaste surfaces the route's redirect/parse errors as PtjBackendError", async () => {
+  // PSBT pastes are REDIRECTED by the route (400 naming the PSBT flows).
+  const { fetch } = recordingFetch(
+    jsonResponse(400, { error: "the payload is a PSBT; paste it into the PSBT flows instead" }),
+  );
+  const backend = new HttpBackend(fetch);
+  await assert.rejects(
+    backend.classifyPaste("cHNidP..."),
+    (error) =>
+      error instanceof PtjBackendError && error.status === 400 && /PSBT flows/.test(error.message),
+  );
+});

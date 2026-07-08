@@ -16,6 +16,7 @@ import type {
   ApplyEditsResponse,
   AssignIdsOptions,
   AtomizeResponse,
+  ClassifyResponse,
   ConfirmOptions,
   ConfirmationRecord,
   CreatePsbtRequest,
@@ -76,6 +77,13 @@ export interface Backend {
     edits: FieldEdit[],
     options?: ApplyEditsOptions,
   ): Promise<ApplyEditsResponse>;
+  // Universal paste classification (/api/classify on HTTP): descriptors
+  // (miniscript-validated, scripts derived), payment instructions (BIP
+  // 21/321, bare addresses, BOLT 11/12), npub peer ids, raw signed
+  // transactions. DEEP parsing — the session UI's shallow paste router
+  // mints nodes instantly and this seam enriches them asynchronously.
+  // `network` is the /api/create selector (default bitcoin).
+  classifyPaste(payload: string, network?: string): Promise<ClassifyResponse>;
 
   // Negotiation band (ptj pay / confirm / payments). Mechanism-only: the
   // record bytes are opaque hex, appended to / decoded from the grow-only
@@ -113,6 +121,7 @@ export type {
   ApplyEditsResponse,
   AssignIdsOptions,
   AtomizeResponse,
+  ClassifyResponse,
   ConfirmOptions,
   ConfirmationRecord,
   CreateInput,
