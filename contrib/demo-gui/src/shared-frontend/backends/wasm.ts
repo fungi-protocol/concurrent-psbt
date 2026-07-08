@@ -20,12 +20,15 @@
 
 import type { Backend } from "../core/backend.js";
 import {
+  type ApplyEditsOptions,
+  type ApplyEditsResponse,
   type AssignIdsOptions,
   type AtomizeResponse,
   type ConfirmationRecord,
   type ConfirmOptions,
   type CreatePsbtRequest,
   type ExportBip174Response,
+  type FieldEdit,
   type InspectResponse,
   type PaymentRecord,
   type PayOptions,
@@ -171,6 +174,22 @@ export class WasmBackend implements Backend {
         auto: options?.auto,
         overwrite: options?.overwrite,
       })
+    );
+  }
+
+  async applyPsbtEdits(
+    _psbt: string,
+    _edits: FieldEdit[],
+    _options?: ApplyEditsOptions,
+  ): Promise<ApplyEditsResponse> {
+    // Field-level editing needs the server-side field_edit machinery
+    // (raw-keymap surgery + save-time validation + fix offers); the wasm
+    // wrapper exports no edit op yet. Reject clearly — the transport-skeleton
+    // "built without support" pattern — rather than half-implement it here.
+    throw new PtjBackendError(
+      0,
+      "WasmBackend does not support field edits yet; use a server backend " +
+        "(ptj webgui /api/edit)",
     );
   }
 

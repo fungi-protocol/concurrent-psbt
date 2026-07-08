@@ -5,10 +5,14 @@ import {
   applyEdit,
   applyFix,
   ASSIGN_UIDS_FIX,
+  decodedEditsLeftBehind,
   EDIT_SAVE_SEAM,
   editorModel,
   fieldAt,
+  isRawPath,
+  rawEditsForSave,
   validateEditor,
+  violationsFromServer,
 } from "../dist/session/editor.js";
 
 const INSPECT = {
@@ -170,4 +174,117 @@ test("the missing-uid violation offers the generate fix with the informed warnin
 test("the save seam is named for the shell and the backend task list", () => {
   assert.equal(EDIT_SAVE_SEAM, "applyPsbtEdits");
   assert.equal(ASSIGN_UIDS_FIX.id, "assign-uids");
+});
+
+// --- raw keymap rows + the applyPsbtEdits save path ------------------------
+
+const PROPRIETARY_KEY = "fc0470736274ab";
+const UNKNOWN_KEY = "09";
+
+const RAW_INSPECT = {
+  ...INSPECT,
+  raw: {
+    global: [
+      // A pair the decoded fields already parse: stays collapsed.
+      { key_hex: "02", value_hex: "02000000", key_type: 2, key_data_hex: "", kind: "known" },
+      {
+        key_hex: PROPRIETARY_KEY,
+        value_hex: "beef",
+        key_type: 252,
+        key_data_hex: "0470736274ab",
+        kind: "proprietary",
+        proprietary: { prefix_hex: "70736274", prefix_utf8: "psbt", subtype: 171, key_data_hex: "" },
+      },
+    ],
+    inputs: [[]],
+    outputs: [
+      [{ key_hex: UNKNOWN_KEY, value_hex: "1111", key_type: 9, key_data_hex: "", kind: "unknown" }],
+      [],
+    ],
+  },
+};
+
+function rawModel() {
+  return editorModel("psbt-2", RAW_INSPECT, "regtest");
+}
+
+test("editorModel renders unknown/proprietary raw entries as editable hex rows", () => {
+  const built = rawModel();
+  const rawKeys = built.sections.filter((section) => isRawPath(section.key)).map((s) => s.key);
+  // Empty maps and all-known maps mint no raw section.
+  assert.deepEqual(rawKeys, ["raw.global", "raw.output.0"]);
+
+  const proprietary = fieldAt(built, `raw.global.${PROPRIETARY_KEY}`);
+  assert.equal(proprietary.value, "beef");
+  assert.equal(proprietary.context, "hex");
+  assert.match(proprietary.label, /proprietary psbt #171/);
+  assert.match(proprietary.note, /deletes the entry/);
+
+  const unknown = fieldAt(built, `raw.output.0.${UNKNOWN_KEY}`);
+  assert.equal(unknown.value, "1111");
+  assert.match(unknown.label, /unknown key type 9/);
+
+  // The known pair stays collapsed into the decoded fields.
+  assert.equal(fieldAt(built, "raw.global.02"), null);
+});
+
+test("rawEditsForSave diffs raw rows into {map, key, value|null} edits", () => {
+  const pristine = rawModel();
+  let edited = applyEdit(rawModel(), `raw.global.${PROPRIETARY_KEY}`, "ABCD");
+  edited = applyEdit(edited, `raw.output.0.${UNKNOWN_KEY}`, "");
+
+  const edits = rawEditsForSave(pristine, edited);
+  assert.deepEqual(edits, [
+    { map: "global", key: PROPRIETARY_KEY, value: "abcd" },
+    { map: "output:0", key: UNKNOWN_KEY, value: null },
+  ]);
+
+  // Untouched models produce no edits; errored rows are never sent.
+  // (Note "!!" — the value context parses LIBERALLY, so a merely odd-looking
+  // string like "zz not bytes zz" decodes as base58; only genuinely
+  // undecodable text errors.)
+  assert.deepEqual(rawEditsForSave(pristine, rawModel()), []);
+  const errored = applyEdit(rawModel(), `raw.global.${PROPRIETARY_KEY}`, "!!not bytes!!");
+  assert.deepEqual(rawEditsForSave(pristine, errored), []);
+  assert.match(fieldAt(errored, `raw.global.${PROPRIETARY_KEY}`).error, /./);
+});
+
+test("decodedEditsLeftBehind names decoded changes that cannot travel", () => {
+  const pristine = rawModel();
+  let edited = applyEdit(rawModel(), "output.0.amount", "123456");
+  edited = applyEdit(edited, `raw.global.${PROPRIETARY_KEY}`, "abcd");
+  assert.deepEqual(decodedEditsLeftBehind(pristine, edited), ["output.0.amount"]);
+  assert.deepEqual(decodedEditsLeftBehind(pristine, rawModel()), []);
+});
+
+test("violationsFromServer maps /api/edit violations into the editor loop", () => {
+  const mapped = violationsFromServer([
+    {
+      id: "unordered-missing-output-ids",
+      message: "the PSBT is unordered but 1 output lacks PSBT_OUT_UNIQUE_ID",
+      override_param: "allow_missing_output_ids",
+      fix_id: "assign-ids",
+      fix_label: "Generate missing output unique IDs",
+      warning_text:
+        "Automatically generating unique IDs may result in duplicate txouts if done more than once.",
+    },
+    {
+      id: "duplicate-output-ids",
+      message: "outputs 0 and 1 carry the same PSBT_OUT_UNIQUE_ID",
+      override_param: "allow_duplicate_output_ids",
+    },
+  ]);
+
+  assert.equal(mapped.length, 2);
+  assert.equal(mapped[0].source, "server");
+  assert.equal(mapped[0].overrideParam, "allow_missing_output_ids");
+  assert.equal(mapped[0].fix.id, "assign-ids");
+  assert.equal(mapped[0].fix.label, "Generate missing output unique IDs");
+  // The canonical duplicate-txout caveat rides the fix offer VERBATIM.
+  assert.equal(
+    mapped[0].fix.warning,
+    "Automatically generating unique IDs may result in duplicate txouts if done more than once.",
+  );
+  assert.equal(mapped[1].fix, null);
+  assert.equal(mapped[1].overrideParam, "allow_duplicate_output_ids");
 });

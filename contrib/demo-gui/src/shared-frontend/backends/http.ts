@@ -12,12 +12,15 @@
 
 import type { Backend } from "../core/backend.js";
 import {
+  type ApplyEditsOptions,
+  type ApplyEditsResponse,
   type AssignIdsOptions,
   type AtomizeResponse,
   type ConfirmationRecord,
   type ConfirmOptions,
   type CreatePsbtRequest,
   type ExportBip174Response,
+  type FieldEdit,
   type InspectResponse,
   type PaymentRecord,
   type PayOptions,
@@ -58,6 +61,13 @@ function isErrorPayload(payload: unknown): payload is { error: string } {
     && payload !== null
     && "error" in payload
     && typeof payload.error === "string";
+}
+
+function isViolationPayload(payload: unknown): payload is ApplyEditsResponse {
+  return typeof payload === "object"
+    && payload !== null
+    && "violations" in payload
+    && Array.isArray((payload as { violations: unknown }).violations);
 }
 
 export class HttpBackend implements Backend {
@@ -140,6 +150,40 @@ export class HttpBackend implements Backend {
       auto: options?.auto,
       overwrite: options?.overwrite,
     });
+  }
+
+  async applyPsbtEdits(
+    psbt: string,
+    edits: FieldEdit[],
+    options?: ApplyEditsOptions,
+  ): Promise<ApplyEditsResponse> {
+    const body: Record<string, unknown> = {
+      psbt,
+      edits: edits.map((edit) => ({ map: edit.map, key: edit.key, value: edit.value })),
+    };
+    if (options?.applyFixes?.length) {
+      body.apply_fixes = options.applyFixes;
+    }
+    // Overrides are TOP-LEVEL named boolean params (the route's
+    // allow_short_seed convention): each violation names its own.
+    for (const param of options?.overrides ?? []) {
+      body[param] = true;
+    }
+    const response = await this.fetchImpl(`${this.base}/api/edit`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      // A 400 carrying violations[] is the seam's structured validation
+      // outcome (violation -> fix -> revalidate), not a transport error.
+      if (isViolationPayload(payload)) {
+        return payload;
+      }
+      throw new PtjBackendError(response.status, errorMessage(response.status, payload));
+    }
+    return payload as ApplyEditsResponse;
   }
 
   // Negotiation band: served by the webgui's /api/{pay,confirm,payments}

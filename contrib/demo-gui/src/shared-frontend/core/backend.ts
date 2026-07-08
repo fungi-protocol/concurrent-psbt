@@ -12,12 +12,15 @@
 // coupling. The three shells swap ONLY the implementation.
 
 import type {
+  ApplyEditsOptions,
+  ApplyEditsResponse,
   AssignIdsOptions,
   AtomizeResponse,
   ConfirmOptions,
   ConfirmationRecord,
   CreatePsbtRequest,
   ExportBip174Response,
+  FieldEdit,
   InspectResponse,
   PayOptions,
   PaymentRecord,
@@ -62,6 +65,17 @@ export interface Backend {
   // auto-assign missing output ids; see AssignIdsOptions for manual
   // directives (the atomized-import case).
   assignIds(psbt: string, options?: AssignIdsOptions): Promise<PsbtResponse>;
+  // Field-level raw-keymap editing with save-time validation (the field
+  // editor's save seam; /api/edit on HTTP). Edits address raw entries by
+  // inspect's raw.*[].key_hex handles; a validation failure returns the
+  // structured violations (fix offers + named overrides) instead of
+  // throwing, so the editor's violation -> fix -> revalidate loop runs on
+  // the response. GROW-ONLY: success mints a NEW fragment.
+  applyPsbtEdits(
+    psbt: string,
+    edits: FieldEdit[],
+    options?: ApplyEditsOptions,
+  ): Promise<ApplyEditsResponse>;
 
   // Negotiation band (ptj pay / confirm / payments). Mechanism-only: the
   // record bytes are opaque hex, appended to / decoded from the grow-only
@@ -94,6 +108,9 @@ export interface Backend {
 // Re-export the DTOs and error so the frontend imports everything it needs from
 // this one module (matching the old backend.ts import surface in app.ts:4-14).
 export type {
+  AppliedFix,
+  ApplyEditsOptions,
+  ApplyEditsResponse,
   AssignIdsOptions,
   AtomizeResponse,
   ConfirmOptions,
@@ -102,7 +119,9 @@ export type {
   CreateOutput,
   CreatePsbtRequest,
   DeriveConfirmation,
+  EditViolation,
   ExportBip174Response,
+  FieldEdit,
   IdAssignment,
   InspectResponse,
   OrderingMode,

@@ -8,25 +8,31 @@
 // validate -> violations[], where a violation may OFFER an automatic fix
 // carrying an informed warning. Applying a fix re-validates.
 //
-// HONESTY NOTES (the seams this editor is waiting on):
-// - The inspect JSON is a lossy projection: it does NOT expose the raw
-//   global/per-input/per-output keymaps, so unknown and proprietary
-//   key/value pairs cannot be displayed yet. Needs an inspect extension
-//   (raw keymap entries alongside the decoded fields).
-// - There is no field-edit route: saving an edited fragment needs a backend
-//   seam (EDIT_SAVE_SEAM below) that re-encodes validated fields into PSBT
-//   bytes. Until it lands the editor is fully functional up to (and
-//   including) validation, and the save button renders needs-backend.
+// HONESTY NOTES (updated as the seams landed):
+// - Inspect now exposes the raw global/per-input/per-output keymaps
+//   (raw.*[].key_hex — the full raw key, compact-size keytype prefix
+//   included). Unknown and PROPRIETARY entries (concurrent-psbt's unique
+//   ids, sort metadata, ...) render as editable raw hex rows; entries the
+//   decoded fields above already parse stay collapsed into those fields.
+// - The save seam landed: EDIT_SAVE_SEAM (Backend.applyPsbtEdits ->
+//   POST /api/edit) takes raw-keymap edits, runs save-time validation, and
+//   returns structured violations with fix offers and named overrides. The
+//   shell sends the raw rows that CHANGED (rawEditsForSave below) — no
+//   client-side byte re-encoding.
+// - Decoded convenience fields (amount, txid, ordering, ...) still validate
+//   locally only: translating them into raw key/value bytes is a backend
+//   concern (a typed-edit request shape /api/edit does not take yet), so
+//   their edits do NOT travel on save — the shell says so explicitly.
 // - Edits NEVER mutate the source fragment: a saved edit mints a NEW
 //   fragment (grow-only, like every other operation result).
 
-import type { InspectResponse } from "../shared-frontend/core/backend.js";
+import type { EditViolation, FieldEdit, InspectResponse } from "../shared-frontend/core/backend.js";
 import { asArray, asNumber, asObject, asString } from "./state.js";
 import { bytesToHex, parseFlexible, type Network } from "./encoding.js";
 
-// The Backend seam method the save path is waiting on (a field-edit route:
-// psbt + edited fields -> re-encoded psbt). Named here so the shell and the
-// report speak the same name.
+// The Backend seam method the save path drives (the field-edit route:
+// psbt + raw-keymap edits -> validated, re-encoded psbt). Named here so the
+// shell and the report speak the same name.
 export const EDIT_SAVE_SEAM = "applyPsbtEdits";
 
 export type FieldContext =
@@ -138,8 +144,126 @@ export function editorModel(
   return {
     fragmentKey,
     network,
-    sections: [globalSection, ...inputSections, ...outputSections],
+    sections: [globalSection, ...inputSections, ...outputSections, ...rawSections(root)],
   };
+}
+
+// ---------------------------------------------------------------------------
+// Raw keymap rows — the /api/edit handles. Inspect's raw projection lists
+// every map entry with its full raw key (key_hex); entries the decoded
+// fields above already parse (kind "known") stay collapsed into those
+// fields, while unknown and proprietary entries render here as hex rows.
+// Editing needs no client-side re-encoding: the key bytes come from inspect
+// verbatim and the value is the row's canonical hex (empty = delete).
+// ---------------------------------------------------------------------------
+
+const RAW_SECTION_PREFIX = "raw.";
+
+export function isRawPath(path: string): boolean {
+  return path.startsWith(RAW_SECTION_PREFIX);
+}
+
+function rawSections(root: Record<string, unknown> | null): EditorSection[] {
+  const raw = asObject(root?.raw);
+  if (!raw) return [];
+  const sections: EditorSection[] = [];
+  const global = rawSection("raw.global", "Global — raw keymap", asArray(raw.global));
+  if (global) sections.push(global);
+  (asArray(raw.inputs) ?? []).forEach((entries, index) => {
+    const section = rawSection(
+      `raw.input.${index}`,
+      `Input ${index} — raw keymap`,
+      asArray(entries),
+    );
+    if (section) sections.push(section);
+  });
+  (asArray(raw.outputs) ?? []).forEach((entries, index) => {
+    const section = rawSection(
+      `raw.output.${index}`,
+      `Output ${index} — raw keymap`,
+      asArray(entries),
+    );
+    if (section) sections.push(section);
+  });
+  return sections;
+}
+
+function rawSection(key: string, title: string, entries: unknown[] | null): EditorSection | null {
+  const fields: EditorField[] = [];
+  for (const raw of entries ?? []) {
+    const entry = asObject(raw);
+    const keyHex = asString(entry?.key_hex);
+    if (!keyHex) continue;
+    const kind = asString(entry?.kind) ?? "unknown";
+    if (kind === "known") continue; // already shown as a decoded field
+    const row = field(`${key}.${keyHex}`, rawLabel(entry), asString(entry?.value_hex) ?? "", "hex");
+    row.note = "clearing the value deletes the entry on save";
+    fields.push(row);
+  }
+  if (!fields.length) return null;
+  return { key, title, fields };
+}
+
+function rawLabel(entry: Record<string, unknown> | null): string {
+  const kind = asString(entry?.kind) ?? "unknown";
+  const keyType = asNumber(entry?.key_type);
+  if (kind === "proprietary") {
+    const proprietary = asObject(entry?.proprietary);
+    const prefix = asString(proprietary?.prefix_utf8) ?? asString(proprietary?.prefix_hex);
+    const subtype = asNumber(proprietary?.subtype);
+    if (prefix !== null && subtype !== null) {
+      return `proprietary ${prefix} #${subtype}`;
+    }
+    return "proprietary entry";
+  }
+  return keyType === null ? "raw entry (unparsed key)" : `unknown key type ${keyType}`;
+}
+
+// The raw-keymap edits a save must send: every raw row whose canonical value
+// differs from the pristine model's, as {map, key, value|null}. Rows with a
+// liberal-parse error are NEVER sent (the shell blocks the save on them).
+export function rawEditsForSave(pristine: EditorModel, edited: EditorModel): FieldEdit[] {
+  const edits: FieldEdit[] = [];
+  for (const section of edited.sections) {
+    if (!isRawPath(section.key)) continue;
+    for (const candidate of section.fields) {
+      if (candidate.error) continue;
+      const before = fieldAt(pristine, candidate.path);
+      if (before && before.value === candidate.value) continue;
+      edits.push({
+        map: mapSelector(section.key),
+        key: candidate.path.slice(section.key.length + 1),
+        value: candidate.value ? candidate.value : null,
+      });
+    }
+  }
+  return edits;
+}
+
+// "raw.global" -> "global"; "raw.input.3" -> "input:3"; "raw.output.0" -> "output:0".
+function mapSelector(sectionKey: string): string {
+  const rest = sectionKey.slice(RAW_SECTION_PREFIX.length);
+  const dot = rest.indexOf(".");
+  return dot === -1 ? rest : `${rest.slice(0, dot)}:${rest.slice(dot + 1)}`;
+}
+
+// Decoded (non-raw) fields whose value changed. These do NOT travel over the
+// save seam — /api/edit takes raw-keymap edits only, and translating decoded
+// values into raw bytes client-side would be exactly the re-encoding this
+// frontend refuses to do. The shell names them so nothing is dropped
+// silently.
+export function decodedEditsLeftBehind(pristine: EditorModel, edited: EditorModel): string[] {
+  const paths: string[] = [];
+  for (const section of edited.sections) {
+    if (isRawPath(section.key)) continue;
+    for (const candidate of section.fields) {
+      const before = fieldAt(pristine, candidate.path);
+      if (before && before.value !== candidate.value) {
+        paths.push(candidate.path);
+      }
+    }
+  }
+  return paths;
 }
 
 export function fieldAt(model: EditorModel, path: string): EditorField | null {
@@ -262,6 +386,14 @@ export interface Violation {
   path: string | null;
   message: string;
   fix: ViolationFix | null;
+  // Provenance: the local pre-flight validation (default) or the server's
+  // save-time validation (an /api/edit 400 body). Server fixes run
+  // SERVER-side — the shell requests them via apply_fixes on the next save
+  // instead of applying them to the model.
+  source?: "local" | "server";
+  // Server violations carry the named request param that waives the gate on
+  // the next save (the allow_short_seed convention).
+  overrideParam?: string;
 }
 
 export const ASSIGN_UIDS_FIX: ViolationFix = {
@@ -307,6 +439,28 @@ export function validateEditor(model: EditorModel): Violation[] {
   }
 
   return violations;
+}
+
+// Map the server's save-time violations (/api/edit 400 body) into the
+// editor's violation shape so they flow through the SAME
+// violation -> fix -> revalidate loop as the local ones. fix_id/fix_label/
+// warning_text become the fix offer (the warning stays attached verbatim);
+// override_param rides along for the explicit-override affordance.
+export function violationsFromServer(violations: EditViolation[]): Violation[] {
+  return violations.map((violation) => ({
+    path: null,
+    message: violation.message,
+    fix:
+      violation.fix_id !== undefined
+        ? {
+            id: violation.fix_id,
+            label: violation.fix_label ?? violation.fix_id,
+            warning: violation.warning_text ?? "",
+          }
+        : null,
+    source: "server" as const,
+    overrideParam: violation.override_param,
+  }));
 }
 
 // Apply an offered fix. Randomness is injected so the outcome is testable;

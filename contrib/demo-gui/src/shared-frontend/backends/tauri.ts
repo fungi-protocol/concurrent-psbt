@@ -13,12 +13,15 @@
 
 import type { Backend } from "../core/backend.js";
 import {
+  type ApplyEditsOptions,
+  type ApplyEditsResponse,
   type AssignIdsOptions,
   type AtomizeResponse,
   type ConfirmationRecord,
   type ConfirmOptions,
   type CreatePsbtRequest,
   type ExportBip174Response,
+  type FieldEdit,
   type InspectResponse,
   type PaymentRecord,
   type PayOptions,
@@ -119,6 +122,24 @@ export class TauriBackend implements Backend {
       auto: options?.auto,
       overwrite: options?.overwrite,
     });
+  }
+
+  applyPsbtEdits(
+    psbt: string,
+    edits: FieldEdit[],
+    options?: ApplyEditsOptions,
+  ): Promise<ApplyEditsResponse> {
+    // Same request shape as the webgui /api/edit route: apply_fixes plus
+    // top-level named override booleans. The future native handler shares
+    // crate::commands::field_edit, so violations come back structured.
+    const args: Record<string, unknown> = { psbt, edits };
+    if (options?.applyFixes?.length) {
+      args.apply_fixes = options.applyFixes;
+    }
+    for (const param of options?.overrides ?? []) {
+      args[param] = true;
+    }
+    return this.call("ptj_edit", args);
   }
 
   pay(psbt: string, payment: PaymentRecord, options?: PayOptions): Promise<PsbtResponse> {
