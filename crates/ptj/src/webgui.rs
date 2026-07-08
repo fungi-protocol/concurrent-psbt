@@ -46,6 +46,20 @@ pub(crate) struct Response {
     pub(crate) body: Vec<u8>,
 }
 
+impl Response {
+    /// The Cache-Control policy for this response. Everything the webgui
+    /// serves is per-request state (`no-store`) EXCEPT the lifehash PNGs:
+    /// those are content-addressed — the digest in the URL fully determines
+    /// the (release-stable) image — so they are immutable.
+    fn cache_control(&self) -> &'static str {
+        if self.content_type == "image/png" {
+            "public, max-age=31536000, immutable"
+        } else {
+            "no-store"
+        }
+    }
+}
+
 pub fn asset(path: &str) -> Option<Asset> {
     let path = path.split_once('?').map_or(path, |(path, _)| path);
     match path {
@@ -121,6 +135,16 @@ pub(crate) fn response_for(method: &str, path: &str, body: &[u8]) -> Response {
 
     if method != "GET" && method != "HEAD" {
         return text_response(405, "Method Not Allowed", "method not allowed");
+    }
+
+    // GET /api/lifehash/<hex-digest> -> PNG fingerprint (content-addressed:
+    // the digest fully determines the image, so responses are immutable).
+    if let Some(digest) = path.strip_prefix("/api/lifehash/") {
+        let mut response = lifehash_response(digest);
+        if method == "HEAD" {
+            response.body = Vec::new();
+        }
+        return response;
     }
 
     let Some(asset) = asset(path) else {
@@ -1282,6 +1306,30 @@ fn optional_hex32_field(request: &serde_json::Value, field: &str) -> Result<Opti
         .transpose()
 }
 
+/// `GET /api/lifehash/<hex-digest>`: the LifeHash fingerprint of the digest
+/// as a PNG (`crate::commands::lifehash` — Version2, 32x32 RGB, the frozen
+/// digest→image mapping the later wasm export must reproduce). The digest
+/// path segment rides the liberal bytes_arg parsing (hex canonical); 32
+/// bytes render as a digest, other lengths as data. Errors are the usual
+/// JSON `{error}` with status 400.
+fn lifehash_response(digest: &str) -> Response {
+    match lifehash_response_result(digest) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "image/png",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+fn lifehash_response_result(digest: &str) -> Result<Vec<u8>> {
+    let input = crate::bytes_arg::parse_bytes_arg(digest)
+        .map_err(|error| Error::new(format!("lifehash digest: {error}")))?;
+    crate::commands::lifehash::png_for_input(&input)
+}
+
 fn text_response(status: u16, reason: &'static str, body: &'static str) -> Response {
     Response {
         status,
@@ -1349,11 +1397,12 @@ fn content_length(headers: &str) -> Result<usize> {
 fn write_http_response(stream: &mut TcpStream, response: &Response) -> Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: {cache_control}\r\nConnection: close\r\n\r\n",
         response.body.len(),
         status = response.status,
         reason = response.reason,
         content_type = response.content_type,
+        cache_control = response.cache_control(),
     )
     .map_err(|error| Error::new(format!("writing HTTP headers: {error}")))?;
     stream
@@ -1482,6 +1531,89 @@ mod tests {
 
         assert_eq!(response_for("GET", "/missing.js", b"").status, 404);
         assert_eq!(response_for("PUT", "/", b"").status, 405);
+    }
+
+    #[test]
+    fn lifehash_endpoint_serves_stable_png_fingerprints() {
+        let response = response_for("GET", "/api/lifehash/deadbeef", b"");
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "image/png");
+        assert_eq!(&response.body[..8], b"\x89PNG\r\n\x1a\n");
+        // Deterministic: the same digest yields byte-identical PNGs (query
+        // strings are ignored like every other route).
+        let again = response_for("GET", "/api/lifehash/deadbeef?v=1", b"");
+        assert_eq!(again.body, response.body);
+        // Distinct digests yield distinct fingerprints.
+        let other = response_for("GET", "/api/lifehash/00ff80", b"");
+        assert_ne!(other.body, response.body);
+
+        // HEAD mirrors GET with an empty body.
+        let head = response_for("HEAD", "/api/lifehash/deadbeef", b"");
+        assert_eq!(head.status, 200);
+        assert_eq!(head.content_type, "image/png");
+        assert!(head.body.is_empty());
+
+        // POST is not an API the fingerprint route serves.
+        assert_eq!(response_for("POST", "/api/lifehash/deadbeef", b"").status, 405);
+    }
+
+    #[test]
+    fn lifehash_endpoint_reports_json_errors() {
+        // Liberal digest parsing: odd-length hex is the bytes_arg error.
+        let response = response_for("GET", "/api/lifehash/abc", b"");
+        assert_eq!(response.status, 400);
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("odd length")
+        );
+
+        let response = response_for("GET", "/api/lifehash/", b"");
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("empty byte string")
+        );
+    }
+
+    #[test]
+    fn lifehash_responses_are_cacheable_on_the_wire() {
+        // The PNG body is binary, so this rides the bytes round-trip and
+        // inspects the header block lossily.
+        let response =
+            round_trip_http_bytes("GET /api/lifehash/deadbeef HTTP/1.1\r\nHost: x\r\n\r\n");
+        let headers = String::from_utf8_lossy(&response);
+        assert!(headers.starts_with("HTTP/1.1 200 OK\r\n"), "{headers}");
+        assert!(headers.contains("Content-Type: image/png\r\n"), "{headers}");
+        assert!(
+            headers.contains("Cache-Control: public, max-age=31536000, immutable\r\n"),
+            "{headers}"
+        );
+
+        // Everything else stays no-store.
+        let response = round_trip_http("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert!(response.contains("Cache-Control: no-store\r\n"), "{response}");
+    }
+
+    /// Like `round_trip_http`, but tolerating a binary response body.
+    fn round_trip_http_bytes(request: &str) -> Vec<u8> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_connection(stream).unwrap();
+        });
+
+        let mut client = TcpStream::connect(addr).unwrap();
+        client.write_all(request.as_bytes()).unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        server.join().unwrap();
+        response
     }
 
     #[test]
