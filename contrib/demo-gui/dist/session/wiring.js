@@ -263,6 +263,23 @@ export function dropFragmentKey(state, fragmentKey) {
             : session),
     };
 }
+// ---------------------------------------------------------------------------
+// MINE, the pseudo-peer (Q6): the container of all SESSIONLESS local
+// fragments. Membership is DERIVED, never stored — a fragment lives in Mine
+// exactly when no session carries it — so loaded/created fragments default
+// there and wiring one into a session (publishing) moves it out with no
+// extra bookkeeping. Local-only workflows (join, sort, edit, atomize) act
+// on fragments wherever they live; Mine is where they happen before
+// anything is published.
+// ---------------------------------------------------------------------------
+export function fragmentSessionKeys(state, fragmentKey) {
+    return state.sessions
+        .filter((session) => session.fragmentKeys.includes(fragmentKey))
+        .map((session) => session.key);
+}
+export function mineFragmentKeys(fragmentKeys, state) {
+    return fragmentKeys.filter((fragmentKey) => !state.sessions.some((session) => session.fragmentKeys.includes(fragmentKey)));
+}
 export function mergeSessions(state, leftKey, rightKey) {
     const left = sessionByKey(state, leftKey);
     const right = sessionByKey(state, rightKey);
