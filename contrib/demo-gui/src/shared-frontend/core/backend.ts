@@ -12,6 +12,7 @@
 // coupling. The three shells swap ONLY the implementation.
 
 import type {
+  AssignIdsOptions,
   AtomizeResponse,
   ConfirmOptions,
   ConfirmationRecord,
@@ -45,12 +46,22 @@ export interface Backend {
   inspectPsbt(psbt: string): Promise<InspectResponse>;
   createPsbt(request: CreatePsbtRequest): Promise<PsbtResponse>;
   joinPsbts(psbts: string[]): Promise<PsbtResponse>;
-  sortPsbt(psbt: string, seedHex?: string): Promise<PsbtResponse>;
+  // allowShortSeed is the explicit override for ordering seeds below the spec
+  // minimum of 128 bits; without it the backend rejects short seeds.
+  sortPsbt(psbt: string, seedHex?: string, allowShortSeed?: boolean): Promise<PsbtResponse>;
   makeUnordered(psbt: string): Promise<PsbtResponse>;
   atomizePsbt(psbt: string): Promise<AtomizeResponse>;
   concatenatePsbts(psbts: string[]): Promise<PsbtResponse>;
   exportBip174(psbt: string): Promise<ExportBip174Response>;
-  importBip174(psbt: string): Promise<PsbtResponse>;
+  // BIP 174 has no TX_MODIFIABLE field; `modifiable` is the caller's explicit
+  // assertion that inputs/outputs may still be added to the import.
+  importBip174(psbt: string, modifiable?: boolean): Promise<PsbtResponse>;
+  // Assign spec identity fields (PSBT_OUT_UNIQUE_ID, optional
+  // PSBT_IN_UNIQUE_ID) to entries that lack them — the practical path from
+  // imported BIP 174/370 data to the unordered constructor. Default:
+  // auto-assign missing output ids; see AssignIdsOptions for manual
+  // directives (the atomized-import case).
+  assignIds(psbt: string, options?: AssignIdsOptions): Promise<PsbtResponse>;
 
   // Negotiation band (ptj pay / confirm / payments). Mechanism-only: the
   // record bytes are opaque hex, appended to / decoded from the grow-only
@@ -83,6 +94,7 @@ export interface Backend {
 // Re-export the DTOs and error so the frontend imports everything it needs from
 // this one module (matching the old backend.ts import surface in app.ts:4-14).
 export type {
+  AssignIdsOptions,
   AtomizeResponse,
   ConfirmOptions,
   ConfirmationRecord,
@@ -91,6 +103,7 @@ export type {
   CreatePsbtRequest,
   DeriveConfirmation,
   ExportBip174Response,
+  IdAssignment,
   InspectResponse,
   OrderingMode,
   PayByAddress,

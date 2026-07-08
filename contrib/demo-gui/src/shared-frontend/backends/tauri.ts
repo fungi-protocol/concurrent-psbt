@@ -13,6 +13,7 @@
 
 import type { Backend } from "../core/backend.js";
 import {
+  type AssignIdsOptions,
   type AtomizeResponse,
   type ConfirmationRecord,
   type ConfirmOptions,
@@ -74,6 +75,7 @@ export class TauriBackend implements Backend {
       network: request.network,
       ordering: request.ordering,
       seed_hex: request.seedHex,
+      allow_short_seed: request.allowShortSeed,
       inputs: request.inputs,
       outputs: request.outputs.map((output) => ({
         address: output.address,
@@ -86,8 +88,8 @@ export class TauriBackend implements Backend {
     return this.call("ptj_join", { psbts });
   }
 
-  sortPsbt(psbt: string, seedHex?: string): Promise<PsbtResponse> {
-    return this.call("ptj_sort", { psbt, seed_hex: seedHex });
+  sortPsbt(psbt: string, seedHex?: string, allowShortSeed?: boolean): Promise<PsbtResponse> {
+    return this.call("ptj_sort", { psbt, seed_hex: seedHex, allow_short_seed: allowShortSeed });
   }
 
   makeUnordered(psbt: string): Promise<PsbtResponse> {
@@ -106,8 +108,17 @@ export class TauriBackend implements Backend {
     return this.call("ptj_export_bip174", { psbt });
   }
 
-  importBip174(psbt: string): Promise<PsbtResponse> {
-    return this.call("ptj_import_bip174", { psbt });
+  importBip174(psbt: string, modifiable?: boolean): Promise<PsbtResponse> {
+    return this.call("ptj_import_bip174", { psbt, modifiable });
+  }
+
+  assignIds(psbt: string, options?: AssignIdsOptions): Promise<PsbtResponse> {
+    return this.call("ptj_assign_ids", {
+      psbt,
+      ids: options?.ids,
+      auto: options?.auto,
+      overwrite: options?.overwrite,
+    });
   }
 
   pay(psbt: string, payment: PaymentRecord, options?: PayOptions): Promise<PsbtResponse> {

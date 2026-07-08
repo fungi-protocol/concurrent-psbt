@@ -12,6 +12,7 @@
 
 import type { Backend } from "../core/backend.js";
 import {
+  type AssignIdsOptions,
   type AtomizeResponse,
   type ConfirmationRecord,
   type ConfirmOptions,
@@ -95,6 +96,7 @@ export class HttpBackend implements Backend {
       network: request.network,
       ordering: request.ordering,
       seed_hex: request.seedHex,
+      allow_short_seed: request.allowShortSeed,
       inputs: request.inputs,
       outputs: request.outputs.map((output) => ({
         address: output.address,
@@ -107,8 +109,8 @@ export class HttpBackend implements Backend {
     return this.postJson("/api/join", { psbts });
   }
 
-  sortPsbt(psbt: string, seedHex?: string): Promise<PsbtResponse> {
-    return this.postJson("/api/sort", { psbt, seed_hex: seedHex });
+  sortPsbt(psbt: string, seedHex?: string, allowShortSeed?: boolean): Promise<PsbtResponse> {
+    return this.postJson("/api/sort", { psbt, seed_hex: seedHex, allow_short_seed: allowShortSeed });
   }
 
   makeUnordered(psbt: string): Promise<PsbtResponse> {
@@ -127,8 +129,17 @@ export class HttpBackend implements Backend {
     return this.postJson("/api/export-bip174", { psbt });
   }
 
-  importBip174(psbt: string): Promise<PsbtResponse> {
-    return this.postJson("/api/import-bip174", { psbt });
+  importBip174(psbt: string, modifiable?: boolean): Promise<PsbtResponse> {
+    return this.postJson("/api/import-bip174", { psbt, modifiable });
+  }
+
+  assignIds(psbt: string, options?: AssignIdsOptions): Promise<PsbtResponse> {
+    return this.postJson("/api/assign-ids", {
+      psbt,
+      ids: options?.ids,
+      auto: options?.auto,
+      overwrite: options?.overwrite,
+    });
   }
 
   // Negotiation band: served by the webgui's /api/{pay,confirm,payments}
