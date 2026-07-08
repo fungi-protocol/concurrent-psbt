@@ -341,12 +341,14 @@ test("export-bip174 gate: unordered fragments need a sort first (observed route 
   assert.equal(actionState("export-v2", unordered).enabled, true);
 });
 
-test("assign-ids: disabled on the pending seam, arity-checked, uid-aware", () => {
+test("assign-ids: enabled through the Backend seam, arity-checked, uid-aware", () => {
+  // The assignIds seam landed (/api/assign-ids): outputs missing ids enable
+  // the action, nothing is waiting on a backend anymore.
   const missing = { selected: [summary({ outputUidPresent: 1, outputCount: 2 })], overrides: new Set() };
-  const pending = actionState("assign-ids", missing);
-  assert.equal(pending.enabled, false);
-  assert.equal(pending.needsBackend, "assignIds");
-  assert.match(pending.reason, /assignIds backend seam/);
+  const ready = actionState("assign-ids", missing);
+  assert.equal(ready.enabled, true);
+  assert.equal(ready.needsBackend, null);
+  assert.equal(ready.reason, null);
 
   const complete = { selected: [summary({ outputUidPresent: 2, outputCount: 2 })], overrides: new Set() };
   const done = actionState("assign-ids", complete);
@@ -355,7 +357,12 @@ test("assign-ids: disabled on the pending seam, arity-checked, uid-aware", () =>
 
   const wrongArity = actionState("assign-ids", { selected: [], overrides: new Set() });
   assert.match(wrongArity.reason, /exactly 1/);
-  assert.equal(wrongArity.needsBackend, "assignIds");
+  assert.equal(wrongArity.needsBackend, null);
+
+  // Unknown uid/output counts (undecoded fragment): stay permissive, the
+  // backend is the authority on whether ids are actually missing.
+  const unknown = { selected: [summary({ outputUidPresent: null, outputCount: null })], overrides: new Set() };
+  assert.equal(actionState("assign-ids", unknown).enabled, true);
 });
 
 // --- focus navigation ----------------------------------------------------------

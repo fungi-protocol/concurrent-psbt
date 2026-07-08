@@ -77,11 +77,7 @@
             <input id="sortSeed" autocomplete="off" spellcheck="false" placeholder="abcd">
           </label>
           <button id="opAtomize" type="button" data-action="atomize" title="Split the selected PSBT into single-element fragments">Atomize</button>
-          <!-- TODO(assign-ids): wire to the Backend seam method `assignIds`
-               once the server-side unique-id assignment route lands. Until
-               then this stays visibly disabled (needs backend) and manual
-               per-output id entry lives in the fragment editor. -->
-          <button id="opAssignIds" type="button" data-action="assign-ids" title="Assign unique ids to outputs missing them (needs backend: assignIds)">Assign ids</button>
+          <button id="opAssignIds" type="button" data-action="assign-ids" title="Assign unique ids to outputs missing them (manual per-output ids optional; the panel opens on click)">Assign ids</button>
           <button id="opExportV2" type="button" data-action="export-v2">Export v2</button>
           <button id="opExportBip174" type="button" data-action="export-bip174">Export BIP 174</button>
         </div>
@@ -347,6 +343,20 @@
                route (Backend seam method `applyPsbtEdits`: psbt + edited
                fields -> re-encoded psbt). Saving mints a NEW fragment. -->
           <button id="editorSave" type="button" disabled title="needs backend: applyPsbtEdits (field-edit route)">Save as new fragment (needs backend)</button>
+        </div>
+      </section>
+
+      <section id="assignIdsPanel" class="control-section session-panel session-panel-wide" aria-label="Assign unique ids" hidden>
+        <div class="session-output-heading">
+          <h2 id="assignIdsTitle">Assign unique ids</h2>
+          <button id="assignIdsClose" type="button" aria-label="Close assign ids panel">×</button>
+        </div>
+        <p class="item-meta">Manual per-output ids are optional — the backend parses them liberally (hex/base58/bech32). Rows left blank are auto-assigned while auto-fill is on. Assigning mints a NEW fragment; the source fragment is never mutated.</p>
+        <div id="assignIdsRows" class="session-editor-sections"></div>
+        <label class="session-gate-row"><input id="assignIdsAuto" type="checkbox" checked> auto-fill the outputs left blank</label>
+        <label class="session-gate-row"><input id="assignIdsOverwrite" type="checkbox"> overwrite existing ids <span class="session-gate-warning">replacing a unique id makes the output a new distinct element (the same duplicate-txout caveat as regenerating ids)</span></label>
+        <div class="session-load-actions">
+          <button id="assignIdsRun" type="button" class="primary">Assign ids as a new fragment</button>
         </div>
       </section>
 

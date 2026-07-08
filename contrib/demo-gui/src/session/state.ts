@@ -49,6 +49,7 @@ export type FragmentOrigin =
   | "make-unordered"
   | "atomize"
   | "concatenate"
+  | "assign-ids"
   | "pay"
   | "confirm"
   | "sync";
