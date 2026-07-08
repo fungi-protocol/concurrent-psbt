@@ -10,6 +10,7 @@ mod bytes_arg;
 mod commands;
 mod error;
 mod io;
+mod rawmap;
 mod transport;
 
 pub use error::{Error, Result};
