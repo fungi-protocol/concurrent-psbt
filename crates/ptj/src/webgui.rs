@@ -46,6 +46,20 @@ pub(crate) struct Response {
     pub(crate) body: Vec<u8>,
 }
 
+impl Response {
+    /// The Cache-Control policy for this response. Everything the webgui
+    /// serves is per-request state (`no-store`) EXCEPT the lifehash PNGs:
+    /// those are content-addressed — the digest in the URL fully determines
+    /// the (release-stable) image — so they are immutable.
+    fn cache_control(&self) -> &'static str {
+        if self.content_type == "image/png" {
+            "public, max-age=31536000, immutable"
+        } else {
+            "no-store"
+        }
+    }
+}
+
 pub fn asset(path: &str) -> Option<Asset> {
     let path = path.split_once('?').map_or(path, |(path, _)| path);
     match path {
@@ -103,6 +117,7 @@ pub(crate) fn response_for(method: &str, path: &str, body: &[u8]) -> Response {
         match path {
             "/api/assign-ids" => return assign_ids_response(body),
             "/api/atomize" => return atomize_response(body),
+            "/api/classify" => return classify_response(body),
             "/api/concatenate" => return concatenate_response(body),
             "/api/confirm" => return confirm_response(body),
             "/api/create" => return create_response(body),
@@ -122,6 +137,16 @@ pub(crate) fn response_for(method: &str, path: &str, body: &[u8]) -> Response {
 
     if method != "GET" && method != "HEAD" {
         return text_response(405, "Method Not Allowed", "method not allowed");
+    }
+
+    // GET /api/lifehash/<hex-digest> -> PNG fingerprint (content-addressed:
+    // the digest fully determines the image, so responses are immutable).
+    if let Some(digest) = path.strip_prefix("/api/lifehash/") {
+        let mut response = lifehash_response(digest);
+        if method == "HEAD" {
+            response.body = Vec::new();
+        }
+        return response;
     }
 
     let Some(asset) = asset(path) else {
@@ -684,6 +709,42 @@ fn concatenate_response_result(body: &[u8]) -> Result<Vec<u8>> {
     })
     .to_string()
     .into_bytes())
+}
+
+fn classify_response(body: &[u8]) -> Response {
+    match classify_response_result(body) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/json; charset=utf-8",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+/// `/api/classify`: universal paste ingestion. Request `{payload, network?}`
+/// (network is the `/api/create` selector, default bitcoin); the response is
+/// `{kind, ...details}` from `crate::commands::classify` — descriptors,
+/// BIP 21/321 payment instructions (incl. bare addresses and BOLT 11/12),
+/// npub peer ids, and raw signed transactions. PSBT pastes are redirected to
+/// the existing PSBT routes by the error text.
+fn classify_response_result(body: &[u8]) -> Result<Vec<u8>> {
+    let request: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
+    let payload = request_string(&request, "payload")?;
+    let network = match request.get("network") {
+        Some(value) => {
+            let value = value
+                .as_str()
+                .ok_or_else(|| Error::new("request JSON field `network` must be a string"))?;
+            NetworkArg::from_str(value).map_err(Error::new)?
+        }
+        None => NetworkArg(bitcoin::Network::Bitcoin),
+    };
+    Ok(crate::commands::classify::classify(payload, network.0)?
+        .to_string()
+        .into_bytes())
 }
 
 fn assign_ids_response(body: &[u8]) -> Response {
@@ -1442,6 +1503,30 @@ fn optional_hex32_field(request: &serde_json::Value, field: &str) -> Result<Opti
         .transpose()
 }
 
+/// `GET /api/lifehash/<hex-digest>`: the LifeHash fingerprint of the digest
+/// as a PNG (`crate::commands::lifehash` — Version2, 32x32 RGB, the frozen
+/// digest→image mapping the later wasm export must reproduce). The digest
+/// path segment rides the liberal bytes_arg parsing (hex canonical); 32
+/// bytes render as a digest, other lengths as data. Errors are the usual
+/// JSON `{error}` with status 400.
+fn lifehash_response(digest: &str) -> Response {
+    match lifehash_response_result(digest) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "image/png",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+fn lifehash_response_result(digest: &str) -> Result<Vec<u8>> {
+    let input = crate::bytes_arg::parse_bytes_arg(digest)
+        .map_err(|error| Error::new(format!("lifehash digest: {error}")))?;
+    crate::commands::lifehash::png_for_input(&input)
+}
+
 fn text_response(status: u16, reason: &'static str, body: &'static str) -> Response {
     Response {
         status,
@@ -1509,11 +1594,12 @@ fn content_length(headers: &str) -> Result<usize> {
 fn write_http_response(stream: &mut TcpStream, response: &Response) -> Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: {cache_control}\r\nConnection: close\r\n\r\n",
         response.body.len(),
         status = response.status,
         reason = response.reason,
         content_type = response.content_type,
+        cache_control = response.cache_control(),
     )
     .map_err(|error| Error::new(format!("writing HTTP headers: {error}")))?;
     stream
@@ -1689,6 +1775,89 @@ mod tests {
     }
 
     #[test]
+    fn lifehash_endpoint_serves_stable_png_fingerprints() {
+        let response = response_for("GET", "/api/lifehash/deadbeef", b"");
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "image/png");
+        assert_eq!(&response.body[..8], b"\x89PNG\r\n\x1a\n");
+        // Deterministic: the same digest yields byte-identical PNGs (query
+        // strings are ignored like every other route).
+        let again = response_for("GET", "/api/lifehash/deadbeef?v=1", b"");
+        assert_eq!(again.body, response.body);
+        // Distinct digests yield distinct fingerprints.
+        let other = response_for("GET", "/api/lifehash/00ff80", b"");
+        assert_ne!(other.body, response.body);
+
+        // HEAD mirrors GET with an empty body.
+        let head = response_for("HEAD", "/api/lifehash/deadbeef", b"");
+        assert_eq!(head.status, 200);
+        assert_eq!(head.content_type, "image/png");
+        assert!(head.body.is_empty());
+
+        // POST is not an API the fingerprint route serves.
+        assert_eq!(response_for("POST", "/api/lifehash/deadbeef", b"").status, 405);
+    }
+
+    #[test]
+    fn lifehash_endpoint_reports_json_errors() {
+        // Liberal digest parsing: odd-length hex is the bytes_arg error.
+        let response = response_for("GET", "/api/lifehash/abc", b"");
+        assert_eq!(response.status, 400);
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("odd length")
+        );
+
+        let response = response_for("GET", "/api/lifehash/", b"");
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("empty byte string")
+        );
+    }
+
+    #[test]
+    fn lifehash_responses_are_cacheable_on_the_wire() {
+        // The PNG body is binary, so this rides the bytes round-trip and
+        // inspects the header block lossily.
+        let response =
+            round_trip_http_bytes("GET /api/lifehash/deadbeef HTTP/1.1\r\nHost: x\r\n\r\n");
+        let headers = String::from_utf8_lossy(&response);
+        assert!(headers.starts_with("HTTP/1.1 200 OK\r\n"), "{headers}");
+        assert!(headers.contains("Content-Type: image/png\r\n"), "{headers}");
+        assert!(
+            headers.contains("Cache-Control: public, max-age=31536000, immutable\r\n"),
+            "{headers}"
+        );
+
+        // Everything else stays no-store.
+        let response = round_trip_http("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert!(response.contains("Cache-Control: no-store\r\n"), "{response}");
+    }
+
+    /// Like `round_trip_http`, but tolerating a binary response body.
+    fn round_trip_http_bytes(request: &str) -> Vec<u8> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_connection(stream).unwrap();
+        });
+
+        let mut client = TcpStream::connect(addr).unwrap();
+        client.write_all(request.as_bytes()).unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        server.join().unwrap();
+        response
+    }
+
+    #[test]
     fn inspect_endpoint_reports_json_errors() {
         let missing = response_for("POST", "/api/inspect", b"{}");
         assert_eq!(missing.status, 400);
@@ -1748,6 +1917,134 @@ mod tests {
                 .unwrap()
                 .contains("decoding base64")
         );
+    }
+
+    #[test]
+    fn classify_endpoint_parses_descriptors() {
+        const XPUB: &str = "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8";
+        let request = serde_json::json!({ "payload": format!("wpkh({XPUB}/0/*)") }).to_string();
+
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["kind"], "descriptor");
+        assert_eq!(body["has_private_keys"], false);
+        assert_eq!(body["is_ranged"], true);
+        assert_eq!(body["derived"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn classify_endpoint_parses_payment_uris_with_network_selector() {
+        let request = serde_json::json!({
+            "payload": format!(
+                "bitcoin:{}?amount=0.00025&label=lunch",
+                regtest_address(3),
+            ),
+            "network": "regtest",
+        })
+        .to_string();
+
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["kind"], "payment");
+        assert_eq!(body["amount_sats"], 25_000);
+        assert_eq!(body["label"], "lunch");
+        assert_eq!(body["methods"][0]["type"], "onchain");
+        assert_eq!(body["methods"][0]["address"], regtest_address(3));
+    }
+
+    #[test]
+    fn classify_endpoint_parses_peer_ids_and_transactions() {
+        use bitcoin::bech32::{self, Hrp};
+        let npub =
+            bech32::encode::<bech32::Bech32>(Hrp::parse("npub").unwrap(), &[0x22; 32]).unwrap();
+        let request = serde_json::json!({ "payload": npub }).to_string();
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["kind"], "peer_id");
+        assert_eq!(body["format"], "npub");
+        assert_eq!(body["id_hex"], "22".repeat(32));
+
+        // A raw signed transaction pastes into spendable outpoints.
+        let transaction = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: format!("{TXID}:7").parse().unwrap(),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::from_slice(&[vec![0xAA; 71], vec![0xBB; 33]]),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(70_000),
+                script_pubkey: regtest_address(2)
+                    .parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
+                    .unwrap()
+                    .assume_checked()
+                    .script_pubkey(),
+            }],
+        };
+        let request = serde_json::json!({
+            "payload": bitcoin::consensus::encode::serialize_hex(&transaction),
+            "network": "regtest",
+        })
+        .to_string();
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["kind"], "transaction");
+        assert_eq!(body["fully_signed"], true);
+        assert_eq!(body["outputs"][0]["amount_sats"], 70_000);
+        assert_eq!(body["outputs"][0]["address"], regtest_address(2));
+    }
+
+    #[test]
+    fn classify_endpoint_reports_json_errors() {
+        let missing = response_for("POST", "/api/classify", b"{}");
+        assert_eq!(missing.status, 400);
+        assert!(
+            String::from_utf8(missing.body)
+                .unwrap()
+                .contains("`payload`")
+        );
+
+        // PSBT pastes are redirected to the PSBT routes.
+        let request = serde_json::json!({ "payload": encoded_psbt() }).to_string();
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("/api/inspect")
+        );
+
+        // Unclassifiable payloads name every decoder that was tried.
+        let request = serde_json::json!({ "payload": "!!!" }).to_string();
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+        assert_eq!(response.status, 400);
+        let error = String::from_utf8(response.body).unwrap();
+        assert!(error.contains("not an output descriptor"), "{error}");
+        assert!(error.contains("not payment instructions"), "{error}");
     }
 
     /// The fixture PSBT with its output unique ids stripped — imported
