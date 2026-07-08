@@ -55,6 +55,10 @@ import {
   amountSpanParts,
   elisionLabel,
   fragmentCardModel,
+  signedAmountSpanParts,
+  type AmountSpanPart,
+  type BalanceSheet,
+  type CardGroup,
   type InputView,
   type OutputView,
 } from "./display.js";
@@ -266,10 +270,10 @@ function lifehashBadge(hex: string, title: string): HTMLElement {
 // binary fingerprint (display.ts amountBits): a thin barcode of the value
 // in base 2, LSB right-aligned under the last digit, for at-a-glance
 // recognition of low-Hamming-weight values.
-function amountSpan(sats: number): HTMLElement {
+function amountSpanFrom(parts: AmountSpanPart[], sats: number): HTMLElement {
   const node = span("session-amount", "");
   const text = span("session-amount-text", "");
-  for (const part of amountSpanParts(sats)) {
+  for (const part of parts) {
     text.append(span(part.className, part.text));
   }
   node.append(text);
@@ -282,6 +286,16 @@ function amountSpan(sats: number): HTMLElement {
   }
   node.append(row);
   return node;
+}
+
+function amountSpan(sats: number): HTMLElement {
+  return amountSpanFrom(amountSpanParts(sats), sats);
+}
+
+// Signed variant for balance deltas: the sign inherits the surrounding
+// color like every other significant digit.
+function signedAmountSpan(sats: number): HTMLElement {
+  return amountSpanFrom(signedAmountSpanParts(sats), sats);
 }
 
 // --- fragment set plumbing ----------------------------------------------------
@@ -618,12 +632,6 @@ function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
       );
     }
     title.append(span("", group.label));
-    if (group.inputSubtotalSats !== null) {
-      title.append(span("item-meta", " in "), amountSpan(group.inputSubtotalSats));
-    }
-    if (group.outputSubtotalSats !== null) {
-      title.append(span("item-meta", " out "), amountSpan(group.outputSubtotalSats));
-    }
     groupNode.append(title);
 
     for (const input of group.inputs.slice(0, INPUT_ROWS_SHOWN)) {
@@ -638,10 +646,17 @@ function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
     const outputsHidden = elisionLabel(OUTPUT_ROWS_SHOWN, group.outputs.length);
     if (outputsHidden) groupNode.append(span("item-meta session-elided", `outputs ${outputsHidden}`));
 
+    // Per-group subtotals at the BOTTOM of the columns. With a single
+    // group the card-level report directly below would repeat them (the
+    // demo's grand-total elision rule, inverted for the card layout).
+    if (card.groups.length > 1) {
+      groupNode.append(groupBalanceFooter(group));
+    }
+
     body.append(groupNode);
   }
   if (card.groups.length) {
-    body.append(span("item-meta session-fee-line", card.fee.text));
+    body.append(balanceReport(card.balance, card.fee.text));
   }
   item.append(body);
 
@@ -691,6 +706,122 @@ function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
 
 function badge(text: string, className: string): HTMLElement {
   return span(className, text);
+}
+
+// --- balance report footer (display.ts balanceSheet) --------------------------
+//
+// Per-group subtotals and whole-transaction totals at the BOTTOM of the
+// input/output columns under a sum line — the demo's drawSectionSubtotal
+// placement. Numbers that need backend data render as an honest "n/a"
+// carrying the seam in the tooltip; deficits are red (via CSS, the amounts
+// inherit the color).
+
+function naSlot(why: string): HTMLElement {
+  const node = span("session-balance-na", "n/a");
+  node.title = why;
+  return node;
+}
+
+function balanceCell(
+  side: "input" | "output",
+  label: string,
+  sats: number | null,
+  why: string,
+): HTMLElement {
+  const cell = span(`session-balance-cell session-balance-cell-${side}`, "");
+  cell.append(span("session-coin-side", label));
+  cell.append(sats !== null ? amountSpan(sats) : naSlot(why));
+  return cell;
+}
+
+const PARTIAL_SUBTOTAL_WHY = "member amounts unknown — a partial sum is not shown as a total";
+
+function groupBalanceFooter(group: CardGroup): HTMLElement {
+  const footer = span("session-balance session-balance-group", "");
+  footer.append(span("session-balance-sumline", ""));
+  const totals = span("session-balance-row session-balance-totals", "");
+  if (group.inputs.length > 0) {
+    totals.append(balanceCell("input", "in", group.inputSubtotalSats, PARTIAL_SUBTOTAL_WHY));
+  }
+  if (group.outputs.length > 0) {
+    totals.append(balanceCell("output", "out", group.outputSubtotalSats, PARTIAL_SUBTOTAL_WHY));
+  }
+  footer.append(totals);
+  return footer;
+}
+
+function balanceReport(sheet: BalanceSheet, feeText: string): HTMLElement {
+  const block = span("session-balance session-balance-whole", "");
+  // The flat fee sentence stays as tooltip/aria text.
+  block.title = feeText;
+  block.setAttribute("aria-label", feeText);
+
+  // Declared fees sit ABOVE the sum line on the output side and are never
+  // rendered as transaction outputs. Elided when known to be zero.
+  if (sheet.declaredFeeSats === null || sheet.declaredFeeSats > 0) {
+    const row = span("session-balance-row session-balance-declared", "");
+    const cell = span("session-balance-cell session-balance-cell-output", "");
+    cell.append(span("session-balance-label session-balance-label-muted", "declared fees:"));
+    cell.append(
+      sheet.declaredFeeSats !== null
+        ? amountSpan(sheet.declaredFeeSats)
+        : naSlot("needs backend: totals.declared_fee_sats (inspect extension)"),
+    );
+    row.append(cell);
+    block.append(row);
+  }
+
+  block.append(span("session-balance-sumline", ""));
+
+  const totals = span("session-balance-row session-balance-totals", "");
+  totals.append(
+    balanceCell("input", "in", sheet.inputTotalSats, "input amounts incomplete (missing UTXO data)"),
+  );
+  if (!sheet.outputTotalElidedByDeclaredFees) {
+    const outCell = balanceCell("output", "out", sheet.outputAccountingTotalSats, "outputs not decoded");
+    if (sheet.declaredFeeSats !== null && sheet.declaredFeeSats > 0) {
+      outCell.title = "outputs + declared fees";
+    }
+    totals.append(outCell);
+  }
+  block.append(totals);
+
+  if (sheet.delta) {
+    // The demo's imbalance block: a second thinner sum line (red-tinted for
+    // a deficit) and the `balance:` label on the shortfall side.
+    block.append(
+      span(
+        "session-balance-sumline session-balance-deltaline" +
+          (sheet.delta.kind === "deficit" ? " session-balance-deltaline-deficit" : ""),
+        "",
+      ),
+    );
+    const row = span(`session-balance-row session-balance-delta session-balance-${sheet.delta.kind}`, "");
+    const cell = span(`session-balance-cell session-balance-cell-${sheet.delta.column}`, "");
+    cell.append(span("session-balance-label", "balance:"));
+    cell.append(signedAmountSpan(sheet.delta.sats));
+    if (sheet.implicitFeeSats !== null && sheet.declaredFeeSats !== null) {
+      cell.title = `${sheet.declaredFeeSats} sat declared + ${sheet.implicitFeeSats} sat implicit`;
+    }
+    row.append(cell);
+    block.append(row);
+  }
+
+  if (sheet.showFeeRate) {
+    const row = span("session-balance-row session-balance-feerate", "");
+    row.append(
+      sheet.feeRateText !== null
+        ? span("item-meta", sheet.feeRateText)
+        : naSlot("fee rate needs backend: totals.size_estimate (inspect extension)"),
+    );
+    if (sheet.feeRateText === null) row.prepend(span("item-meta", "fee rate "));
+    block.append(row);
+  }
+
+  if (sheet.fallbackText) {
+    block.append(span("item-meta session-fee-line", sheet.fallbackText));
+  }
+  return block;
 }
 
 function inputRow(input: InputView): HTMLElement {

@@ -5,14 +5,18 @@ import { readFileSync } from "node:fs";
 import {
   amountBits,
   amountSpanParts,
+  balanceSheet,
   cardGroups,
+  declaredFeeSatsFromInspect,
   elisionLabel,
   feeLine,
+  formatFeeRate,
   fragmentCardModel,
   inputViews,
   outputViews,
   scriptTemplate,
   signedAmountSpanParts,
+  sizeEstimateVbytesFromInspect,
 } from "../dist/session/display.js";
 import { formatSatAmount } from "../dist/model.js";
 import { fragmentSummary } from "../dist/session/state.js";
@@ -294,6 +298,117 @@ test("signedAmountSpanParts: the sign is a significant digit", () => {
   assert.deepEqual(flatten(negative), ["digits:−", "symbol:₿", "scale:0.00000", "digits:600"]);
   assert.deepEqual(signedAmountSpanParts(600), amountSpanParts(600));
   assert.deepEqual(signedAmountSpanParts(0), amountSpanParts(0));
+});
+
+// --- balance sheet (Q2: totals at the bottom, deficits red) -----------------
+
+const summaryWithTotals = (totals) => fragmentSummary({ ...INSPECT, totals });
+
+test("balanceSheet: a surplus is the accounted fee on the output side", () => {
+  const sheet = balanceSheet(
+    summaryWithTotals({ known_input_sats: 150000, output_sats: 125000, fee_sats_if_inputs_known: 25000 }),
+    INSPECT,
+  );
+  assert.deepEqual(sheet.delta, { kind: "surplus", column: "output", sats: 25000 });
+  assert.equal(sheet.inputTotalSats, 150000);
+  assert.equal(sheet.outputAccountingTotalSats, 125000);
+  assert.equal(sheet.fallbackText, null);
+  assert.equal(sheet.showFeeRate, true);
+  // Seams absent from inspect JSON today: honest n/a, never a guess.
+  assert.equal(sheet.declaredFeeSats, null);
+  assert.equal(sheet.sizeEstimateVbytes, null);
+  assert.equal(sheet.feeRateText, null);
+  assert.equal(sheet.implicitFeeSats, null);
+});
+
+test("balanceSheet: deficits sit on the input side (the red rule)", () => {
+  const sheet = balanceSheet(
+    summaryWithTotals({ known_input_sats: 100000, output_sats: 125000, fee_sats_if_inputs_known: -25000 }),
+    INSPECT,
+  );
+  assert.deepEqual(sheet.delta, { kind: "deficit", column: "input", sats: -25000 });
+  assert.equal(sheet.fallbackText, null);
+});
+
+test("balanceSheet: balanced and unknown cases", () => {
+  const balanced = balanceSheet(
+    summaryWithTotals({ known_input_sats: 125000, output_sats: 125000, fee_sats_if_inputs_known: 0 }),
+    INSPECT,
+  );
+  assert.equal(balanced.delta, null);
+  assert.equal(balanced.showFeeRate, false);
+  assert.equal(balanced.fallbackText, null);
+
+  // The stock fixture's inputs are incomplete: the delta cannot be computed
+  // and the honest sentence comes back instead.
+  const unknown = balanceSheet(fragmentSummary(INSPECT), INSPECT);
+  assert.equal(unknown.delta, null);
+  assert.equal(unknown.inputTotalSats, null);
+  assert.match(unknown.fallbackText, /fee unknown \(input amounts incomplete\)/);
+
+  const undecoded = balanceSheet(fragmentSummary(null), null);
+  assert.match(undecoded.fallbackText, /not decoded/);
+});
+
+test("balanceSheet consumes the declared-fee and size seams when present", () => {
+  const totals = {
+    known_input_sats: 150000,
+    output_sats: 125000,
+    fee_sats_if_inputs_known: 25000,
+    declared_fee_sats: 700,
+    size_estimate: 140,
+  };
+  const inspect = { ...INSPECT, totals };
+  const sheet = balanceSheet(summaryWithTotals(totals), inspect);
+  assert.equal(sheet.declaredFeeSats, 700);
+  // The demo's output accounting total: outputs + declared fees.
+  assert.equal(sheet.outputAccountingTotalSats, 125700);
+  assert.equal(sheet.implicitFeeSats, 24300);
+  assert.equal(sheet.sizeEstimateVbytes, 140);
+  assert.equal(sheet.feeRateText, `~${(25000 / 140).toFixed(1)} sat/vB`);
+  assert.equal(sheet.outputTotalElidedByDeclaredFees, false);
+
+  // An output total that is 100% declared fees is elided (declared fees are
+  // never transaction outputs).
+  const allDeclared = balanceSheet(
+    summaryWithTotals({ ...totals, output_sats: 0, fee_sats_if_inputs_known: 150000 }),
+    { ...INSPECT, totals: { ...totals, output_sats: 0 } },
+  );
+  assert.equal(allDeclared.outputTotalElidedByDeclaredFees, true);
+});
+
+test("seam readers accept the tolerated size_estimate shapes", () => {
+  assert.equal(declaredFeeSatsFromInspect(INSPECT), null);
+  assert.equal(declaredFeeSatsFromInspect(null), null);
+  assert.equal(sizeEstimateVbytesFromInspect(null), null);
+  assert.equal(sizeEstimateVbytesFromInspect({ totals: { size_estimate: 140 } }), 140);
+  assert.equal(sizeEstimateVbytesFromInspect({ totals: { size_estimate: { vbytes: 141 } } }), 141);
+  assert.equal(sizeEstimateVbytesFromInspect({ size_estimate: 142 }), 142);
+  assert.equal(sizeEstimateVbytesFromInspect({ size_estimate: { vbytes: 143 } }), 143);
+});
+
+test("formatFeeRate: two decimals below 10 sat/vB, one above", () => {
+  assert.equal(formatFeeRate(3.14159), "3.14");
+  assert.equal(formatFeeRate(9.999), "10.00");
+  assert.equal(formatFeeRate(10), "10.0");
+  assert.equal(formatFeeRate(178.571), "178.6");
+  assert.equal(formatFeeRate(0), "0.00");
+});
+
+test("fragmentCardModel carries the balance sheet", () => {
+  const card = fragmentCardModel(INSPECT, "regtest");
+  assert.equal(card.balance.delta, null);
+  assert.match(card.balance.fallbackText, /fee unknown/);
+});
+
+// Deficit-red is a row-level color the amount parts INHERIT (ead6ca05):
+// the stylesheet must set the red on .session-balance-deficit and never on
+// an amount part.
+test("styles.css: the deficit row is red, amounts inherit it", () => {
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  const match = css.match(/^\.session-balance-deficit\s*\{([^}]*)\}/m);
+  assert.ok(match, "expected a .session-balance-deficit rule");
+  assert.match(match[1], /color:\s*var\(--red\)/);
 });
 
 test("amountBits: base-2 fingerprint at natural bit length", () => {

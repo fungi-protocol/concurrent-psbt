@@ -300,6 +300,64 @@ export function feeLine(summary) {
     }
     return { knownInputSats, outputSats, feeSats, text };
 }
+// ---------------------------------------------------------------------------
+// Balance sheet — the card's balance-report footer: per-group subtotals and
+// whole-transaction totals at the BOTTOM of the input/output columns, the
+// demo's drawSectionSubtotal structure (sum line, accounting totals below
+// it, the `balance:` delta on the shortfall side, declared fees above the
+// line on the output side, the fee-rate signal).
+// ---------------------------------------------------------------------------
+// Seam readers: a parallel inspect extension adds declared-fee and size
+// data. Consume the fields when present, return null otherwise — the shell
+// renders an honest "n/a" for null instead of inventing a number.
+//   totals.declared_fee_sats — the summed PSBT_GLOBAL_EXPLICIT_FEE_-
+//     CONTRIBUTION records (fee.rs total_declared_fee);
+//   totals.size_estimate — estimated vbytes (accepted as a bare number or
+//     an object carrying a vbytes field; top-level size_estimate too).
+export function declaredFeeSatsFromInspect(inspect) {
+    return asNumber(asObject(asObject(inspect)?.totals)?.declared_fee_sats);
+}
+export function sizeEstimateVbytesFromInspect(inspect) {
+    const root = asObject(inspect);
+    for (const carrier of [asObject(root?.totals)?.size_estimate, root?.size_estimate]) {
+        const vbytes = asNumber(carrier) ?? asNumber(asObject(carrier)?.vbytes);
+        if (vbytes !== null)
+            return vbytes;
+    }
+    return null;
+}
+// The demo's formatFeeRate: two decimals below 10 sat/vB, one above.
+export function formatFeeRate(rate) {
+    const value = Number(rate || 0);
+    return value >= 10 ? value.toFixed(1) : value.toFixed(2);
+}
+export function balanceSheet(summary, inspect) {
+    const declaredFeeSats = declaredFeeSatsFromInspect(inspect);
+    const sizeEstimateVbytes = sizeEstimateVbytesFromInspect(inspect);
+    const feeSats = summary.feeSats;
+    const delta = feeSats === null || feeSats === 0
+        ? null
+        : feeSats < 0
+            ? { kind: "deficit", column: "input", sats: feeSats }
+            : { kind: "surplus", column: "output", sats: feeSats };
+    const showFeeRate = feeSats !== null && feeSats !== 0;
+    return {
+        inputTotalSats: summary.knownInputSats,
+        outputTotalSats: summary.outputSats,
+        declaredFeeSats,
+        outputAccountingTotalSats: summary.outputSats === null ? null : summary.outputSats + (declaredFeeSats ?? 0),
+        outputTotalElidedByDeclaredFees: summary.outputSats === 0 && declaredFeeSats !== null && declaredFeeSats > 0,
+        feeSats,
+        implicitFeeSats: feeSats !== null && declaredFeeSats !== null ? feeSats - declaredFeeSats : null,
+        delta,
+        sizeEstimateVbytes,
+        feeRateText: showFeeRate && sizeEstimateVbytes !== null && sizeEstimateVbytes > 0
+            ? `~${formatFeeRate(feeSats / sizeEstimateVbytes)} sat/vB`
+            : null,
+        showFeeRate,
+        fallbackText: feeSats === null ? feeLine(summary).text : null,
+    };
+}
 export function fragmentCardModel(inspect, network, provenance) {
     const summary = fragmentSummary(inspect);
     const inputs = inputViews(inspect, provenance);
@@ -312,6 +370,7 @@ export function fragmentCardModel(inspect, network, provenance) {
         uidPresent: summary.outputUidPresent,
         uidTotal: outputs.length > 0 || summary.outputUidPresent !== null ? outputs.length : summary.outputCount,
         fee: feeLine(summary),
+        balance: balanceSheet(summary, inspect),
     };
 }
 // Elision helper for the shell: show `shown` rows, elide the rest by count.
