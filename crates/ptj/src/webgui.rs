@@ -103,6 +103,7 @@ pub(crate) fn response_for(method: &str, path: &str, body: &[u8]) -> Response {
         match path {
             "/api/assign-ids" => return assign_ids_response(body),
             "/api/atomize" => return atomize_response(body),
+            "/api/classify" => return classify_response(body),
             "/api/concatenate" => return concatenate_response(body),
             "/api/confirm" => return confirm_response(body),
             "/api/create" => return create_response(body),
@@ -683,6 +684,42 @@ fn concatenate_response_result(body: &[u8]) -> Result<Vec<u8>> {
     })
     .to_string()
     .into_bytes())
+}
+
+fn classify_response(body: &[u8]) -> Response {
+    match classify_response_result(body) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/json; charset=utf-8",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+/// `/api/classify`: universal paste ingestion. Request `{payload, network?}`
+/// (network is the `/api/create` selector, default bitcoin); the response is
+/// `{kind, ...details}` from `crate::commands::classify` — descriptors,
+/// BIP 21/321 payment instructions (incl. bare addresses and BOLT 11/12),
+/// npub peer ids, and raw signed transactions. PSBT pastes are redirected to
+/// the existing PSBT routes by the error text.
+fn classify_response_result(body: &[u8]) -> Result<Vec<u8>> {
+    let request: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
+    let payload = request_string(&request, "payload")?;
+    let network = match request.get("network") {
+        Some(value) => {
+            let value = value
+                .as_str()
+                .ok_or_else(|| Error::new("request JSON field `network` must be a string"))?;
+            NetworkArg::from_str(value).map_err(Error::new)?
+        }
+        None => NetworkArg(bitcoin::Network::Bitcoin),
+    };
+    Ok(crate::commands::classify::classify(payload, network.0)?
+        .to_string()
+        .into_bytes())
 }
 
 fn assign_ids_response(body: &[u8]) -> Response {
@@ -1544,6 +1581,134 @@ mod tests {
                 .unwrap()
                 .contains("decoding base64")
         );
+    }
+
+    #[test]
+    fn classify_endpoint_parses_descriptors() {
+        const XPUB: &str = "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8";
+        let request = serde_json::json!({ "payload": format!("wpkh({XPUB}/0/*)") }).to_string();
+
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["kind"], "descriptor");
+        assert_eq!(body["has_private_keys"], false);
+        assert_eq!(body["is_ranged"], true);
+        assert_eq!(body["derived"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn classify_endpoint_parses_payment_uris_with_network_selector() {
+        let request = serde_json::json!({
+            "payload": format!(
+                "bitcoin:{}?amount=0.00025&label=lunch",
+                regtest_address(3),
+            ),
+            "network": "regtest",
+        })
+        .to_string();
+
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["kind"], "payment");
+        assert_eq!(body["amount_sats"], 25_000);
+        assert_eq!(body["label"], "lunch");
+        assert_eq!(body["methods"][0]["type"], "onchain");
+        assert_eq!(body["methods"][0]["address"], regtest_address(3));
+    }
+
+    #[test]
+    fn classify_endpoint_parses_peer_ids_and_transactions() {
+        use bitcoin::bech32::{self, Hrp};
+        let npub =
+            bech32::encode::<bech32::Bech32>(Hrp::parse("npub").unwrap(), &[0x22; 32]).unwrap();
+        let request = serde_json::json!({ "payload": npub }).to_string();
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["kind"], "peer_id");
+        assert_eq!(body["format"], "npub");
+        assert_eq!(body["id_hex"], "22".repeat(32));
+
+        // A raw signed transaction pastes into spendable outpoints.
+        let transaction = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: format!("{TXID}:7").parse().unwrap(),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::from_slice(&[vec![0xAA; 71], vec![0xBB; 33]]),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(70_000),
+                script_pubkey: regtest_address(2)
+                    .parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
+                    .unwrap()
+                    .assume_checked()
+                    .script_pubkey(),
+            }],
+        };
+        let request = serde_json::json!({
+            "payload": bitcoin::consensus::encode::serialize_hex(&transaction),
+            "network": "regtest",
+        })
+        .to_string();
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["kind"], "transaction");
+        assert_eq!(body["fully_signed"], true);
+        assert_eq!(body["outputs"][0]["amount_sats"], 70_000);
+        assert_eq!(body["outputs"][0]["address"], regtest_address(2));
+    }
+
+    #[test]
+    fn classify_endpoint_reports_json_errors() {
+        let missing = response_for("POST", "/api/classify", b"{}");
+        assert_eq!(missing.status, 400);
+        assert!(
+            String::from_utf8(missing.body)
+                .unwrap()
+                .contains("`payload`")
+        );
+
+        // PSBT pastes are redirected to the PSBT routes.
+        let request = serde_json::json!({ "payload": encoded_psbt() }).to_string();
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("/api/inspect")
+        );
+
+        // Unclassifiable payloads name every decoder that was tried.
+        let request = serde_json::json!({ "payload": "!!!" }).to_string();
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+        assert_eq!(response.status, 400);
+        let error = String::from_utf8(response.body).unwrap();
+        assert!(error.contains("not an output descriptor"), "{error}");
+        assert!(error.contains("not payment instructions"), "{error}");
     }
 
     /// The fixture PSBT with its output unique ids stripped — imported

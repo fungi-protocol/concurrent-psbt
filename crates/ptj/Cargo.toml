@@ -9,7 +9,11 @@ path = "src/main.rs"
 
 [features]
 default = ["webgui"]
-webgui = []
+# The universal-paste classifier (/api/classify) grounds miniscript (output
+# descriptors) and Matt Corallo's bitcoin-payment-instructions (BIP 21/321
+# payment URIs); both are route-only parsers, so they ride the webgui gate
+# instead of burdening the plain CLI build.
+webgui = ["dep:miniscript", "dep:bitcoin-payment-instructions"]
 # WIP: interactive terminal UI (`ptj tui`). NOT in the default set — the TUI
 # pulls a terminal stack (ratatui + crossterm) the plain CLI doesn't need.
 tui = ["dep:ratatui", "dep:crossterm"]
@@ -68,6 +72,8 @@ transport-mdk = { path = "../transport-mdk", optional = true }
 transport-str0m = { path = "../transport-str0m", optional = true }
 transport-webrtc-rs = { path = "../transport-webrtc-rs", optional = true }
 transport-payjoin-dir = { path = "../transport-payjoin-dir", optional = true }
+miniscript = { version = "13.1.0", optional = true }
+bitcoin-payment-instructions = { version = "0.7.0", optional = true }
 # TODO(transport-nostr): unauthored — no such crate exists yet.
 # transport-nostr = { path = "../transport-nostr", optional = true }
 

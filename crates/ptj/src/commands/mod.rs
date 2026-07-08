@@ -1,5 +1,7 @@
 pub(crate) mod assign_ids;
 pub(crate) mod atomize;
+#[cfg(feature = "webgui")]
+pub(crate) mod classify;
 pub(crate) mod concatenate;
 pub(crate) mod create;
 pub(crate) mod export_bip174;
