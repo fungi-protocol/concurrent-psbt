@@ -750,11 +750,13 @@ fn create_config_from_request(request: &serde_json::Value) -> Result<CreateConfi
         .map(parse_create_outputs)
         .transpose()?
         .unwrap_or_default();
+    let allow_short_seed = optional_bool(request, "allow_short_seed")?;
 
     Ok(CreateConfig {
         inputs,
         outputs,
         seed,
+        allow_short_seed,
         ordering,
         network,
     })
@@ -920,11 +922,12 @@ fn sort_response_result(body: &[u8]) -> Result<Vec<u8>> {
                 .map(crate::cli::HexSeed::into_bytes)
         })
         .transpose()?;
+    let allow_short_seed = optional_bool(&request, "allow_short_seed")?;
     let psbt = crate::io::parse_psbt_bytes("request psbt", psbt.as_bytes())?;
     let constructor =
         concurrent_psbt::roles::constructor::dynamic::Constructor::try_from_psbt(psbt)
             .map_err(|error| Error::new(format!("request psbt: {error}")))?;
-    let sorted = crate::commands::sort::sort_psbt(constructor.into_inner(), seed)?;
+    let sorted = crate::commands::sort::sort_psbt(constructor.into_inner(), seed, allow_short_seed)?;
     Ok(serde_json::json!({
         "psbt": crate::io::encode_psbt(&sorted),
         "inspect": crate::commands::inspect::inspect_psbt(&sorted),
@@ -1157,6 +1160,17 @@ fn request_string<'a>(request: &'a serde_json::Value, field: &str) -> Result<&'a
         .ok_or_else(|| Error::new(format!("request JSON must contain string field `{field}`")))
 }
 
+/// Read an optional boolean field (`allow_short_seed`, ...); absent or null
+/// means `false`.
+fn optional_bool(request: &serde_json::Value, field: &str) -> Result<bool> {
+    match request.get(field) {
+        None | Some(serde_json::Value::Null) => Ok(false),
+        Some(value) => value.as_bool().ok_or_else(|| {
+            Error::new(format!("request JSON field `{field}` must be a boolean"))
+        }),
+    }
+}
+
 /// Read an optional hex-string field (`secret_hex`, ...) to raw bytes, with
 /// the same error text as the CLI's hex arguments.
 fn optional_hex_field(request: &serde_json::Value, field: &str) -> Result<Option<Vec<u8>>> {
@@ -1277,6 +1291,12 @@ mod tests {
     use crate::cli::Cli;
 
     const TXID: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+    /// A 16-byte (spec-minimum) ordering seed for fixtures and requests.
+    const SEED_HEX: &str = "abcdabcdabcdabcdabcdabcdabcdabcd";
+
+    fn seed_bytes() -> Vec<u8> {
+        [0xab, 0xcd].repeat(8)
+    }
 
     #[test]
     fn inspect_endpoint_parses_real_psbt_bytes() {
@@ -1292,7 +1312,7 @@ mod tests {
         assert_eq!(inspected["input_count"], 1);
         assert_eq!(inspected["output_count"], 1);
         assert_eq!(inspected["sort"]["mode"], "unset");
-        assert_eq!(inspected["sort"]["seed_hex"], "abcd");
+        assert_eq!(inspected["sort"]["seed_hex"], SEED_HEX);
     }
 
     #[test]
@@ -1449,7 +1469,7 @@ mod tests {
     fn sort_endpoint_returns_ordered_psbt_and_inspection() {
         let request = serde_json::json!({
             "psbt": encoded_psbt(),
-            "seed_hex": "deadbeef",
+            "seed_hex": "deadbeefdeadbeefdeadbeefdeadbeef",
         })
         .to_string();
 
@@ -1467,6 +1487,34 @@ mod tests {
         assert_eq!(sorted.global.output_count, 1);
         assert_eq!(body["inspect"]["ordering"], "ordered");
         assert_eq!(body["inspect"]["sort"]["mode"], "unset");
+        assert_eq!(
+            body["inspect"]["sort"]["seed_hex"],
+            "deadbeefdeadbeefdeadbeefdeadbeef"
+        );
+    }
+
+    #[test]
+    fn sort_endpoint_rejects_short_seed_unless_overridden() {
+        let short = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "seed_hex": "deadbeef",
+        })
+        .to_string();
+        let rejected = response_for("POST", "/api/sort", short.as_bytes());
+        assert_eq!(rejected.status, 400);
+        let message = String::from_utf8(rejected.body).unwrap();
+        assert!(message.contains("128 bits"), "{message}");
+        assert!(message.contains("allow_short_seed"), "{message}");
+
+        let overridden = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "seed_hex": "deadbeef",
+            "allow_short_seed": true,
+        })
+        .to_string();
+        let response = response_for("POST", "/api/sort", overridden.as_bytes());
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(body["inspect"]["sort"]["seed_hex"], "deadbeef");
     }
 
@@ -1644,7 +1692,7 @@ mod tests {
                 { "address": regtest_address(1), "amount_btc": "0.00050000" },
             ],
             "ordering": "deterministic",
-            "seed_hex": "abcd",
+            "seed_hex": SEED_HEX,
         })
         .to_string();
 
@@ -1668,17 +1716,36 @@ mod tests {
         assert_eq!(body["inspect"]["input_count"], 1);
         assert_eq!(body["inspect"]["output_count"], 1);
         assert_eq!(body["inspect"]["sort"]["mode"], "deterministic");
-        assert_eq!(body["inspect"]["sort"]["seed_hex"], "abcd");
+        assert_eq!(body["inspect"]["sort"]["seed_hex"], SEED_HEX);
+    }
+
+    #[test]
+    fn create_endpoint_rejects_short_seed_unless_overridden() {
+        let short = serde_json::json!({
+            "network": "regtest",
+            "inputs": [{ "txid": TXID, "vout": 7 }],
+            "ordering": "deterministic",
+            "seed_hex": "abcd",
+        })
+        .to_string();
+        let rejected = response_for("POST", "/api/create", short.as_bytes());
+        assert_eq!(rejected.status, 400);
+        let message = String::from_utf8(rejected.body).unwrap();
+        assert!(message.contains("128 bits"), "{message}");
+        assert!(message.contains("allow_short_seed"), "{message}");
     }
 
     #[test]
     fn create_endpoint_preserves_unset_ordering_seed_without_deterministic_mode() {
+        // The short legacy seed rides on the explicit allow_short_seed
+        // override; without it the boundary rejects seeds below 128 bits.
         let request = serde_json::json!({
             "network": "regtest",
             "inputs": [
                 { "txid": TXID, "vout": 7 },
             ],
             "seed_hex": "abcd",
+            "allow_short_seed": true,
         })
         .to_string();
 
@@ -1874,7 +1941,7 @@ mod tests {
         let constructor =
             concurrent_psbt::roles::constructor::dynamic::Constructor::try_from_psbt(psbt).unwrap();
         let sorted =
-            crate::commands::sort::sort_psbt(constructor.into_inner(), Some(vec![0xab, 0xcd]))
+            crate::commands::sort::sort_psbt(constructor.into_inner(), Some(seed_bytes()), false)
                 .unwrap();
         crate::io::encode_psbt(&sorted)
     }
@@ -1889,7 +1956,7 @@ mod tests {
                 "--input",
                 &format!("{TXID}:7"),
                 "--seed",
-                "abcd",
+                SEED_HEX,
             ])
             .unwrap(),
         )
@@ -1912,7 +1979,7 @@ mod tests {
                     btc_value(amount_sats)
                 ),
                 "--seed",
-                "abcd",
+                SEED_HEX,
             ])
             .unwrap(),
         )
@@ -1937,6 +2004,7 @@ mod tests {
             outputs: vec![],
             ordering: crate::cli::OrderingArg::Unset,
             seed: None,
+            allow_short_seed: false,
             network: crate::cli::NetworkArg(bitcoin::Network::Regtest),
         })
         .expect("empty create");
@@ -2223,6 +2291,7 @@ mod tests {
             outputs: vec![],
             ordering: crate::cli::OrderingArg::Unset,
             seed: None,
+            allow_short_seed: false,
             network: crate::cli::NetworkArg(bitcoin::Network::Regtest),
         })
         .expect("empty create");
