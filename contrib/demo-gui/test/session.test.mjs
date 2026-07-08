@@ -29,6 +29,11 @@ const INSPECT = {
   output_count: 2,
   sort: { mode: "deterministic", seed_hex: "abcd" },
   unordered_unique_id_hex: "11".repeat(32),
+  modifiability: { flags: 3, inputs: true, outputs: true },
+  outputs: [
+    { amount_sats: 100000, script_pubkey_hex: "0014" + "22".repeat(20), unique_id_hex: "33".repeat(32) },
+    { amount_sats: 50000, script_pubkey_hex: "0014" + "44".repeat(20), unique_id_hex: null },
+  ],
   totals: { known_input_sats: 200000, output_sats: 150000, fee_sats_if_inputs_known: 50000 },
 };
 
@@ -125,17 +130,26 @@ test("fragmentSummary projects inspect JSON defensively", () => {
   assert.equal(summary.knownInputSats, 200000);
   assert.equal(summary.outputSats, 150000);
   assert.equal(summary.feeSats, 50000);
+  assert.equal(summary.modifiableInputs, true);
+  assert.equal(summary.modifiableOutputs, true);
+  // One of the two outputs carries a unique id (the second's is null).
+  assert.equal(summary.outputUidPresent, 1);
 
   const empty = fragmentSummary(null);
   assert.equal(empty.format, null);
   assert.equal(empty.uniqueIdHex, null);
   assert.equal(empty.feeSats, null);
+  assert.equal(empty.modifiableInputs, null);
+  assert.equal(empty.modifiableOutputs, null);
+  assert.equal(empty.outputUidPresent, null);
 
   // Wrong shapes degrade to null instead of throwing.
-  const mangled = fragmentSummary({ format: 7, sort: "nope", totals: [1, 2] });
+  const mangled = fragmentSummary({ format: 7, sort: "nope", totals: [1, 2], modifiability: 3, outputs: "x" });
   assert.equal(mangled.format, null);
   assert.equal(mangled.sortMode, null);
   assert.equal(mangled.knownInputSats, null);
+  assert.equal(mangled.modifiableInputs, null);
+  assert.equal(mangled.outputUidPresent, null);
 });
 
 test("fragmentLabel renders decoded and undecoded fragments", () => {

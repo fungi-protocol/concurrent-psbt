@@ -66,21 +66,32 @@ export function selectedFragments(state) {
 // Inspect views: defensive projections of `ptj inspect` JSON (an open object
 // on the seam) into what the fragment list and negotiation panel display.
 // ---------------------------------------------------------------------------
-function asObject(value) {
+// Exported: the sibling presenter modules (display/editor/wiring) project the
+// same open inspect JSON and must share ONE set of defensive readers instead
+// of each reinventing subtly different ones.
+export function asObject(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value)
         ? value
         : null;
 }
-function asString(value) {
+export function asString(value) {
     return typeof value === "string" ? value : null;
 }
-function asNumber(value) {
+export function asNumber(value) {
     return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+export function asBoolean(value) {
+    return typeof value === "boolean" ? value : null;
+}
+export function asArray(value) {
+    return Array.isArray(value) ? value : null;
 }
 export function fragmentSummary(inspect) {
     const root = asObject(inspect);
     const sort = asObject(root?.sort);
     const totals = asObject(root?.totals);
+    const modifiability = asObject(root?.modifiability);
+    const outputs = asArray(root?.outputs);
     return {
         format: asString(root?.format),
         ordering: asString(root?.ordering),
@@ -92,6 +103,11 @@ export function fragmentSummary(inspect) {
         knownInputSats: asNumber(totals?.known_input_sats),
         outputSats: asNumber(totals?.output_sats),
         feeSats: asNumber(totals?.fee_sats_if_inputs_known),
+        modifiableInputs: asBoolean(modifiability?.inputs),
+        modifiableOutputs: asBoolean(modifiability?.outputs),
+        outputUidPresent: outputs === null
+            ? null
+            : outputs.filter((output) => asString(asObject(output)?.unique_id_hex) !== null).length,
     };
 }
 export function fragmentLabel(fragment) {
