@@ -423,20 +423,26 @@ export function feeLine(summary: FragmentSummary): FeeLine {
 // line on the output side, the fee-rate signal).
 // ---------------------------------------------------------------------------
 
-// Seam readers: a parallel inspect extension adds declared-fee and size
-// data. Consume the fields when present, return null otherwise — the shell
-// renders an honest "n/a" for null instead of inventing a number.
+// Seam readers: the inspect extension (ptj commands/inspect.rs) emits
+// declared-fee and size data. Consume the fields when present, return null
+// otherwise — the shell renders an honest "n/a" for null instead of
+// inventing a number.
 //   totals.declared_fee_sats — the summed PSBT_GLOBAL_EXPLICIT_FEE_-
-//     CONTRIBUTION records (fee.rs total_declared_fee);
-//   totals.size_estimate — estimated vbytes (accepted as a bare number or
-//     an object carrying a vbytes field; top-level size_estimate too).
+//     CONTRIBUTION records (fee.rs total_declared_fee); null when none
+//     decode (totals.declared_fee_undecoded_count reports how many entries
+//     the total could not count);
+//   totals.size — the whole-transaction size_totals object; its `vbytes`
+//     (= ceil(weight / 4)) is the estimate consumed here. The earlier
+//     guessed carriers stay tolerated: totals.size_estimate or top-level
+//     size_estimate, as a bare number or an object carrying a vbytes field.
 export function declaredFeeSatsFromInspect(inspect: InspectResponse | null): number | null {
   return asNumber(asObject(asObject(inspect)?.totals)?.declared_fee_sats);
 }
 
 export function sizeEstimateVbytesFromInspect(inspect: InspectResponse | null): number | null {
   const root = asObject(inspect);
-  for (const carrier of [asObject(root?.totals)?.size_estimate, root?.size_estimate]) {
+  const totals = asObject(root?.totals);
+  for (const carrier of [totals?.size, totals?.size_estimate, root?.size_estimate]) {
     const vbytes = asNumber(carrier) ?? asNumber(asObject(carrier)?.vbytes);
     if (vbytes !== null) return vbytes;
   }
