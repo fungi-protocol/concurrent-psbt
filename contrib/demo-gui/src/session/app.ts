@@ -206,21 +206,22 @@ function displayNetwork(): Network {
 // fingerprints so humans compare at a glance; the full bitvomit stays one
 // click away (hover title, raw view, field editor).
 //
-// TODO(lifehash-route): fingerprints come from a SERVER route —
-// GET /api/lifehash/<hex-digest> -> PNG, cacheable (queued backend-side on
-// the `lifehash` Rust crate; a concurrent-psbt-wasm export follows later for
-// the PWA). The frontend stays trivial: an <img> per fingerprint. Until the
-// route exists the image errors and swaps to a clearly marked placeholder
-// chip carrying the truncated hex — graceful, never blocking.
+// Fingerprints come from the server route GET /api/lifehash/<hex-digest> ->
+// PNG (image/png, cacheable; the `lifehash` Rust crate backend-side — a
+// concurrent-psbt-wasm export follows later for the PWA). The frontend
+// stays trivial: a plain lazy-loaded <img> per fingerprint. If a fetch
+// fails (a shell without the route, a digest the route rejects), the image
+// swaps to a clearly marked placeholder chip carrying the truncated hex —
+// graceful, never blocking.
 
 const LIFEHASH_ROUTE = "/api/lifehash/";
-// Hexes whose fetch already failed: skip re-requesting on every render until
-// the route lands (a reload retries).
+// Hexes whose fetch already failed: skip re-requesting on every render (a
+// reload retries).
 const lifehashFailed = new Set<string>();
 
 function lifehashPlaceholder(hex: string, title: string): HTMLElement {
   const chip = span("session-fingerprint-pending", hex.slice(0, 8));
-  chip.title = `${title}\n${hex}\n(LifeHash pending — needs backend: GET /api/lifehash/<hex> PNG route)`;
+  chip.title = `${title}\n${hex}\n(LifeHash fingerprint unavailable — GET /api/lifehash/<hex> did not serve a PNG)`;
   return chip;
 }
 
@@ -242,6 +243,8 @@ function lifehashBadge(hex: string, title: string): HTMLElement {
   img.className = "session-lifehash";
   img.alt = `fingerprint ${hex.slice(0, 8)}`;
   img.title = `${title}\n${hex}`;
+  // Cards render in bulk; fingerprints load as they scroll into view.
+  img.loading = "lazy";
   img.src = `${LIFEHASH_ROUTE}${hex}`;
   img.addEventListener(
     "error",

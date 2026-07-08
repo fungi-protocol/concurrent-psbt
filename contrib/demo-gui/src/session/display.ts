@@ -24,8 +24,9 @@
 // unattributed.
 //
 // Digest-like values (txids, unique ids, scripts) are NOT shown as hex on
-// the card: the shell renders them as LifeHash fingerprints (./lifehash.ts)
-// with full bitvomit on expand — this module exposes the digest strings.
+// the card: the shell renders them as LifeHash fingerprints (lazy <img>s on
+// GET /api/lifehash/<hex>, see lifehashBadge in ./app.ts) with full
+// bitvomit on expand — this module exposes the digest strings.
 
 import type { InspectResponse } from "../shared-frontend/core/backend.js";
 import { formatSatAmount } from "../model.js";
