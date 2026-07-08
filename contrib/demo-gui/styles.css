@@ -2003,6 +2003,77 @@ h2 {
   padding-top: 6px;
 }
 
+/* Balance report footer: per-group subtotals and whole-transaction totals
+   at the BOTTOM of the input/output columns under a sum line (the demo's
+   drawSectionSubtotal placement). Deficits are RED — the color sits on the
+   row and every amount part inherits it (the ead6ca05 rule); everything
+   else keeps the normal text color. */
+.session-balance {
+  display: grid;
+  gap: 3px;
+  margin-top: 2px;
+}
+
+.session-balance-sumline {
+  height: 0;
+  border-top: 1px solid rgba(101, 113, 122, 0.38);
+}
+
+.session-balance-whole > .session-balance-sumline {
+  border-top-color: rgba(29, 35, 41, 0.62);
+}
+
+.session-balance-whole > .session-balance-sumline.session-balance-deltaline {
+  border-top-width: 1px;
+  border-top-color: rgba(101, 113, 122, 0.3);
+}
+
+.session-balance-whole > .session-balance-sumline.session-balance-deltaline-deficit {
+  border-top-color: rgba(179, 38, 30, 0.45);
+}
+
+.session-balance-row {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  font-size: 13px;
+}
+
+.session-balance-cell {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.session-balance-cell .session-amount {
+  margin-left: 0;
+}
+
+.session-balance-cell-output {
+  margin-left: auto;
+}
+
+.session-balance-label {
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.session-balance-label-muted {
+  color: var(--muted);
+}
+
+.session-balance-deficit {
+  color: var(--red);
+}
+
+.session-balance-na {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 12px;
+  cursor: help;
+}
+
 .session-elided {
   font-size: 12px;
 }
