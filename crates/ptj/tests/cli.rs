@@ -726,6 +726,147 @@ fn inspect_reports_declared_fee_totals() {
 }
 
 #[test]
+fn inspect_reports_size_estimates_by_script_kind() {
+    let temp = tempfile::tempdir().unwrap();
+
+    // No UTXO data at all: the 68 vB default-input fallback. The created
+    // p2wpkh output is exact (its bytes are fully known); totals add the
+    // fixed transaction bytes (version + locktime + count compact sizes,
+    // ×4 WU) plus the 2 WU segwit marker the assumed witness implies.
+    let unknown = write_psbt(temp.path(), "unknown.psbt", create_psbt(TXID, 7, 1, 123_456));
+    let inspected = inspect_json(&unknown);
+    let input_size = &inspected["inputs"][0]["size"];
+    assert_eq!(input_size["weight"], 272);
+    assert_eq!(input_size["vbytes"], 68);
+    assert_eq!(input_size["exact"], false);
+    assert_eq!(input_size["basis"], "fallback");
+    let output_size = &inspected["outputs"][0]["size"];
+    assert_eq!(output_size["weight"], 124);
+    assert_eq!(output_size["vbytes"], 31);
+    assert_eq!(output_size["exact"], true);
+    assert_eq!(output_size["basis"], "script_pubkey");
+    let totals = &inspected["totals"]["size"];
+    assert_eq!(totals["input_weight"], 272);
+    assert_eq!(totals["output_weight"], 124);
+    assert_eq!(totals["overhead_weight"], 42);
+    assert_eq!(totals["weight"], 438);
+    assert_eq!(totals["vbytes"], 110);
+    assert_eq!(totals["exact"], false);
+
+    // A witness UTXO pins the script kind: p2wpkh.
+    let mut p2wpkh = create_psbt(TXID, 7, 1, 123_456);
+    let mut p2wpkh_spk = vec![0x00, 0x14];
+    p2wpkh_spk.extend([7u8; 20]);
+    p2wpkh.inputs[0].witness_utxo = Some(bitcoin::TxOut {
+        value: bitcoin::Amount::from_sat(200_000),
+        script_pubkey: bitcoin::ScriptBuf::from_bytes(p2wpkh_spk),
+    });
+    let p2wpkh = write_psbt(temp.path(), "p2wpkh.psbt", p2wpkh);
+    let input_size = &inspect_json(&p2wpkh)["inputs"][0]["size"];
+    assert_eq!(input_size["weight"], 272);
+    assert_eq!(input_size["basis"], "p2wpkh");
+    assert_eq!(input_size["exact"], false);
+
+    // Taproot with no leaf scripts: the key-spend estimate.
+    let mut p2tr = create_psbt(TXID, 7, 1, 123_456);
+    let mut p2tr_spk = vec![0x51, 0x20];
+    p2tr_spk.extend([0xabu8; 32]);
+    p2tr.inputs[0].witness_utxo = Some(bitcoin::TxOut {
+        value: bitcoin::Amount::from_sat(200_000),
+        script_pubkey: bitcoin::ScriptBuf::from_bytes(p2tr_spk.clone()),
+    });
+    let key_spend = write_psbt(temp.path(), "p2tr-key.psbt", p2tr.clone());
+    let input_size = &inspect_json(&key_spend)["inputs"][0]["size"];
+    assert_eq!(input_size["weight"], 230);
+    assert_eq!(input_size["vbytes"], 58);
+    assert_eq!(input_size["basis"], "p2tr_key_spend");
+
+    // Taproot with a leaf script attached may spend via the script path:
+    // floor the estimate at the 68 vB default instead of the smaller
+    // key-spend figure.
+    let secp = bitcoin::secp256k1::Secp256k1::new();
+    let keypair = bitcoin::secp256k1::Keypair::from_secret_key(
+        &secp,
+        &bitcoin::secp256k1::SecretKey::from_slice(&[5u8; 32]).unwrap(),
+    );
+    let (internal_key, _parity) = keypair.x_only_public_key();
+    let mut control = vec![0xc0];
+    control.extend(internal_key.serialize());
+    p2tr.inputs[0].tap_scripts.insert(
+        bitcoin::taproot::ControlBlock::decode(&control).unwrap(),
+        (
+            bitcoin::ScriptBuf::new(),
+            bitcoin::taproot::LeafVersion::TapScript,
+        ),
+    );
+    let script_path = write_psbt(temp.path(), "p2tr-script.psbt", p2tr);
+    let input_size = &inspect_json(&script_path)["inputs"][0]["size"];
+    assert_eq!(input_size["weight"], 272);
+    assert_eq!(input_size["basis"], "p2tr_script_path_floor");
+
+    // Legacy p2pkh, resolved through the non-witness UTXO's spent output.
+    let mut p2pkh = create_psbt(TXID, 0, 1, 123_456);
+    let mut p2pkh_spk = vec![0x76, 0xa9, 0x14];
+    p2pkh_spk.extend([9u8; 20]);
+    p2pkh_spk.extend([0x88, 0xac]);
+    p2pkh.inputs[0].non_witness_utxo = Some(bitcoin::Transaction {
+        version: bitcoin::transaction::Version::TWO,
+        lock_time: bitcoin::absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(200_000),
+            script_pubkey: bitcoin::ScriptBuf::from_bytes(p2pkh_spk),
+        }],
+    });
+    let p2pkh = write_psbt(temp.path(), "p2pkh.psbt", p2pkh);
+    let input_size = &inspect_json(&p2pkh)["inputs"][0]["size"];
+    assert_eq!(input_size["weight"], 592);
+    assert_eq!(input_size["vbytes"], 148);
+    assert_eq!(input_size["basis"], "p2pkh");
+}
+
+#[test]
+fn inspect_size_estimates_are_exact_with_final_scripts() {
+    let temp = tempfile::tempdir().unwrap();
+
+    // Segwit-final: empty scriptSig, measured witness (1 count byte + a
+    // 71-byte signature push + a 33-byte pubkey push = 107 WU) — the input
+    // and the whole-transaction totals turn exact.
+    let mut finalized = create_psbt(TXID, 7, 1, 123_456);
+    finalized.inputs[0].final_script_witness = Some(bitcoin::Witness::from_slice(&[
+        vec![0u8; 71],
+        vec![1u8; 33],
+    ]));
+    let finalized = write_psbt(temp.path(), "final-segwit.psbt", finalized);
+    let inspected = inspect_json(&finalized);
+    let input_size = &inspected["inputs"][0]["size"];
+    assert_eq!(input_size["weight"], 271);
+    assert_eq!(input_size["vbytes"], 68);
+    assert_eq!(input_size["exact"], true);
+    assert_eq!(input_size["basis"], "final_scripts");
+    let totals = &inspected["totals"]["size"];
+    assert_eq!(totals["overhead_weight"], 42);
+    assert_eq!(totals["weight"], 437);
+    assert_eq!(totals["exact"], true);
+
+    // Legacy-final: measured scriptSig, no witness — the segwit marker
+    // drops out of the overhead and everything stays exact.
+    let mut legacy = create_psbt(TXID, 7, 1, 123_456);
+    legacy.inputs[0].final_script_sig = Some(bitcoin::ScriptBuf::from_bytes(vec![0u8; 107]));
+    let legacy = write_psbt(temp.path(), "final-legacy.psbt", legacy);
+    let inspected = inspect_json(&legacy);
+    let input_size = &inspected["inputs"][0]["size"];
+    assert_eq!(input_size["weight"], 592);
+    assert_eq!(input_size["vbytes"], 148);
+    assert_eq!(input_size["exact"], true);
+    let totals = &inspected["totals"]["size"];
+    assert_eq!(totals["overhead_weight"], 40);
+    assert_eq!(totals["weight"], 756);
+    assert_eq!(totals["vbytes"], 189);
+    assert_eq!(totals["exact"], true);
+}
+
+#[test]
 fn join_is_idempotent_on_real_psbt_files() {
     let temp = tempfile::tempdir().unwrap();
     let a = write_psbt(temp.path(), "a.psbt", create_psbt(TXID, 0, 1, 50_000));
