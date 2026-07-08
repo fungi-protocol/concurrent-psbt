@@ -1397,6 +1397,50 @@ mod tests {
     }
 
     #[test]
+    fn inspect_endpoint_exposes_raw_keymap_entries() {
+        let request = serde_json::json!({ "psbt": encoded_psbt() }).to_string();
+
+        let response = response_for("POST", "/api/inspect", request.as_bytes());
+
+        assert_eq!(response.status, 200);
+        let inspected: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let raw = &inspected["raw"];
+        assert!(raw["global"].as_array().unwrap().len() >= 4, "{raw}");
+        assert_eq!(raw["inputs"].as_array().unwrap().len(), 1);
+        assert_eq!(raw["outputs"].as_array().unwrap().len(), 1);
+
+        // Every entry carries the raw handle plus its classification.
+        for entry in raw["global"].as_array().unwrap() {
+            assert!(entry["key_hex"].is_string(), "{entry}");
+            assert!(entry["value_hex"].is_string(), "{entry}");
+            assert!(entry["key_type"].is_u64(), "{entry}");
+            assert!(
+                matches!(
+                    entry["kind"].as_str(),
+                    Some("known" | "unknown" | "proprietary")
+                ),
+                "{entry}"
+            );
+        }
+
+        // The fixture's output unique id is a proprietary entry with the
+        // BIP 174 envelope broken out.
+        let output_entries = raw["outputs"][0].as_array().unwrap();
+        let proprietary = output_entries
+            .iter()
+            .find(|entry| entry["kind"] == "proprietary")
+            .expect("output unique id must appear as a proprietary raw entry");
+        assert_eq!(proprietary["key_type"], 0xFC);
+        assert!(proprietary["proprietary"]["prefix_hex"].is_string());
+
+        // Typed fields appear as `known` raw entries (e.g. the output amount).
+        assert!(
+            output_entries.iter().any(|entry| entry["kind"] == "known"),
+            "{output_entries:?}"
+        );
+    }
+
+    #[test]
     fn response_for_preserves_static_asset_http_behavior() {
         // "/" is the REAL session UI; the demo sandbox is explicit at /demo
         // (and its historical /index.html name).
