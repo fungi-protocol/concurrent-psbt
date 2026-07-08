@@ -14,6 +14,11 @@ mod rawmap;
 mod transport;
 
 pub use error::{Error, Result};
+// The plugin HOST is public API: the fake-plugin loopback integration test
+// (tests/plugin_host.rs) — and eventually embedders wiring their own plugin
+// binaries — construct it directly, not only via `--transport plugin`.
+#[cfg(feature = "plugin-transports")]
+pub use transport::plugin::PluginTransport;
 
 pub fn run(cli: cli::Cli) -> Result<String> {
     commands::run(cli.command)

@@ -1,0 +1,33 @@
+{
+  "name": "Partial Transaction Joiner",
+  "short_name": "ptj",
+  "description": "No-backend, offline-first PSBT joiner. Local sneakernet plus opt-in nostr/WebRTC transports. No server sees your transaction.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "id": "/ptj-pwa/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1115",
+  "theme_color": "#0f1115",
+  "categories": ["finance", "utilities"],
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

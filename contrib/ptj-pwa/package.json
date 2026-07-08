@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "type": "module",
+  "name": "ptj-pwa",
+  "description": "No-backend, offline-first PWA shell for ptj. WasmBackend + opt-in browser transports.",
+  "//": "Authoring-only scratch manifest. The integrated tree wires build scripts (wasm-bindgen + bundler) via the shared frontend build. See wasm-packaging.md for the cargo/wasm-bindgen/wasm-opt pipeline. No build is run by this component (authoring only)."
+}

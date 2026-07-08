@@ -639,6 +639,13 @@ fn sync_config_from_request(request: &serde_json::Value) -> Result<crate::cli::S
         webrtc_bind,
         ice_servers,
         signal_timeout_ms,
+        // Transport plugins are DELIBERATELY not reachable from the web API:
+        // `--plugin` names a binary to EXECUTE, and letting a browser request
+        // choose it would be remote code execution. Selecting a plugin is a
+        // CLI-user decision (see the security posture section of
+        // contrib/design/transport-plugins.md).
+        plugin: None,
+        plugin_config: Vec::new(),
         ongoing: false,
         poll_interval_ms: 1000,
         max_iterations: None,
