@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
+  amountSpanParts,
   cardGroups,
   elisionLabel,
   feeLine,
@@ -9,7 +11,9 @@ import {
   inputViews,
   outputViews,
   scriptTemplate,
+  signedAmountSpanParts,
 } from "../dist/session/display.js";
+import { formatSatAmount } from "../dist/model.js";
 import { fragmentSummary } from "../dist/session/state.js";
 import {
   addressChipDigestHex,
@@ -214,4 +218,87 @@ test("elisionLabel counts what the card hides", () => {
   assert.equal(elisionLabel(3, 10), "+7 more");
   assert.equal(elisionLabel(3, 3), null);
   assert.equal(elisionLabel(5, 2), null);
+});
+
+// --- amount emphasis (BIP 177 sat-first; the ead6ca05 convention) ----------
+
+const flatten = (parts) => parts.map((part) => `${part.part}:${part.text}`);
+
+test("amountSpanParts: zero is all scaffold", () => {
+  const parts = amountSpanParts(0);
+  assert.deepEqual(flatten(parts), ["symbol:₿", "scale:0.00000000"]);
+});
+
+test("amountSpanParts: sub-BTC keeps the leading zeros as scale scaffold", () => {
+  const parts = amountSpanParts(12_345);
+  assert.deepEqual(flatten(parts), ["symbol:₿", "scale:0.000", "digits:12345"]);
+});
+
+test("amountSpanParts: whole BTC digits are significant, separators kept", () => {
+  // 2,500 BTC + 12,345 sats: the whole-BTC digits are high-order sat digits
+  // (full emphasis); only the decimal point and zero run scaffold.
+  const parts = amountSpanParts(250_000_012_345);
+  assert.deepEqual(flatten(parts), [
+    "symbol:₿",
+    "digits:2,500",
+    "scale:.000",
+    "digits:12345",
+  ]);
+
+  // Exact whole BTC: the entire fraction is scaffold.
+  assert.deepEqual(flatten(amountSpanParts(100_000_000)), [
+    "symbol:₿",
+    "digits:1",
+    "scale:.00000000",
+  ]);
+});
+
+test("amountSpanParts: concatenation is the flat string with all 8 fraction digits", () => {
+  for (const sats of [0, 1, 549, 12_345, 99_999_999, 100_000_000, 250_000_012_345]) {
+    const joined = amountSpanParts(sats).map((part) => part.text).join("");
+    assert.equal(joined, formatSatAmount(sats));
+    const fraction = joined.split(".")[1];
+    assert.equal(fraction.length, 8, `8th-sat-digit position must hold for ${sats}`);
+  }
+});
+
+test("amountSpanParts: classes are the part names", () => {
+  for (const part of amountSpanParts(250_000_012_345)) {
+    assert.equal(part.className, `session-amount-${part.part}`);
+  }
+});
+
+test("signedAmountSpanParts: the sign is a significant digit", () => {
+  const negative = signedAmountSpanParts(-600);
+  assert.deepEqual(flatten(negative), ["digits:−", "symbol:₿", "scale:0.00000", "digits:600"]);
+  assert.deepEqual(signedAmountSpanParts(600), amountSpanParts(600));
+  assert.deepEqual(signedAmountSpanParts(0), amountSpanParts(0));
+});
+
+// The ead6ca05 regression, mirrored at the stylesheet level: the scaffold
+// parts dim by OPACITY and inherit the surrounding color — no session
+// amount rule may force a color (the old grey `.session-amount-muted` and
+// invented green `.session-amount-sats` classes must stay gone).
+test("styles.css: amount parts dim by opacity only and inherit color", () => {
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  const rule = (selector) => {
+    const match = css.match(new RegExp(`^\\${selector}\\s*\\{([^}]*)\\}`, "m"));
+    assert.ok(match, `expected a ${selector} rule`);
+    return match[1];
+  };
+  const scale = rule(".session-amount-scale");
+  const symbol = rule(".session-amount-symbol");
+  for (const [name, body] of [["scale", scale], ["symbol", symbol]]) {
+    assert.match(body, /opacity:/, `${name} dims by opacity`);
+    assert.doesNotMatch(body, /(?<!-)color:/, `${name} must inherit the surrounding color`);
+  }
+  // The ₿ symbol is less transparent than the scale scaffold.
+  const opacity = (body) => Number(body.match(/opacity:\s*([0-9.]+)/)[1]);
+  assert.ok(opacity(symbol) > opacity(scale), "symbol sits above the scaffold in emphasis");
+  assert.ok(opacity(symbol) < 1, "symbol stays dimmer than the significant digits");
+  // The retired forced-color classes must not come back.
+  assert.doesNotMatch(css, /\.session-amount-muted/);
+  assert.doesNotMatch(css, /\.session-amount-sats/);
+  // Significant digits carry no rule at all: full inheritance.
+  assert.doesNotMatch(css, /\.session-amount-digits\s*\{/);
 });
