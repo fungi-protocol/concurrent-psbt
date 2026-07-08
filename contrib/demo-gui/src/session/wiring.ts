@@ -16,8 +16,18 @@
 //                          transport                     (/api/sync, backed)
 //   payment  → fragment  = attach the payment record    (/api/pay, backed)
 //   utxo     → create    = use the outpoint as a create-form input (backed)
-//   session  ⋈ session   = merge converging states      (needs backend)
-//   peer     ⋈ peer      = standalone channel           (needs backend)
+//   session  ⋈ session   = MERGE: sessions are fragment-state carriers, so
+//                          the merge joins their fragment states (via the
+//                          join route) and UNIONS their peer connections —
+//                          peers of both see the combined session. Client-
+//                          orchestrated over the UI model + /api/join; a
+//                          future backend session-state seam would own the
+//                          server-side converging state.
+//   peer     ⋈ peer      = BRIDGE: the group renders as one peer and every
+//                          member receives every broadcast — equivalent to
+//                          wiring the session to each member. UI grouping;
+//                          broadcasts go through the existing per-member
+//                          sync where a transport is configured.
 //   descriptor → fragment = attribute matching scripts  (needs backend)
 //
 // Pairs with no backend seam yet stay VISIBLE but explicitly unwired
@@ -136,17 +146,35 @@ export interface DerivedScript {
   address: string | null;
 }
 
+// A peer-peer bridge edge (unordered pair of peer keys). The transitive
+// closure of these edges partitions peers into BRIDGE GROUPS (the demo's
+// peerBridgeComponents): a group renders as one peer, and broadcasts to any
+// member address every member.
+export interface PeerBridge {
+  a: string;
+  b: string;
+}
+
 export interface ObjectsState {
   sessions: SessionObject[];
   peers: PeerObject[];
   payments: PaymentObject[];
   utxos: UtxoObject[];
   descriptors: DescriptorObject[];
+  bridges: PeerBridge[];
   counter: number;
 }
 
 export function emptyObjects(): ObjectsState {
-  return { sessions: [], peers: [], payments: [], utxos: [], descriptors: [], counter: 0 };
+  return {
+    sessions: [],
+    peers: [],
+    payments: [],
+    utxos: [],
+    descriptors: [],
+    bridges: [],
+    counter: 0,
+  };
 }
 
 function nextKey(state: ObjectsState, prefix: string): { state: ObjectsState; key: string } {
@@ -424,6 +452,189 @@ export function dropFragmentKey(state: ObjectsState, fragmentKey: string): Objec
 }
 
 // ---------------------------------------------------------------------------
+// MINE, the pseudo-peer (Q6): the container of all SESSIONLESS local
+// fragments. Membership is DERIVED, never stored — a fragment lives in Mine
+// exactly when no session carries it — so loaded/created fragments default
+// there and wiring one into a session (publishing) moves it out with no
+// extra bookkeeping. Local-only workflows (join, sort, edit, atomize) act
+// on fragments wherever they live; Mine is where they happen before
+// anything is published.
+// ---------------------------------------------------------------------------
+
+export function fragmentSessionKeys(state: ObjectsState, fragmentKey: string): string[] {
+  return state.sessions
+    .filter((session) => session.fragmentKeys.includes(fragmentKey))
+    .map((session) => session.key);
+}
+
+export function mineFragmentKeys(
+  fragmentKeys: readonly string[],
+  state: ObjectsState,
+): string[] {
+  return fragmentKeys.filter(
+    (fragmentKey) =>
+      !state.sessions.some((session) => session.fragmentKeys.includes(fragmentKey)),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Session merge (session ⋈ session, per Q3): sessions are fragment-state
+// carriers, so merging means joining their fragment states AND unioning
+// their peer connections. This function is the UI-MODEL half: it mints the
+// merged session (fragment/peer unions, transport config carried over) and
+// retires the two sources; the shell orchestrates the fragment-state join
+// through the existing /api/join route. What it does NOT merge — any
+// server-side converging session state — is named in the notes so the shell
+// logs it honestly; a future backend session-state seam would own that.
+// ---------------------------------------------------------------------------
+
+export interface SessionMergeResult {
+  state: ObjectsState;
+  merged: SessionObject | null;
+  // Honest-logging notes: what the UI-model merge decided (transport
+  // conflicts, dropped identity material) and what it cannot do.
+  notes: string[];
+}
+
+export function mergeSessions(
+  state: ObjectsState,
+  leftKey: string,
+  rightKey: string,
+): SessionMergeResult {
+  const left = sessionByKey(state, leftKey);
+  const right = sessionByKey(state, rightKey);
+  if (!left || !right || left.key === right.key) {
+    return { state, merged: null, notes: [] };
+  }
+  const notes: string[] = [];
+  if (right.transport !== left.transport) {
+    notes.push(
+      `transport conflict: ${left.name} uses ${left.transport}, ${right.name} uses ` +
+        `${right.transport}; the merged session keeps ${left.transport}`,
+    );
+  }
+  if (left.irohTicket && right.irohTicket && left.irohTicket !== right.irohTicket) {
+    notes.push(
+      `both sessions carry an iroh ticket; the merged session keeps ${left.name}'s ` +
+        "(the other document is no longer addressed)",
+    );
+  }
+  notes.push(
+    "server-side session state (if any) is NOT merged — the UI-model merge joins " +
+      "fragment states via /api/join and unions peer connections; a backend " +
+      "session-state merge seam would own the converging state itself",
+  );
+  const next = nextKey(state, "session");
+  const merged: SessionObject = {
+    key: next.key,
+    name: `${left.name}+${right.name}`,
+    fragmentKeys: [
+      ...left.fragmentKeys,
+      ...right.fragmentKeys.filter((key) => !left.fragmentKeys.includes(key)),
+    ],
+    transport: left.transport,
+    irohTicket: left.irohTicket || right.irohTicket,
+    stateFile: left.stateFile || right.stateFile,
+    peerKeys: [...left.peerKeys, ...right.peerKeys.filter((key) => !left.peerKeys.includes(key))],
+  };
+  return {
+    state: {
+      ...next.state,
+      sessions: [
+        ...next.state.sessions.filter(
+          (session) => session.key !== left.key && session.key !== right.key,
+        ),
+        merged,
+      ],
+    },
+    merged,
+    notes,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Peer bridges (peer ⋈ peer, per Q3): a bridge renders the group as ONE
+// peer where every member receives every broadcast — equivalent to wiring
+// the session to each member. Pure UI grouping over grow-only bridge edges;
+// the shell broadcasts through the existing per-member sync where a member
+// has a configured transport.
+// ---------------------------------------------------------------------------
+
+function bridgePairKey(a: string, b: string): string {
+  return [a, b].sort().join("::");
+}
+
+export function addBridge(state: ObjectsState, aKey: string, bKey: string): ObjectsState {
+  if (aKey === bKey) return state;
+  const key = bridgePairKey(aKey, bKey);
+  if (state.bridges.some((bridge) => bridgePairKey(bridge.a, bridge.b) === key)) {
+    return state;
+  }
+  return { ...state, bridges: [...state.bridges, { a: aKey, b: bKey }] };
+}
+
+// Connected components over the bridge edges, in peer-list order (the
+// demo's peerBridgeComponents). Singleton groups are included: every peer
+// belongs to exactly one group.
+export function peerBridgeGroups(state: ObjectsState): string[][] {
+  const peerKeys = state.peers.map((peer) => peer.key);
+  const order = new Map(peerKeys.map((key, index) => [key, index]));
+  const adjacency = new Map<string, Set<string>>(peerKeys.map((key) => [key, new Set()]));
+  for (const bridge of state.bridges) {
+    if (!adjacency.has(bridge.a) || !adjacency.has(bridge.b)) continue;
+    adjacency.get(bridge.a)!.add(bridge.b);
+    adjacency.get(bridge.b)!.add(bridge.a);
+  }
+  const groups: string[][] = [];
+  const seen = new Set<string>();
+  for (const peerKey of peerKeys) {
+    if (seen.has(peerKey)) continue;
+    const stack = [peerKey];
+    const group: string[] = [];
+    while (stack.length) {
+      const current = stack.pop()!;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      group.push(current);
+      for (const next of adjacency.get(current)!) stack.push(next);
+    }
+    groups.push(group.sort((a, b) => Number(order.get(a)) - Number(order.get(b))));
+  }
+  return groups;
+}
+
+export function bridgeGroupContaining(state: ObjectsState, peerKey: string): string[] {
+  return peerBridgeGroups(state).find((group) => group.includes(peerKey)) ?? [peerKey];
+}
+
+// After a bridge lands, every session already wired to ANY member of the
+// group is wired to EVERY member (the Q3 equivalence: bridging = wiring the
+// session to each member). Idempotent.
+export function unionBridgedPeersIntoSessions(state: ObjectsState): ObjectsState {
+  const groups = peerBridgeGroups(state).filter((group) => group.length > 1);
+  if (!groups.length) return state;
+  return {
+    ...state,
+    sessions: state.sessions.map((session) => {
+      let peerKeys = session.peerKeys;
+      for (const group of groups) {
+        if (group.some((peerKey) => peerKeys.includes(peerKey))) {
+          peerKeys = [...peerKeys, ...group.filter((peerKey) => !peerKeys.includes(peerKey))];
+        }
+      }
+      return peerKeys === session.peerKeys ? session : { ...session, peerKeys };
+    }),
+  };
+}
+
+// A member with a transport /api/sync can drive today. Members without one
+// (nostr, unconfigured) stay visible in the group; broadcasts to them are
+// reported pending-backend by the shell.
+export function peerUsableForSync(peer: PeerObject): boolean {
+  return peer.transport !== "nostr" && peer.transport !== "unknown" && peer.identity !== "";
+}
+
+// ---------------------------------------------------------------------------
 // Join admissibility: the verdict for wiring `source` into `target`. This
 // table IS the enablement rule set for the wire gesture — the shell's only
 // job is to render it (highlight admissible targets, name why others are
@@ -437,7 +648,7 @@ export type WireKind =
   | "attach-payment"
   | "add-create-input"
   | "session-merge"
-  | "peer-channel"
+  | "peer-bridge"
   | "attribute-scripts"
   | "none";
 
@@ -452,6 +663,12 @@ export interface WireVerdict {
   // Precise missing-seam description for !backed pairs (these are the
   // backend tasks the wiring model is waiting on).
   needs: string | null;
+  // Human-readable ACTION label ("Join psbt-1 into psbt-2", "Publish psbt-1
+  // to session lunch") for every DEFINED pair — the demo's wire-tooltip
+  // vocabulary. null only when no join is defined at all (kind "none").
+  // The label serves both the tap path (target titles, status bar) and any
+  // future drag path (a live ribbon shows the same string).
+  label: string | null;
 }
 
 function verdict(
@@ -460,38 +677,119 @@ function verdict(
   backed: boolean,
   reason: string | null = null,
   needs: string | null = null,
+  label: string | null = null,
 ): WireVerdict {
-  return { kind, allowed, backed, reason, needs };
+  return { kind, allowed, backed, reason, needs, label };
 }
 
 function unordered(a: NodeKind, b: NodeKind, x: NodeKind, y: NodeKind): boolean {
   return (a === x && b === y) || (a === y && b === x);
 }
 
+// Display name for a node in wire action labels: sessions and peers carry
+// human names, payments a user label; fragments (and everything else) go by
+// their key, which is already the visible card title.
+export function nodeDisplayName(ref: NodeRef, state: ObjectsState): string {
+  switch (ref.kind) {
+    case "session":
+      return sessionByKey(state, ref.key)?.name ?? ref.key;
+    case "peer":
+      return peerByKey(state, ref.key)?.name ?? ref.key;
+    case "payment": {
+      const payment = state.payments.find((candidate) => candidate.key === ref.key);
+      return payment && payment.label ? payment.label : ref.key;
+    }
+    default:
+      return ref.key;
+  }
+}
+
+// Three-way target vocabulary (the demo's halo colors, ported to cards):
+//   compatible — wire executes now (green outline);
+//   blocked    — the pair is defined and backed, but a rule refuses it right
+//                now (red-tinted outline + the reason);
+//   unbacked   — no join is defined, or the seam that would implement it
+//                does not exist yet (dimmed + reason/needs).
+export type WireDisposition = "compatible" | "blocked" | "unbacked";
+
+export function wireDisposition(v: WireVerdict): WireDisposition {
+  if (v.allowed && v.backed) return "compatible";
+  if (v.backed) return "blocked";
+  return "unbacked";
+}
+
 export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsState): WireVerdict {
   const a = source.kind;
   const b = target.kind;
+  const sourceName = nodeDisplayName(source, state);
+  const targetName = nodeDisplayName(target, state);
   if (a === b && source.key === target.key) {
     return verdict("none", false, false, `cannot wire a ${a} to itself`);
   }
 
   if (a === "fragment" && b === "fragment") {
-    return verdict("fragment-join", true, true);
+    const label = `Join ${sourceName} into ${targetName}`;
+    return verdict("fragment-join", true, true, null, null, label);
   }
 
   if (unordered(a, b, "fragment", "session")) {
     const sessionKey = a === "session" ? source.key : target.key;
     const fragmentKey = a === "fragment" ? source.key : target.key;
     const session = sessionByKey(state, sessionKey);
+    const label = `Publish ${fragmentKey} to session ${
+      a === "session" ? sourceName : targetName
+    }`;
     if (session && session.fragmentKeys.includes(fragmentKey)) {
-      return verdict("fragment-into-session", false, true, "fragment is already in the session");
+      return verdict(
+        "fragment-into-session",
+        false,
+        true,
+        "fragment is already in the session",
+        null,
+        label,
+      );
     }
-    return verdict("fragment-into-session", true, true);
+    return verdict("fragment-into-session", true, true, null, null, label);
   }
 
   if (unordered(a, b, "peer", "session")) {
     const peerKey = a === "peer" ? source.key : target.key;
     const peer = peerByKey(state, peerKey);
+    const sessionName = a === "session" ? sourceName : targetName;
+    const peerName = a === "peer" ? sourceName : targetName;
+    // A bridged peer stands for its whole group: the session is wired to
+    // each member, so the wire is admissible when ANY member can sync.
+    const group = bridgeGroupContaining(state, peerKey)
+      .map((memberKey) => peerByKey(state, memberKey))
+      .filter((member): member is PeerObject => member !== null);
+    const groupLabel =
+      group.length > 1
+        ? `bridge ${group.map((member) => member.name).join("+")}`
+        : `peer ${peerName}`;
+    const label = `Sync session ${sessionName} over ${groupLabel}`;
+    if (group.length > 1) {
+      if (group.some(peerUsableForSync)) {
+        return verdict("peer-into-session", true, true, null, null, label);
+      }
+      if (group.every((member) => member.transport === "nostr")) {
+        return verdict(
+          "peer-into-session",
+          false,
+          false,
+          null,
+          "a nostr transport behind /api/sync (npub peers cannot sync yet)",
+          label,
+        );
+      }
+      return verdict(
+        "peer-into-session",
+        false,
+        true,
+        "no bridged peer has a usable transport identity (configure a ticket or signaling files)",
+        null,
+        label,
+      );
+    }
     if (peer && peer.transport === "nostr") {
       // The nostr transport is not served by /api/sync yet; keep the pair
       // visible but honestly unwired.
@@ -501,6 +799,7 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
         false,
         null,
         "a nostr transport behind /api/sync (npub peers cannot sync yet)",
+        label,
       );
     }
     if (peer && (peer.transport === "unknown" || !peer.identity)) {
@@ -509,17 +808,29 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
         false,
         true,
         "peer has no usable transport identity (configure a ticket or signaling files)",
+        null,
+        label,
       );
     }
-    return verdict("peer-into-session", true, true);
+    return verdict("peer-into-session", true, true, null, null, label);
   }
 
   if (unordered(a, b, "payment", "fragment")) {
-    return verdict("attach-payment", true, true);
+    const paymentRef = a === "payment" ? source : target;
+    const fragmentKey = a === "fragment" ? source.key : target.key;
+    const label = `Attach payment ${nodeDisplayName(paymentRef, state)} to ${fragmentKey}`;
+    return verdict("attach-payment", true, true, null, null, label);
   }
 
   if (a === "utxo" && b === "create") {
-    return verdict("add-create-input", true, true);
+    return verdict(
+      "add-create-input",
+      true,
+      true,
+      null,
+      null,
+      `Use ${sourceName} as a create-form input`,
+    );
   }
   if (a === "utxo" || b === "utxo") {
     return verdict(
@@ -531,22 +842,42 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
   }
 
   if (a === "session" && b === "session") {
-    return verdict(
-      "session-merge",
-      false,
-      false,
-      null,
-      "a session-state merge seam (lattice join of two converging session states)",
-    );
+    // Client-orchestrated merge: joins the sessions' fragment states over
+    // the existing join route and unions their peer connections in the UI
+    // model. The server-side converging state (once it exists) stays with a
+    // future backend session-state seam — the shell logs that honestly.
+    const label = `Merge sessions ${sourceName} and ${targetName}`;
+    if (!sessionByKey(state, source.key) || !sessionByKey(state, target.key)) {
+      return verdict(
+        "session-merge",
+        false,
+        true,
+        "session no longer exists (it may have been merged already)",
+        null,
+        label,
+      );
+    }
+    return verdict("session-merge", true, true, null, null, label);
   }
 
   if (a === "peer" && b === "peer") {
+    if (bridgeGroupContaining(state, source.key).includes(target.key)) {
+      return verdict(
+        "peer-bridge",
+        false,
+        true,
+        "peers are already bridged",
+        null,
+        `Bridge peers ${sourceName}, ${targetName}`,
+      );
+    }
     return verdict(
-      "peer-channel",
-      false,
-      false,
+      "peer-bridge",
+      true,
+      true,
       null,
-      "a standalone peer-to-peer channel establishment seam",
+      null,
+      `Bridge peers ${sourceName}, ${targetName}`,
     );
   }
 
@@ -557,6 +888,7 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
       false,
       null,
       "descriptor derivation (Backend.classifyPaste) to match fragment scripts to the descriptor",
+      `Attribute ${sourceName} scripts to ${targetName}`,
     );
   }
 
@@ -568,6 +900,228 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
   }
 
   return verdict("none", false, false, `no join is defined for ${a} + ${b}`);
+}
+
+// ---------------------------------------------------------------------------
+// Pending-wire queue (the demo's join-select graph, ported): completing a
+// wire gesture QUEUES the edge instead of executing it, visualizing the
+// flexibility of the join operation. Each queued edge carries its own Join;
+// the toolbar Join applies whole connected components. Everything here is
+// pure — the shell holds the PendingWire[] and calls the backend.
+//
+// Divergence from the demo, deliberate: the session fragment set is
+// grow-only (joins ADD their result, sources stay), so instead of the
+// demo's successive pairwise LUBs with id remapping, a component's
+// fragment-join cluster executes as ONE n-ary /api/join call, and the
+// component's remaining wires run with consumed fragment endpoints remapped
+// to the cluster's result.
+// ---------------------------------------------------------------------------
+
+export interface PendingWire {
+  source: NodeRef;
+  target: NodeRef;
+}
+
+function nodeId(ref: NodeRef): string {
+  return `${ref.kind}:${ref.key}`;
+}
+
+// Direction-insensitive identity of a wire (the demo's joinWireKey).
+export function wireKey(a: NodeRef, b: NodeRef): string {
+  return [nodeId(a), nodeId(b)].sort().join("::");
+}
+
+export interface QueueWireResult {
+  wires: PendingWire[];
+  // The edge is newly queued (false for rejected verdicts AND duplicates).
+  queued: boolean;
+  // True when the pair was already in the queue.
+  duplicate: boolean;
+  // The verdict the queue decision was based on — the shell reports its
+  // label (queued) or reason/needs (rejected).
+  verdict: WireVerdict;
+}
+
+// Only compatible wires queue; blocked/unbacked verdicts come back for the
+// shell's rejection feedback. Duplicates (either direction) are no-ops.
+export function queueWire(
+  wires: PendingWire[],
+  source: NodeRef,
+  target: NodeRef,
+  state: ObjectsState,
+): QueueWireResult {
+  const v = wireVerdict(source, target, state);
+  if (wireDisposition(v) !== "compatible") {
+    return { wires, queued: false, duplicate: false, verdict: v };
+  }
+  const key = wireKey(source, target);
+  if (wires.some((wire) => wireKey(wire.source, wire.target) === key)) {
+    return { wires, queued: false, duplicate: true, verdict: v };
+  }
+  return { wires: [...wires, { source, target }], queued: true, duplicate: false, verdict: v };
+}
+
+export function unqueueWire(wires: PendingWire[], key: string): PendingWire[] {
+  return wires.filter((wire) => wireKey(wire.source, wire.target) !== key);
+}
+
+export function nodeExists(
+  ref: NodeRef,
+  state: ObjectsState,
+  fragmentKeys: readonly string[],
+): boolean {
+  switch (ref.kind) {
+    case "fragment":
+      return fragmentKeys.includes(ref.key);
+    case "session":
+      return sessionByKey(state, ref.key) !== null;
+    case "peer":
+      return peerByKey(state, ref.key) !== null;
+    case "payment":
+      return state.payments.some((payment) => payment.key === ref.key);
+    case "utxo":
+      return state.utxos.some((utxo) => utxo.key === ref.key);
+    case "descriptor":
+      return state.descriptors.some((descriptor) => descriptor.key === ref.key);
+    case "create":
+      return true;
+  }
+}
+
+// Re-validate the queue against current state (the demo's validJoinWires):
+// wires lose their place when an endpoint disappears or the pair's verdict
+// is no longer compatible (e.g. the fragment was published to the session
+// through another path).
+export function pruneWires(
+  wires: PendingWire[],
+  state: ObjectsState,
+  fragmentKeys: readonly string[],
+): PendingWire[] {
+  return wires.filter(
+    (wire) =>
+      nodeExists(wire.source, state, fragmentKeys) &&
+      nodeExists(wire.target, state, fragmentKeys) &&
+      wireDisposition(wireVerdict(wire.source, wire.target, state)) === "compatible",
+  );
+}
+
+export interface WireComponent {
+  // Distinct endpoints in first-seen queue order.
+  nodes: NodeRef[];
+  // The component's wires in queue order.
+  wires: PendingWire[];
+}
+
+// Connected components of the pending-wire graph (the demo's
+// joinComponents): the toolbar Join applies each component as a unit.
+export function wireComponents(wires: PendingWire[]): WireComponent[] {
+  const adjacency = new Map<string, Set<string>>();
+  const refs = new Map<string, NodeRef>();
+  for (const wire of wires) {
+    const a = nodeId(wire.source);
+    const b = nodeId(wire.target);
+    refs.set(a, wire.source);
+    refs.set(b, wire.target);
+    if (!adjacency.has(a)) adjacency.set(a, new Set());
+    if (!adjacency.has(b)) adjacency.set(b, new Set());
+    adjacency.get(a)!.add(b);
+    adjacency.get(b)!.add(a);
+  }
+  const components: WireComponent[] = [];
+  const seen = new Set<string>();
+  for (const startId of adjacency.keys()) {
+    if (seen.has(startId)) continue;
+    const stack = [startId];
+    const memberIds = new Set<string>();
+    while (stack.length) {
+      const current = stack.pop()!;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      memberIds.add(current);
+      for (const next of adjacency.get(current) ?? []) stack.push(next);
+    }
+    // First-seen order over the queue keeps the report deterministic.
+    const nodes: NodeRef[] = [];
+    for (const wire of wires) {
+      for (const ref of [wire.source, wire.target]) {
+        const id = nodeId(ref);
+        if (memberIds.has(id) && !nodes.some((candidate) => nodeId(candidate) === id)) {
+          nodes.push(ref);
+        }
+      }
+    }
+    components.push({
+      nodes,
+      wires: wires.filter(
+        (wire) => memberIds.has(nodeId(wire.source)) && memberIds.has(nodeId(wire.target)),
+      ),
+    });
+  }
+  return components;
+}
+
+export interface FragmentJoinGroup {
+  // Distinct fragment keys connected by fragment-join wires (>= 2): one
+  // n-ary /api/join call joins the whole group.
+  fragments: string[];
+  // The queued wires the group consumes when it joins.
+  wires: PendingWire[];
+}
+
+export interface ComponentPlan {
+  joinGroups: FragmentJoinGroup[];
+  // The component's non-fragment-join wires in queue order; the shell
+  // remaps fragment endpoints through the clusters' join results before
+  // executing each one.
+  rest: PendingWire[];
+}
+
+export function componentPlan(component: WireComponent): ComponentPlan {
+  const joinWires = component.wires.filter(
+    (wire) => wire.source.kind === "fragment" && wire.target.kind === "fragment",
+  );
+  const clusters = wireComponents(joinWires);
+  return {
+    joinGroups: clusters
+      .map((cluster) => ({
+        fragments: cluster.nodes.map((ref) => ref.key),
+        wires: cluster.wires,
+      }))
+      .filter((group) => group.fragments.length >= 2),
+    rest: component.wires.filter(
+      (wire) => !(wire.source.kind === "fragment" && wire.target.kind === "fragment"),
+    ),
+  };
+}
+
+// Follow a consumed endpoint to its result (the session-side analog of the
+// demo's remapNodeId): fragment clusters remap their members to the n-ary
+// join result, merged sessions remap both sources to the merged session.
+// Keys are kind-qualified ("fragment:psbt-1", "session:session-2") so the
+// two namespaces cannot collide.
+export function remapWireRef(ref: NodeRef, remap: ReadonlyMap<string, string>): NodeRef {
+  const mapped = remap.get(`${ref.kind}:${ref.key}`);
+  return mapped === undefined ? ref : { kind: ref.kind, key: mapped };
+}
+
+export interface WireQueueSummary {
+  wireCount: number;
+  componentCount: number;
+  text: string;
+}
+
+export function wireQueueSummary(wires: PendingWire[]): WireQueueSummary {
+  const wireCount = wires.length;
+  const componentCount = wireComponents(wires).length;
+  return {
+    wireCount,
+    componentCount,
+    text:
+      wireCount === 0
+        ? "no pending wires"
+        : `${wireCount} pending wire${wireCount === 1 ? "" : "s"} in ` +
+          `${componentCount} component${componentCount === 1 ? "" : "s"}`,
+  };
 }
 
 // ---------------------------------------------------------------------------

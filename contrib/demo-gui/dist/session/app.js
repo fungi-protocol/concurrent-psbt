@@ -23,7 +23,7 @@ import { seedFromRandomBytes } from "../model.js";
 import { addFragment, asArray, asObject, asString, buildConfirmArgs, buildCreateRequest, buildPayArgs, buildSyncRequest, bytesToBase64, emptySession, fragmentSummary, negotiationView, pastedPsbt, removeFragment, selectedFragments, setSelected, } from "./state.js";
 import { amountBits, amountSpanParts, elisionLabel, fragmentBadges, fragmentCardModel, signedAmountSpanParts, } from "./display.js";
 import { classifyPaste, mintFromPaste } from "./ingest.js";
-import { actionState, addFragmentToSession, addPeerToSession, applyTxOutputs, beginWire, completeWire, dropFragmentKey, emptyObjects, enrichDescriptor, enrichPayment, idleWire, mintSession, overviewFocus, peerByKey, sessionByKey, sessionFocus, validateFocus, wireVerdict, } from "./wiring.js";
+import { actionState, addBridge, addFragmentToSession, addPeerToSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, enrichPayment, idleWire, mergeSessions, mineFragmentKeys, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, sessionByKey, sessionFocus, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
 import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, validateEditor, violationsFromServer, } from "./editor.js";
 import { descriptorColorKey, groupColorKey, paletteColor, paletteRegistry, peerColorKey, } from "./palette.js";
 const backend = new HttpBackend();
@@ -32,6 +32,11 @@ let session = emptySession();
 let objects = emptyObjects();
 let focus = overviewFocus();
 let wire = idleWire();
+// The pending-wire queue: completed wire gestures accumulate here as
+// visible edges (each with its own Join) instead of executing immediately;
+// the toolbar Join applies whole connected components. Pruned against the
+// live object graph on every render.
+let pendingWires = [];
 let editor = null;
 // Server-side fixes queued for the next editor save (violation fix_ids the
 // user accepted) and gate overrides armed for it (violation override_params).
@@ -314,6 +319,20 @@ function renderOps() {
 function nodeName(ref) {
     return `${ref.kind} ${ref.key}`;
 }
+// Transient rejection feedback (the demo's red failure pulse, card-shaped):
+// tapping a blocked/unbacked target pulses the card and pins the reason chip
+// to it for a moment; the status bar carries the same text persistently.
+let wireRejection = null;
+function flashWireRejection(ref, text) {
+    const rejection = { ref, text };
+    wireRejection = rejection;
+    window.setTimeout(() => {
+        if (wireRejection === rejection) {
+            wireRejection = null;
+            render();
+        }
+    }, 1800);
+}
 function startWire(kind, key) {
     wire = beginWire(kind, key);
     showStatus("", false);
@@ -323,30 +342,57 @@ function cancelWire() {
     wire = idleWire();
     render();
 }
+// Completing a wire gesture QUEUES the edge (compatible verdicts) or
+// reports why it cannot wire (blocked/unbacked) — nothing executes on tap.
 function wireTo(target) {
+    const source = wire.source;
     const done = completeWire(wire, target, objects);
     wire = done.gesture;
-    if (!done.verdict) {
+    if (!done.verdict || !source) {
         render();
         return;
     }
-    void performWire(done.verdict, target);
-}
-async function performWire(v, target) {
-    const source = wireSource;
-    wireSource = null;
-    if (!source) {
-        render();
-        return;
-    }
-    if (!v.allowed) {
-        const text = v.backed
-            ? `cannot wire ${nodeName(source)} → ${nodeName(target)}: ${v.reason}`
-            : `${nodeName(source)} → ${nodeName(target)} is not wired yet — needs backend: ${v.needs}`;
+    const v = done.verdict;
+    if (wireDisposition(v) !== "compatible") {
+        const action = v.label ?? `${nodeName(source)} → ${nodeName(target)}`;
+        const text = wireDisposition(v) === "blocked"
+            ? `${action} — blocked: ${v.reason}`
+            : v.needs
+                ? `${action} is not wired yet — needs backend: ${v.needs}`
+                : `${action}: ${v.reason ?? "no join is defined"}`;
         showStatus(text, true);
         logEvent(text);
+        flashWireRejection(target, v.reason ?? v.needs ?? "not wireable");
         render();
         return;
+    }
+    const queued = queueWire(pendingWires, source, target, objects);
+    pendingWires = queued.wires;
+    if (queued.queued) {
+        logEvent(`queued: ${v.label ?? `${nodeName(source)} ⋈ ${nodeName(target)}`} — ` +
+            "Join on the wire applies it alone; the toolbar Join applies whole components");
+        showStatus("", false);
+    }
+    else if (queued.duplicate) {
+        showStatus(`${v.label ?? "that wire"} is already queued`, false);
+    }
+    render();
+}
+// Execute ONE wire now (per-edge Join, or a component's non-join edge).
+// The verdict is recomputed at execution time — queued wires can go stale —
+// and a failure pulses the target card. Returns whether the wire applied.
+// When the toolbar Join passes a remap, wires that consume nodes (session
+// merges) record their result there so later wires in the same component
+// follow the consumed endpoints.
+async function executeWire(source, target, remaps) {
+    const v = wireVerdict(source, target, objects);
+    if (wireDisposition(v) !== "compatible") {
+        const text = `${v.label ?? `${nodeName(source)} → ${nodeName(target)}`} is no longer applicable: ` +
+            `${v.reason ?? v.needs ?? "the verdict changed"}`;
+        showStatus(text, true);
+        logEvent(text);
+        flashWireRejection(target, v.reason ?? v.needs ?? "no longer applicable");
+        return false;
     }
     try {
         switch (v.kind) {
@@ -354,7 +400,7 @@ async function performWire(v, target) {
                 const left = fragmentByKey(source.key);
                 const right = fragmentByKey(target.key);
                 if (!left || !right)
-                    break;
+                    return false;
                 const joined = await addResponse(await backend.joinPsbts([left.psbt, right.psbt]), "join", `⊔ join of ${left.key}, ${right.key}`);
                 logEvent(`wired ${left.key} ⋈ ${right.key} → ${joined.key} (lattice join)`);
                 break;
@@ -369,9 +415,17 @@ async function performWire(v, target) {
             case "peer-into-session": {
                 const sessionKey = source.kind === "session" ? source.key : target.key;
                 const peerKey = source.kind === "peer" ? source.key : target.key;
-                objects = addPeerToSession(objects, sessionKey, peerKey);
-                logEvent(`wired ${peerKey} into ${sessionKey}; syncing`);
-                await syncSessionOverPeer(sessionKey, peerKey);
+                // A bridged peer stands for its whole group: the session is wired
+                // to EVERY member (the Q3 equivalence), and the broadcast goes
+                // through the existing per-member sync where a transport exists.
+                const group = bridgeGroupContaining(objects, peerKey);
+                for (const memberKey of group) {
+                    objects = addPeerToSession(objects, sessionKey, memberKey);
+                }
+                logEvent(group.length > 1
+                    ? `wired bridge group [${group.join(", ")}] into ${sessionKey}; broadcasting`
+                    : `wired ${peerKey} into ${sessionKey}; syncing`);
+                await broadcastSessionToPeers(sessionKey, group);
                 break;
             }
             case "attach-payment": {
@@ -380,7 +434,7 @@ async function performWire(v, target) {
                 const payment = objects.payments.find((candidate) => candidate.key === paymentKey);
                 const fragment = fragmentByKey(fragmentKey);
                 if (!payment || !fragment)
-                    break;
+                    return false;
                 const paid = await addResponse(await backend.pay(fragment.psbt, {
                     address: payment.address,
                     amountBtc: (payment.amountSats / 100_000_000).toFixed(8),
@@ -392,7 +446,8 @@ async function performWire(v, target) {
                 break;
             }
             case "add-create-input": {
-                const utxo = objects.utxos.find((candidate) => candidate.key === source.key);
+                const utxoKey = source.kind === "utxo" ? source.key : target.key;
+                const utxo = objects.utxos.find((candidate) => candidate.key === utxoKey);
                 addCreateRow("input");
                 if (utxo?.txid && utxo.vout !== null) {
                     const rows = el("createInputs");
@@ -400,30 +455,164 @@ async function performWire(v, target) {
                     const vouts = rows.querySelectorAll("input[data-role=vout]");
                     txids[txids.length - 1].value = utxo.txid;
                     vouts[vouts.length - 1].value = String(utxo.vout);
-                    logEvent(`wired ${source.key} → create: input row prefilled`);
+                    logEvent(`wired ${utxoKey} → create: input row prefilled`);
                 }
                 else {
-                    logEvent(`wired ${source.key} → create: added an input row, but the transaction is not decoded ` +
+                    logEvent(`wired ${utxoKey} → create: added an input row, but the transaction is not decoded ` +
                         "(deep classify pending or unavailable) — enter txid:vout manually");
                 }
                 break;
             }
-            default:
+            case "session-merge": {
+                // Client-orchestrated merge (Q3): the UI model unions memberships
+                // and retires the sources; the fragment states join through the
+                // existing /api/join route. Every decision and every limit of the
+                // merge is logged honestly.
+                const leftName = sessionByKey(objects, source.key)?.name ?? source.key;
+                const rightName = sessionByKey(objects, target.key)?.name ?? target.key;
+                const merge = mergeSessions(objects, source.key, target.key);
+                if (!merge.merged)
+                    return false;
+                objects = merge.state;
+                remaps?.set(`session:${source.key}`, merge.merged.key);
+                remaps?.set(`session:${target.key}`, merge.merged.key);
+                logEvent(`merged sessions ${leftName} ⋈ ${rightName} → ${merge.merged.name} ` +
+                    `(${merge.merged.fragmentKeys.length} fragment(s), ` +
+                    `${merge.merged.peerKeys.length} peer(s) unioned)`);
+                for (const note of merge.notes) {
+                    logEvent(`session merge: ${note}`);
+                }
+                const members = merge.merged.fragmentKeys
+                    .map((key) => fragmentByKey(key))
+                    .filter((fragment) => fragment !== null);
+                if (members.length >= 2) {
+                    const joined = await addResponse(await backend.joinPsbts(members.map((fragment) => fragment.psbt)), "join", `⊔ session merge of ${leftName}, ${rightName}`);
+                    objects = addFragmentToSession(objects, merge.merged.key, joined.key);
+                    logEvent(`session merge joined ${members.map((fragment) => fragment.key).join(" ⋈ ")} → ` +
+                        `${joined.key} via /api/join (added to ${merge.merged.name})`);
+                }
+                else {
+                    logEvent("session merge: fewer than two member fragment states loaded — nothing to join");
+                }
                 break;
+            }
+            case "peer-bridge": {
+                objects = addBridge(objects, source.key, target.key);
+                objects = unionBridgedPeersIntoSessions(objects);
+                const group = bridgeGroupContaining(objects, source.key);
+                logEvent(`bridged ${source.key} and ${target.key}: group [${group.join(", ")}] now renders ` +
+                    "as one peer; broadcasts address every member (sessions wired to any member are " +
+                    "wired to all)");
+                break;
+            }
+            default:
+                return false;
         }
         showStatus("", false);
+        return true;
     }
     catch (error) {
         reportError(`wire ${v.kind}`, error);
+        flashWireRejection(target, error instanceof Error ? error.message : String(error));
+        return false;
+    }
+}
+// One n-ary /api/join call for a component's fragment-join cluster (the
+// grow-only analog of the demo's successive pairwise LUBs).
+async function executeJoinGroup(group) {
+    const members = group.fragments
+        .map((key) => fragmentByKey(key))
+        .filter((fragment) => fragment !== null);
+    if (members.length < 2)
+        return null;
+    try {
+        const joined = await addResponse(await backend.joinPsbts(members.map((fragment) => fragment.psbt)), "join", `⊔ join of ${members.map((fragment) => fragment.key).join(", ")}`);
+        logEvent(`wired ${members.map((fragment) => fragment.key).join(" ⋈ ")} → ${joined.key} (lattice join)`);
+        return joined.key;
+    }
+    catch (error) {
+        reportError("wire fragment-join", error);
+        flashWireRejection({ kind: "fragment", key: members[0].key }, error instanceof Error ? error.message : String(error));
+        return null;
+    }
+}
+function livePendingWires() {
+    pendingWires = pruneWires(pendingWires, objects, session.fragments.map((fragment) => fragment.key));
+    return pendingWires;
+}
+async function joinPendingWire(key) {
+    const entry = livePendingWires().find((candidate) => wireKey(candidate.source, candidate.target) === key);
+    if (!entry) {
+        showStatus("that queued wire is no longer joinable", true);
+        render();
+        return;
+    }
+    const applied = await executeWire(entry.source, entry.target);
+    if (applied) {
+        pendingWires = unqueueWire(pendingWires, key);
     }
     render();
 }
-// completeWire consumes the gesture before performWire runs, so the source
-// ref is stashed here for the async continuation.
-let wireSource = null;
-function wireTargetRef(target) {
-    wireSource = wire.source;
-    wireTo(target);
+// The toolbar Join: apply the whole queue, one connected component at a
+// time. Fragment-join clusters collapse into single n-ary joins; the
+// remaining wires run with consumed fragment endpoints remapped to their
+// cluster's result. Applied wires leave the queue; failed ones stay queued
+// (their cards pulse) so the user can retry or cancel.
+async function joinAllWires() {
+    const components = wireComponents(livePendingWires());
+    if (!components.length) {
+        showStatus("queue one or more wires before joining", true);
+        render();
+        return;
+    }
+    const consumed = new Set();
+    let applied = 0;
+    let failed = 0;
+    for (const component of components) {
+        const plan = componentPlan(component);
+        const remap = new Map();
+        for (const group of plan.joinGroups) {
+            const resultKey = await executeJoinGroup(group);
+            if (resultKey !== null) {
+                applied += group.wires.length;
+                for (const wireEntry of group.wires) {
+                    consumed.add(wireKey(wireEntry.source, wireEntry.target));
+                }
+                for (const memberKey of group.fragments) {
+                    remap.set(`fragment:${memberKey}`, resultKey);
+                }
+            }
+            else {
+                failed += group.wires.length;
+            }
+        }
+        for (const wireEntry of plan.rest) {
+            // Session merges in this component record their result into the
+            // remap, so later wires follow the merged session.
+            const ok = await executeWire(remapWireRef(wireEntry.source, remap), remapWireRef(wireEntry.target, remap), remap);
+            if (ok) {
+                applied += 1;
+                consumed.add(wireKey(wireEntry.source, wireEntry.target));
+            }
+            else {
+                failed += 1;
+            }
+        }
+    }
+    pendingWires = pendingWires.filter((wireEntry) => !consumed.has(wireKey(wireEntry.source, wireEntry.target)));
+    const summary = `Join applied ${applied} wire${applied === 1 ? "" : "s"} across ` +
+        `${components.length} component${components.length === 1 ? "" : "s"}` +
+        (failed ? `; ${failed} failed (kept queued)` : "");
+    logEvent(summary);
+    showStatus(summary, failed > 0);
+    render();
+}
+function clearPendingWires() {
+    if (pendingWires.length) {
+        logEvent(`cancelled ${pendingWires.length} pending wire(s)`);
+    }
+    pendingWires = [];
+    render();
 }
 // --- fragment cards --------------------------------------------------------------
 const INPUT_ROWS_SHOWN = 3;
@@ -432,13 +621,75 @@ function renderFragments() {
     const list = el("fragmentList");
     list.textContent = "";
     const focused = focus.mode === "session" && focus.sessionKey ? sessionByKey(objects, focus.sessionKey) : null;
-    const visible = focused
-        ? session.fragments.filter((fragment) => focused.fragmentKeys.includes(fragment.key))
-        : session.fragments;
-    for (const fragment of visible) {
-        list.append(renderFragmentCard(fragment));
+    if (focused) {
+        // Single-session focus keeps the flat member list.
+        const visible = session.fragments.filter((fragment) => focused.fragmentKeys.includes(fragment.key));
+        for (const fragment of visible) {
+            list.append(renderFragmentCard(fragment));
+        }
+        el("fragmentEmpty").hidden = visible.length > 0;
+        return;
     }
-    el("fragmentEmpty").hidden = visible.length > 0;
+    // Overview partitions the fragment set by WHERE each fragment lives (Q6):
+    // the MINE pseudo-peer holds every sessionless local fragment (loaded and
+    // created fragments default there), and each session with loaded members
+    // gets its own container — so publishing (wiring Mine → session) is a
+    // visible MOVE between areas.
+    if (session.fragments.length) {
+        const mineKeys = mineFragmentKeys(session.fragments.map((fragment) => fragment.key), objects);
+        list.append(renderMineArea(session.fragments.filter((fragment) => mineKeys.includes(fragment.key))));
+        for (const sessionObject of objects.sessions) {
+            const members = session.fragments.filter((fragment) => sessionObject.fragmentKeys.includes(fragment.key));
+            if (members.length) {
+                list.append(renderSessionArea(sessionObject, members));
+            }
+        }
+    }
+    el("fragmentEmpty").hidden = session.fragments.length > 0;
+}
+// The MINE pseudo-peer container: a peer-like large area holding the
+// sessionless local fragments (Q6). Local-only workflows (join, sort,
+// edit, atomize) happen here; wiring a fragment to a session publishes it
+// and moves it out.
+function renderMineArea(fragments) {
+    const item = document.createElement("li");
+    item.className = "session-mine-area";
+    const head = document.createElement("div");
+    head.className = "session-fragment-row";
+    head.append(span("item-title", "Mine"), badge("pseudo-peer", "session-badge"), span("item-meta", `${fragments.length} local fragment(s), not published to any session`));
+    item.append(head);
+    item.append(span("item-meta session-area-hint", "Local-only workflows (join, sort, edit, atomize) happen here; wiring a fragment to a session publishes it."));
+    const inner = document.createElement("ul");
+    inner.className = "item-list session-card-list";
+    for (const fragment of fragments) {
+        inner.append(renderFragmentCard(fragment));
+    }
+    item.append(inner);
+    if (!fragments.length) {
+        item.append(span("item-meta session-area-hint", "empty — every loaded fragment is published"));
+    }
+    return item;
+}
+// One container per session with loaded member fragments: the published
+// side of the Mine → session move.
+function renderSessionArea(sessionObject, members) {
+    const item = document.createElement("li");
+    item.className = "session-published-area";
+    const head = document.createElement("div");
+    head.className = "session-fragment-row";
+    head.append(span("item-title", sessionObject.name), badge("session", "session-badge session-badge-good"), span("item-meta", `${sessionObject.transport} · ${members.length} published fragment(s) · ` +
+        `${sessionObject.peerKeys.length} peer(s)`), button("Focus", "Fill the viewport with this session (mobile view)", () => {
+        focus = sessionFocus(sessionObject.key);
+        render();
+    }));
+    item.append(head);
+    const inner = document.createElement("ul");
+    inner.className = "item-list session-card-list";
+    for (const fragment of members) {
+        inner.append(renderFragmentCard(fragment));
+    }
+    item.append(inner);
+    return item;
 }
 function renderFragmentCard(fragment) {
     const card = fragmentCardModel(fragment.inspect, displayNetwork());
@@ -652,7 +903,7 @@ function balanceReport(sheet, feeText) {
         const row = span("session-balance-row session-balance-feerate", "");
         row.append(sheet.feeRateText !== null
             ? span("item-meta", sheet.feeRateText)
-            : naSlot("fee rate needs backend: totals.size_estimate (inspect extension)"));
+            : naSlot("fee rate needs backend: totals.size (inspect extension)"));
         if (sheet.feeRateText === null)
             row.prepend(span("item-meta", "fee rate "));
         block.append(row);
@@ -714,8 +965,21 @@ function outputRow(output) {
         row.append(amountSpan(output.amountSats));
     return row;
 }
-// Highlight and arm wire targets while a wire is pending.
+// Highlight and arm wire targets while a wire is pending. The three-way
+// vocabulary (compatible green / blocked red / unbacked dim) and the action
+// label in the title come from the presenter's verdict; a recently rejected
+// tap keeps its pulse + reason chip independent of wire mode.
 function decorateWireTarget(node, ref) {
+    if (wireRejection && wireRejection.ref.kind === ref.kind && wireRejection.ref.key === ref.key) {
+        node.classList.add("session-wire-rejected");
+        node.append(span("session-wire-reason", wireRejection.text));
+    }
+    // Cards with at least one queued wire wear the pending-edge vocabulary
+    // (the demo's animated orange dashes, card-shaped).
+    if (pendingWires.some((wireEntry) => (wireEntry.source.kind === ref.kind && wireEntry.source.key === ref.key) ||
+        (wireEntry.target.kind === ref.kind && wireEntry.target.key === ref.key))) {
+        node.classList.add("session-wire-pending");
+    }
     if (!wire.source)
         return;
     if (wire.source.kind === ref.kind && wire.source.key === ref.key) {
@@ -723,13 +987,21 @@ function decorateWireTarget(node, ref) {
         return;
     }
     const v = wireVerdict(wire.source, ref, objects);
-    if (v.allowed && v.backed) {
-        node.classList.add("session-wire-target");
-        node.title = `wire here: ${v.kind}`;
-    }
-    else {
-        node.classList.add("session-wire-blocked");
-        node.title = v.backed ? `not wireable: ${v.reason ?? ""}` : `needs backend: ${v.needs ?? ""}`;
+    switch (wireDisposition(v)) {
+        case "compatible":
+            node.classList.add("session-wire-target");
+            node.title = `wire here: ${v.label ?? v.kind}`;
+            break;
+        case "blocked":
+            node.classList.add("session-wire-incompatible");
+            node.title = `${v.label ?? "not wireable"} — blocked: ${v.reason ?? ""}`;
+            break;
+        default:
+            node.classList.add("session-wire-blocked");
+            node.title = v.needs
+                ? `${v.label ?? "not wireable"} — needs backend: ${v.needs}`
+                : (v.reason ?? "no join is defined");
+            break;
     }
     node.addEventListener("click", (event) => {
         // The explicit per-card buttons keep working; a plain click on the card
@@ -737,7 +1009,7 @@ function decorateWireTarget(node, ref) {
         if (event.target.closest("button, input, textarea, select, a"))
             return;
         event.preventDefault();
-        wireTargetRef(ref);
+        wireTo(ref);
     });
 }
 // --- objects rail ------------------------------------------------------------------
@@ -767,25 +1039,21 @@ function renderObjects() {
         item.append(actions);
         list.append(item);
     }
-    for (const peer of objects.peers) {
-        const item = document.createElement("li");
-        item.className = "list-item session-card";
-        // Peers are pseudo-descriptor identities: same key space as the
-        // provenance groups, so a peer and its contributed rows share a color.
-        colorizeIdentity(item, peerColorKey(peer));
-        decorateWireTarget(item, { kind: "peer", key: peer.key });
-        const head = document.createElement("div");
-        head.className = "session-fragment-row";
-        head.append(span("session-color-chip", ""), span("item-title", peer.name), badge(`peer · ${peer.transport}`, "session-badge"));
-        const identity = span("item-meta session-identity", peer.identity.slice(0, 24) + (peer.identity.length > 24 ? "…" : ""));
-        identity.title = peer.identity;
-        head.append(identity);
-        item.append(head);
-        const actions = document.createElement("div");
-        actions.className = "session-card-actions";
-        actions.append(button("Copy id", "Copy the full transport identity", () => copyText(peer.identity, `${peer.key} identity`)), button("Wire", "Connect this peer to a session", () => startWire("peer", peer.key)));
-        item.append(actions);
-        list.append(item);
+    // Peers render by BRIDGE GROUP (Q3): a bridged group is one card — one
+    // peer node to the wire gesture (any member ref stands for the group) —
+    // listing its members; unbridged peers render as single cards.
+    for (const group of peerBridgeGroups(objects)) {
+        const members = group
+            .map((key) => peerByKey(objects, key))
+            .filter((member) => member !== null);
+        if (!members.length)
+            continue;
+        if (members.length === 1) {
+            list.append(renderPeerCard(members[0]));
+        }
+        else {
+            list.append(renderBridgeGroupCard(members));
+        }
     }
     for (const payment of objects.payments) {
         const item = document.createElement("li");
@@ -876,16 +1144,99 @@ function renderObjects() {
         list.append(item);
     }
 }
+function renderPeerCard(peer) {
+    const item = document.createElement("li");
+    item.className = "list-item session-card";
+    // Peers are pseudo-descriptor identities: same key space as the
+    // provenance groups, so a peer and its contributed rows share a color.
+    colorizeIdentity(item, peerColorKey(peer));
+    decorateWireTarget(item, { kind: "peer", key: peer.key });
+    const head = document.createElement("div");
+    head.className = "session-fragment-row";
+    head.append(span("session-color-chip", ""), span("item-title", peer.name), badge(`peer · ${peer.transport}`, "session-badge"));
+    const identity = span("item-meta session-identity", peer.identity.slice(0, 24) + (peer.identity.length > 24 ? "…" : ""));
+    identity.title = peer.identity;
+    head.append(identity);
+    item.append(head);
+    const actions = document.createElement("div");
+    actions.className = "session-card-actions";
+    actions.append(button("Copy id", "Copy the full transport identity", () => copyText(peer.identity, `${peer.key} identity`)), button("Wire", "Connect this peer to a session or bridge it with another peer", () => startWire("peer", peer.key)));
+    item.append(actions);
+    return item;
+}
+// A bridged peer group renders as ONE peer node (the demo's green bridge
+// block): one card, member chips inside, wired as a unit through its first
+// member (the presenter expands any member ref to the whole group).
+function renderBridgeGroupCard(members) {
+    const item = document.createElement("li");
+    item.className = "list-item session-card session-bridge-group";
+    decorateWireTarget(item, { kind: "peer", key: members[0].key });
+    const head = document.createElement("div");
+    head.className = "session-fragment-row";
+    head.append(span("item-title", members.map((member) => member.name).join(" + ")), badge(`bridge · ${members.length} peers`, "session-badge session-badge-good"), span("item-meta", "one peer to the session: every member receives every broadcast"));
+    item.append(head);
+    for (const member of members) {
+        const row = document.createElement("div");
+        row.className = "session-bridge-member";
+        // Each member keeps its pseudo-descriptor identity color so the row
+        // still matches the peer's contributed provenance groups.
+        colorizeIdentity(row, peerColorKey(member));
+        row.append(span("session-color-chip", ""), span("item-title", member.name), badge(`peer · ${member.transport}`, "session-badge"));
+        if (!peerUsableForSync(member)) {
+            row.append(badge("broadcast pending-backend (no usable transport)", "session-badge session-badge-warn"));
+        }
+        const identity = span("item-meta session-identity", member.identity.slice(0, 24) + (member.identity.length > 24 ? "…" : ""));
+        identity.title = member.identity;
+        row.append(identity);
+        row.append(button("Copy id", "Copy the full transport identity", () => copyText(member.identity, `${member.key} identity`)));
+        item.append(row);
+    }
+    const actions = document.createElement("div");
+    actions.className = "session-card-actions";
+    actions.append(button("Wire", "Connect this bridge group to a session (as one peer)", () => startWire("peer", members[0].key)));
+    item.append(actions);
+    return item;
+}
 // --- wire status + focus bar ---------------------------------------------------------
 function renderWireStatus() {
     const host = el("wireStatus");
     if (!wire.source) {
         host.hidden = true;
+    }
+    else {
+        host.hidden = false;
+        el("wireStatusText").textContent =
+            `wiring from ${nodeName(wire.source)} — tap a highlighted card to queue the wire ` +
+                "(dimmed cards explain why not)";
+    }
+    renderWireQueue();
+}
+// The pending-wire queue panel: one row per queued edge with its action
+// label, an edge-local Join, and a discard; the header carries the
+// wire/component summary next to the toolbar Join and Cancel wires.
+function renderWireQueue() {
+    const wires = livePendingWires();
+    const host = el("wireQueue");
+    const list = el("wireQueueList");
+    list.textContent = "";
+    if (!wires.length) {
+        host.hidden = true;
         return;
     }
     host.hidden = false;
-    el("wireStatusText").textContent =
-        `wiring from ${nodeName(wire.source)} — tap a highlighted card to join (dimmed cards explain why not)`;
+    el("wireQueueSummary").textContent = wireQueueSummary(wires).text;
+    for (const wireEntry of wires) {
+        const key = wireKey(wireEntry.source, wireEntry.target);
+        const v = wireVerdict(wireEntry.source, wireEntry.target, objects);
+        const item = document.createElement("li");
+        item.className = "session-wire-queue-row";
+        item.append(span("session-wire-queue-label", v.label ?? `${nodeName(wireEntry.source)} ⋈ ${nodeName(wireEntry.target)}`), button("Join", "Apply this wire alone", () => void joinPendingWire(key)), button("✕", "Discard this wire without applying it", () => {
+            pendingWires = unqueueWire(pendingWires, key);
+            logEvent(`discarded pending wire ${nodeName(wireEntry.source)} ⋈ ${nodeName(wireEntry.target)}`);
+            render();
+        }));
+        list.append(item);
+    }
 }
 function renderFocus() {
     focus = validateFocus(focus, objects.sessions.map((sessionObject) => sessionObject.key));
@@ -1536,6 +1887,26 @@ async function syncSessionOverPeer(sessionKey, peerKey) {
     }
     await runSyncRequest(members, `session ${sessionObject.name} (${members.length} fragment(s))`);
 }
+// Broadcast semantics for a bridged peer group (Q3): every member receives
+// every broadcast. Today's transport reality: members with a configured
+// transport sync one by one through the existing /api/sync (sequential —
+// the sync form is shared state); members without one are honestly marked
+// pending-backend instead of being silently skipped.
+async function broadcastSessionToPeers(sessionKey, peerKeys) {
+    for (const memberKey of peerKeys) {
+        const member = peerByKey(objects, memberKey);
+        if (!member)
+            continue;
+        if (peerUsableForSync(member)) {
+            await syncSessionOverPeer(sessionKey, memberKey);
+        }
+        else {
+            logEvent(`broadcast to ${member.name} (${member.transport}) is pending-backend: ` +
+                "no usable transport behind /api/sync yet — the member stays wired and " +
+                "receives the session when its transport lands");
+        }
+    }
+}
 // --- negotiation panel -----------------------------------------------------------
 function payMode() {
     return el("payModeHex").checked ? "hex" : "address";
@@ -1666,6 +2037,8 @@ function wireDom() {
     });
     el("displayNetwork").addEventListener("change", render);
     el("wireCancel").addEventListener("click", cancelWire);
+    el("wireJoinAll").addEventListener("click", () => void joinAllWires());
+    el("wireClearAll").addEventListener("click", clearPendingWires);
     el("focusBack").addEventListener("click", () => {
         focus = overviewFocus();
         render();
@@ -1689,7 +2062,7 @@ function wireDom() {
     });
     el("createWireTarget").addEventListener("click", () => {
         if (wire.source?.kind === "utxo") {
-            wireTargetRef({ kind: "create", key: "create" });
+            wireTo({ kind: "create", key: "create" });
         }
     });
     el("syncTransport").addEventListener("change", renderSyncFields);

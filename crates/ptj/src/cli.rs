@@ -43,6 +43,8 @@ pub enum Command {
     Inspect(InspectConfig),
     /// Mark a safe BIP 370 constructor PSBT unordered for lattice joining
     MakeUnordered(MakeUnorderedConfig),
+    /// Declare an explicit fee contribution (spec § Termination metadata)
+    Fee(FeeConfig),
     /// Attach a payment a participant wants constructed (negotiation metadata)
     Pay(PayConfig),
     /// Attach a confirmation of the converged transaction prior to signing
@@ -69,6 +71,7 @@ impl Command {
             Command::Concatenate(config) => config.files.iter().any(|path| is_stdin_path(path)),
             Command::ExportBip174(config) => is_stdin_path(&config.file),
             Command::ImportBip174(config) => is_stdin_path(&config.file),
+            Command::Fee(config) => is_stdin_path(&config.file),
             Command::Inspect(config) => is_stdin_path(&config.file),
             Command::Join(config) => config.files.iter().any(|path| is_stdin_path(path)),
             Command::MakeUnordered(config) => is_stdin_path(&config.file),
@@ -98,6 +101,7 @@ impl Command {
                 .count(),
             Command::ExportBip174(config) => usize::from(is_stdin_path(&config.file)),
             Command::ImportBip174(config) => usize::from(is_stdin_path(&config.file)),
+            Command::Fee(config) => usize::from(is_stdin_path(&config.file)),
             Command::Inspect(config) => usize::from(is_stdin_path(&config.file)),
             Command::Join(config) => config
                 .files
@@ -468,6 +472,22 @@ impl FromStr for OrderingArg {
             )),
         }
     }
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeeConfig {
+    /// Amount in satoshis explicitly contributed as fees (the field codec's
+    /// bare u64; spec § Termination)
+    #[arg(long = "amount-sats")]
+    pub amount_sats: u64,
+    /// Encrypt the fee record with the group secret
+    #[arg(long)]
+    pub encrypt: bool,
+    /// Out-of-band shared secret as hex (required with --encrypt)
+    #[arg(long)]
+    pub secret: Option<HexSeed>,
+    /// PSBT file to attach the fee contribution to
+    pub file: PathBuf,
 }
 
 #[derive(Args, Debug, Clone)]
