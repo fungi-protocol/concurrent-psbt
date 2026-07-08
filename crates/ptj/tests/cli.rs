@@ -276,8 +276,15 @@ fn typed_arguments_reject_malformed_values() {
     );
     assert!(OrderingArg::from_str("sideways").is_err());
     assert!(NetworkArg::from_str("liquid").is_err());
+    // Odd-length hex-charset input stays an error (never a base58 fallback).
     assert!(HexSeed::from_str("abc").is_err());
-    assert!(HexSeed::from_str("zz").is_err());
+    // Liberal parsing: "zz" is outside the hex charset but valid base58.
+    assert_eq!(
+        HexSeed::from_str("zz").map(ptj::cli::HexSeed::into_bytes),
+        Ok(bitcoin::base58::decode("zz").unwrap())
+    );
+    // Undecodable in every supported encoding (0 and ! are not base58).
+    assert!(HexSeed::from_str("0!z").is_err());
     assert!(OutPointArg::from_str("not-an-outpoint").is_err());
     assert!(OutPointArg::from_str(&format!("{TXID}:not-a-vout")).is_err());
     assert!(OutputArg::from_str(&format!("{ADDRESS}:not-an-amount")).is_err());
