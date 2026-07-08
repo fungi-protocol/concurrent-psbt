@@ -51,7 +51,82 @@ pub(crate) fn inspect_psbt(psbt: &psbt_v2::v2::Psbt) -> serde_json::Value {
                 i128::from(input_sats) - i128::from(output_sats)
             }),
         },
+        // The RAW keymap entries (global / per-input / per-output), including
+        // the pairs the typed fields above parse — the fragment viewer/editor
+        // operates on these. `null` only if the serialized form failed to
+        // re-derive (should not happen for a PSBT that just parsed).
+        "raw": raw_entries(psbt),
     })
+}
+
+/// The raw `<key> -> <value>` entries of every map, each classified as
+/// `known` (parsed into a typed field), `unknown`, or `proprietary` (with the
+/// BIP 174 envelope broken out when it parses). `key_hex` is the full raw key
+/// (compact-size `keytype` prefix plus `keydata`) — the handle `/api/edit`
+/// edits address entries by.
+fn raw_entries(psbt: &psbt_v2::v2::Psbt) -> serde_json::Value {
+    let Ok(maps) = crate::rawmap::raw_maps(psbt) else {
+        return serde_json::Value::Null;
+    };
+    let global = map_entries(&maps.global, &psbt.global.unknowns);
+    let inputs: Vec<_> = maps
+        .inputs
+        .iter()
+        .zip(&psbt.inputs)
+        .map(|(map, input)| map_entries(map, &input.unknowns))
+        .collect();
+    let outputs: Vec<_> = maps
+        .outputs
+        .iter()
+        .zip(&psbt.outputs)
+        .map(|(map, output)| map_entries(map, &output.unknowns))
+        .collect();
+    json!({
+        "global": global,
+        "inputs": inputs,
+        "outputs": outputs,
+    })
+}
+
+fn map_entries(
+    map: &[crate::rawmap::RawPair],
+    unknowns: &std::collections::BTreeMap<psbt_v2::raw::Key, Vec<u8>>,
+) -> Vec<serde_json::Value> {
+    map.iter()
+        .map(|pair| {
+            let mut entry = json!({
+                "key_hex": hex_encode(&pair.key),
+                "value_hex": hex_encode(&pair.value),
+            });
+            if let Ok((key_type, key_data)) = crate::rawmap::split_key_type(&pair.key) {
+                entry["key_type"] = json!(key_type);
+                entry["key_data_hex"] = json!(hex_encode(key_data));
+                if key_type == 0xFC {
+                    entry["kind"] = json!("proprietary");
+                    if let Some((prefix, subtype, sub_key)) =
+                        crate::rawmap::split_proprietary(key_data)
+                    {
+                        entry["proprietary"] = json!({
+                            "prefix_hex": hex_encode(&prefix),
+                            "prefix_utf8": String::from_utf8(prefix.clone()).ok(),
+                            "subtype": subtype,
+                            "key_data_hex": hex_encode(&sub_key),
+                        });
+                    }
+                } else if u8::try_from(key_type).is_ok_and(|type_value| {
+                    unknowns.contains_key(&psbt_v2::raw::Key {
+                        type_value,
+                        key: key_data.to_vec(),
+                    })
+                }) {
+                    entry["kind"] = json!("unknown");
+                } else {
+                    entry["kind"] = json!("known");
+                }
+            }
+            entry
+        })
+        .collect()
 }
 
 fn inspect_input(input: &psbt_v2::v2::Input) -> serde_json::Value {
