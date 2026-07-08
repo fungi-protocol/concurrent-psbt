@@ -101,6 +101,7 @@ pub(crate) fn response_for(method: &str, path: &str, body: &[u8]) -> Response {
     let path = path.split_once('?').map_or(path, |(path, _)| path);
     if method == "POST" {
         match path {
+            "/api/assign-ids" => return assign_ids_response(body),
             "/api/atomize" => return atomize_response(body),
             "/api/concatenate" => return concatenate_response(body),
             "/api/confirm" => return confirm_response(body),
@@ -682,6 +683,85 @@ fn concatenate_response_result(body: &[u8]) -> Result<Vec<u8>> {
     })
     .to_string()
     .into_bytes())
+}
+
+fn assign_ids_response(body: &[u8]) -> Response {
+    match assign_ids_response_result(body) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/json; charset=utf-8",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+fn assign_ids_response_result(body: &[u8]) -> Result<Vec<u8>> {
+    let request: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
+    let psbt = request
+        .get("psbt")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Error::new("request JSON must contain string field `psbt`"))?;
+    let psbt = crate::io::parse_psbt_bytes("request psbt", psbt.as_bytes())?;
+    let ids = parse_id_assignments(&request)?;
+    // CLI parity: no directives means auto-assign; `auto` also combines with
+    // manual directives to fill the remainder.
+    let auto = optional_bool(&request, "auto")? || ids.is_empty();
+    let overwrite = optional_bool(&request, "overwrite")?;
+    let assigned = crate::commands::assign_ids::assign_ids_psbt(psbt, &ids, auto, overwrite)?;
+    Ok(serde_json::json!({
+        "psbt": crate::io::encode_psbt(&assigned),
+        "inspect": crate::commands::inspect::inspect_psbt(&assigned),
+    })
+    .to_string()
+    .into_bytes())
+}
+
+/// Parse the optional `ids` array: `[{"target":"in"|"out","index":n,"id":"<bytes>"}]`
+/// (id bytes accept hex/base58/bech32, like the CLI's --id values).
+fn parse_id_assignments(request: &serde_json::Value) -> Result<Vec<crate::cli::IdAssignment>> {
+    let Some(value) = request.get("ids") else {
+        return Ok(vec![]);
+    };
+    let items = value
+        .as_array()
+        .ok_or_else(|| Error::new("request JSON field `ids` must be an array"))?;
+    items
+        .iter()
+        .enumerate()
+        .map(|(position, item)| {
+            let object = item.as_object().ok_or_else(|| {
+                Error::new(format!("request JSON ids[{position}] must be an object"))
+            })?;
+            let target = match object_string(object, "target", &format!("ids[{position}]"))? {
+                "in" | "input" => crate::cli::IdTarget::Input,
+                "out" | "output" => crate::cli::IdTarget::Output,
+                other => {
+                    return Err(Error::new(format!(
+                        "request JSON ids[{position}].target must be `in` or `out`, got {other}"
+                    )));
+                }
+            };
+            let index = object
+                .get("index")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| {
+                    Error::new(format!(
+                        "request JSON ids[{position}].index must be a non-negative integer"
+                    ))
+                })
+                .and_then(|index| {
+                    usize::try_from(index).map_err(|_| {
+                        Error::new(format!("request JSON ids[{position}].index exceeds usize"))
+                    })
+                })?;
+            let id = object_string(object, "id", &format!("ids[{position}]"))?;
+            let id = crate::bytes_arg::parse_bytes_arg(id).map_err(Error::new)?;
+            Ok(crate::cli::IdAssignment { target, index, id })
+        })
+        .collect()
 }
 
 fn create_response(body: &[u8]) -> Response {
@@ -1464,6 +1544,103 @@ mod tests {
                 .unwrap()
                 .contains("decoding base64")
         );
+    }
+
+    /// The fixture PSBT with its output unique ids stripped — imported
+    /// BIP 174 data before `assign-ids`.
+    fn encoded_psbt_without_uids() -> String {
+        let mut psbt =
+            crate::io::parse_psbt_bytes("fixture psbt", encoded_psbt().as_bytes()).unwrap();
+        for output in &mut psbt.outputs {
+            output.proprietaries.clear();
+        }
+        crate::io::encode_psbt(&psbt)
+    }
+
+    #[test]
+    fn assign_ids_endpoint_auto_assigns_missing_output_ids() {
+        use concurrent_psbt::output::OutputUniqueIdExt as _;
+
+        let request = serde_json::json!({ "psbt": encoded_psbt_without_uids() }).to_string();
+        let response = response_for("POST", "/api/assign-ids", request.as_bytes());
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let assigned = crate::io::parse_psbt_bytes(
+            "assigned response psbt",
+            body["psbt"].as_str().unwrap().as_bytes(),
+        )
+        .unwrap();
+        assert!(assigned.outputs.iter().all(|output| output.has_unique_id()));
+        assert_eq!(body["inspect"]["output_count"], 1);
+
+        // Idempotent: a second pass returns the identical PSBT.
+        let again = serde_json::json!({ "psbt": body["psbt"] }).to_string();
+        let second = response_for("POST", "/api/assign-ids", again.as_bytes());
+        assert_eq!(second.status, 200);
+        let second_body: serde_json::Value = serde_json::from_slice(&second.body).unwrap();
+        assert_eq!(second_body["psbt"], body["psbt"]);
+    }
+
+    #[test]
+    fn assign_ids_endpoint_applies_manual_directives() {
+        use concurrent_psbt::output::OutputUniqueIdExt as _;
+
+        let request = serde_json::json!({
+            "psbt": encoded_psbt_without_uids(),
+            "ids": [
+                { "target": "out", "index": 0, "id": "0102030405060708090a0b0c0d0e0f10" },
+                { "target": "in", "index": 0, "id": "aa11" },
+            ],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/assign-ids", request.as_bytes());
+
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let assigned = crate::io::parse_psbt_bytes(
+            "assigned response psbt",
+            body["psbt"].as_str().unwrap().as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            assigned.outputs[0].unique_id().unwrap().into_bytes(),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+        );
+        assert_eq!(
+            concurrent_psbt::removal::InputUniqueIdExt::unique_id(&assigned.inputs[0]),
+            Some(vec![0xaa, 0x11]),
+        );
+    }
+
+    #[test]
+    fn assign_ids_endpoint_reports_json_errors() {
+        let missing = response_for("POST", "/api/assign-ids", b"{}");
+        assert_eq!(missing.status, 400);
+        assert!(String::from_utf8(missing.body).unwrap().contains("`psbt`"));
+
+        let bad_id = serde_json::json!({
+            "psbt": encoded_psbt_without_uids(),
+            "ids": [{ "target": "out", "index": 0, "id": "0!z" }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/assign-ids", bad_id.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("could not decode byte string")
+        );
+
+        let bad_target = serde_json::json!({
+            "psbt": encoded_psbt_without_uids(),
+            "ids": [{ "target": "sideways", "index": 0, "id": "abcd" }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/assign-ids", bad_target.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(String::from_utf8(response.body).unwrap().contains("target"));
     }
 
     #[test]
