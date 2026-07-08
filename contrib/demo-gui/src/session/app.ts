@@ -51,6 +51,7 @@ import {
   type SyncTransport,
 } from "./state.js";
 import {
+  amountBits,
   amountSpanParts,
   elisionLabel,
   fragmentCardModel,
@@ -261,12 +262,25 @@ function lifehashBadge(hex: string, title: string): HTMLElement {
 
 // BIP 177 sat-first emphasis (display.ts amountSpanParts): symbol/scale/
 // digits spans whose classes carry only opacity and weight — every part
-// inherits the surrounding color (the ead6ca05 rule).
+// inherits the surrounding color (the ead6ca05 rule). Underneath, the
+// binary fingerprint (display.ts amountBits): a thin barcode of the value
+// in base 2, LSB right-aligned under the last digit, for at-a-glance
+// recognition of low-Hamming-weight values.
 function amountSpan(sats: number): HTMLElement {
   const node = span("session-amount", "");
+  const text = span("session-amount-text", "");
   for (const part of amountSpanParts(sats)) {
-    node.append(span(part.className, part.text));
+    text.append(span(part.className, part.text));
   }
+  node.append(text);
+  const bits = amountBits(sats);
+  const row = span("session-amount-bits", "");
+  row.title = `binary ${bits}`;
+  row.setAttribute("aria-hidden", "true");
+  for (const bit of bits) {
+    row.append(span(`session-amount-bit session-amount-bit-${bit}`, ""));
+  }
+  node.append(row);
   return node;
 }
 
