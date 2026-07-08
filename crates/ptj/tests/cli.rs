@@ -1428,6 +1428,28 @@ fn bip370_operations_reject_bip174_inputs_and_point_to_import() {
 }
 
 #[test]
+fn import_bip174_modifiable_flag_marks_the_import_constructor_ready() {
+    let temp = tempfile::tempdir().unwrap();
+    let ordered = write_psbt(temp.path(), "ordered.psbt", sorted_psbt(TXID, 0, 1, 50_000));
+    let core_psbt =
+        ptj::run(Cli::try_parse_from(["ptj", "export-bip174", path_str(&ordered)]).unwrap())
+            .unwrap();
+    let core_path = temp.path().join("core.psbt");
+    std::fs::write(&core_path, core_psbt).unwrap();
+
+    // Strict default: BIP 174 carries no TX_MODIFIABLE, so the import is not
+    // modifiable (asserted in the sibling test). --modifiable is the explicit
+    // user assertion that inputs and outputs may still be added.
+    let modifiable = run_to_psbt([
+        "ptj",
+        "import-bip174",
+        "--modifiable",
+        path_str(&core_path),
+    ]);
+    assert_eq!(modifiable.global.tx_modifiable_flags, 0x03);
+}
+
+#[test]
 fn import_bip174_upgrades_core_psbt_to_ordered_bip370() {
     let temp = tempfile::tempdir().unwrap();
     let mut ordered = sorted_psbt(TXID, 0, 1, 50_000);

@@ -883,8 +883,9 @@ fn import_bip174_response_result(body: &[u8]) -> Result<Vec<u8>> {
         .get("psbt")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| Error::new("request JSON must contain string field `psbt`"))?;
+    let modifiable = optional_bool(&request, "modifiable")?;
     let psbt = crate::io::parse_bip174_bytes("request psbt", psbt.as_bytes())?;
-    let imported = crate::commands::import_bip174::import_bip174_psbt(psbt)?;
+    let imported = crate::commands::import_bip174::import_bip174_psbt(psbt, modifiable)?;
     Ok(serde_json::json!({
         "psbt": crate::io::encode_psbt(&imported),
         "inspect": crate::commands::inspect::inspect_psbt(&imported),
@@ -1869,6 +1870,28 @@ mod tests {
         assert_eq!(body["inspect"]["ordering"], "ordered");
         assert_eq!(body["inspect"]["input_count"], 1);
         assert_eq!(body["inspect"]["output_count"], 1);
+    }
+
+    #[test]
+    fn import_bip174_endpoint_marks_modifiable_on_request() {
+        let exported = crate::commands::export_bip174::export_bip174_psbt(
+            crate::io::parse_psbt_bytes("fixture psbt", encoded_ordered_psbt().as_bytes()).unwrap(),
+        )
+        .unwrap();
+        let request = serde_json::json!({ "psbt": exported, "modifiable": true }).to_string();
+
+        let response = response_for("POST", "/api/import-bip174", request.as_bytes());
+
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let imported = crate::io::parse_psbt_bytes(
+            "imported response psbt",
+            body["psbt"].as_str().unwrap().as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(imported.global.tx_modifiable_flags, 0x03);
+        assert_eq!(body["inspect"]["modifiability"]["inputs"], true);
+        assert_eq!(body["inspect"]["modifiability"]["outputs"], true);
     }
 
     #[test]
