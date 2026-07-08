@@ -74,6 +74,7 @@ import {
   enrichPayment,
   idleWire,
   mergeSessions,
+  mineFragmentKeys,
   mintSession,
   overviewFocus,
   peerBridgeGroups,
@@ -99,6 +100,7 @@ import {
   type PeerObject,
   type PendingWire,
   type SessionAction,
+  type SessionObject,
   type WireGesture,
 } from "./wiring.js";
 import {
@@ -774,13 +776,107 @@ function renderFragments(): void {
   const list = el<HTMLUListElement>("fragmentList");
   list.textContent = "";
   const focused = focus.mode === "session" && focus.sessionKey ? sessionByKey(objects, focus.sessionKey) : null;
-  const visible = focused
-    ? session.fragments.filter((fragment) => focused.fragmentKeys.includes(fragment.key))
-    : session.fragments;
-  for (const fragment of visible) {
-    list.append(renderFragmentCard(fragment));
+  if (focused) {
+    // Single-session focus keeps the flat member list.
+    const visible = session.fragments.filter((fragment) => focused.fragmentKeys.includes(fragment.key));
+    for (const fragment of visible) {
+      list.append(renderFragmentCard(fragment));
+    }
+    el<HTMLElement>("fragmentEmpty").hidden = visible.length > 0;
+    return;
   }
-  el<HTMLElement>("fragmentEmpty").hidden = visible.length > 0;
+  // Overview partitions the fragment set by WHERE each fragment lives (Q6):
+  // the MINE pseudo-peer holds every sessionless local fragment (loaded and
+  // created fragments default there), and each session with loaded members
+  // gets its own container — so publishing (wiring Mine → session) is a
+  // visible MOVE between areas.
+  if (session.fragments.length) {
+    const mineKeys = mineFragmentKeys(
+      session.fragments.map((fragment) => fragment.key),
+      objects,
+    );
+    list.append(
+      renderMineArea(session.fragments.filter((fragment) => mineKeys.includes(fragment.key))),
+    );
+    for (const sessionObject of objects.sessions) {
+      const members = session.fragments.filter((fragment) =>
+        sessionObject.fragmentKeys.includes(fragment.key),
+      );
+      if (members.length) {
+        list.append(renderSessionArea(sessionObject, members));
+      }
+    }
+  }
+  el<HTMLElement>("fragmentEmpty").hidden = session.fragments.length > 0;
+}
+
+// The MINE pseudo-peer container: a peer-like large area holding the
+// sessionless local fragments (Q6). Local-only workflows (join, sort,
+// edit, atomize) happen here; wiring a fragment to a session publishes it
+// and moves it out.
+function renderMineArea(fragments: SessionFragment[]): HTMLLIElement {
+  const item = document.createElement("li");
+  item.className = "session-mine-area";
+  const head = document.createElement("div");
+  head.className = "session-fragment-row";
+  head.append(
+    span("item-title", "Mine"),
+    badge("pseudo-peer", "session-badge"),
+    span(
+      "item-meta",
+      `${fragments.length} local fragment(s), not published to any session`,
+    ),
+  );
+  item.append(head);
+  item.append(
+    span(
+      "item-meta session-area-hint",
+      "Local-only workflows (join, sort, edit, atomize) happen here; wiring a fragment to a session publishes it.",
+    ),
+  );
+  const inner = document.createElement("ul");
+  inner.className = "item-list session-card-list";
+  for (const fragment of fragments) {
+    inner.append(renderFragmentCard(fragment));
+  }
+  item.append(inner);
+  if (!fragments.length) {
+    item.append(span("item-meta session-area-hint", "empty — every loaded fragment is published"));
+  }
+  return item;
+}
+
+// One container per session with loaded member fragments: the published
+// side of the Mine → session move.
+function renderSessionArea(
+  sessionObject: SessionObject,
+  members: SessionFragment[],
+): HTMLLIElement {
+  const item = document.createElement("li");
+  item.className = "session-published-area";
+  const head = document.createElement("div");
+  head.className = "session-fragment-row";
+  head.append(
+    span("item-title", sessionObject.name),
+    badge("session", "session-badge session-badge-good"),
+    span(
+      "item-meta",
+      `${sessionObject.transport} · ${members.length} published fragment(s) · ` +
+        `${sessionObject.peerKeys.length} peer(s)`,
+    ),
+    button("Focus", "Fill the viewport with this session (mobile view)", () => {
+      focus = sessionFocus(sessionObject.key);
+      render();
+    }),
+  );
+  item.append(head);
+  const inner = document.createElement("ul");
+  inner.className = "item-list session-card-list";
+  for (const fragment of members) {
+    inner.append(renderFragmentCard(fragment));
+  }
+  item.append(inner);
+  return item;
 }
 
 function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {

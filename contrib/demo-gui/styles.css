@@ -2343,3 +2343,36 @@ img.session-lifehash {
   border-left: 2px solid rgba(15, 123, 79, 0.42);
   font-size: 13px;
 }
+
+/* MINE pseudo-peer + published-session areas (wiring lane, Q6): the
+   fragments panel partitions into a large peer-like Mine rectangle
+   (sessionless local fragments) and one container per session with
+   published members, so Mine -> session wiring reads as a visible move. */
+
+.session-mine-area,
+.session-published-area {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 10px;
+  margin-bottom: 10px;
+}
+
+.session-mine-area {
+  border: 2px solid var(--ink);
+  background: var(--surface-2);
+}
+
+.session-published-area {
+  border: 1.5px solid rgba(15, 123, 79, 0.42);
+  background: rgba(15, 123, 79, 0.04);
+}
+
+.session-mine-area > .session-card-list,
+.session-published-area > .session-card-list {
+  margin-top: 8px;
+}
+
+.session-area-hint {
+  display: block;
+  font-size: 12px;
+}
