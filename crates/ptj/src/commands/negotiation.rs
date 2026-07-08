@@ -63,7 +63,17 @@ fn aad(subtype: u8, id: &[u8; 16]) -> Vec<u8> {
 }
 
 /// Encrypt a plaintext record into `FORMAT_ENCRYPTED || ciphertext`.
-fn encrypt(secret: &[u8], subtype: u8, id: &[u8; 16], plaintext: &[u8]) -> Result<Vec<u8>> {
+///
+/// `pub(crate)` because the fee band shares this machinery: fee.rs documents
+/// that fee-contribution encryption "reuses the negotiation group-key
+/// machinery in the `ptj` CLI", and the helpers are already parameterized by
+/// subtype (`commands::fee` passes the 0x22 fee subtype).
+pub(crate) fn encrypt(
+    secret: &[u8],
+    subtype: u8,
+    id: &[u8; 16],
+    plaintext: &[u8],
+) -> Result<Vec<u8>> {
     let cipher = ChaCha20Poly1305::new(&derive_key(secret));
     let ct = cipher
         .encrypt(
@@ -82,7 +92,13 @@ fn encrypt(secret: &[u8], subtype: u8, id: &[u8; 16], plaintext: &[u8]) -> Resul
 
 /// Decrypt a `FORMAT_ENCRYPTED` blob back to the plaintext record, or `None`
 /// if the blob is not encrypted (leading byte is a plaintext format).
-fn decrypt(secret: &[u8], subtype: u8, id: &[u8; 16], blob: &[u8]) -> Result<Option<Vec<u8>>> {
+/// `pub(crate)` for the same fee-band sharing as [`encrypt`].
+pub(crate) fn decrypt(
+    secret: &[u8],
+    subtype: u8,
+    id: &[u8; 16],
+    blob: &[u8],
+) -> Result<Option<Vec<u8>>> {
     match blob.first() {
         Some(&FORMAT_ENCRYPTED) => {
             let cipher = ChaCha20Poly1305::new(&derive_key(secret));
@@ -103,11 +119,11 @@ fn decrypt(secret: &[u8], subtype: u8, id: &[u8; 16], blob: &[u8]) -> Result<Opt
     }
 }
 
-fn random_id() -> [u8; 16] {
+pub(crate) fn random_id() -> [u8; 16] {
     rand::random::<[u8; 16]>()
 }
 
-fn require_secret(secret: Option<&[u8]>) -> Result<&[u8]> {
+pub(crate) fn require_secret(secret: Option<&[u8]>) -> Result<&[u8]> {
     secret.ok_or_else(|| Error::new("--encrypt requires --secret"))
 }
 

@@ -2404,3 +2404,72 @@ fn sort_strips_negotiation_band() {
     ])).unwrap();
     assert!(report["payments"].as_array().unwrap().is_empty());
 }
+
+// ---- fee: explicit fee contributions ----
+
+#[test]
+fn fee_declares_explicit_contribution_and_inspect_counts_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let declared = run_to_psbt(["ptj", "fee", "--amount-sats", "700", path_str(&base)]);
+    assert_eq!(
+        concurrent_psbt::fee::total_declared_fee(&declared.global),
+        700
+    );
+
+    // Grow-only: a second declaration adds a fresh entry under its own id.
+    let first = write_psbt(temp.path(), "first.psbt", declared);
+    let again = run_to_psbt(["ptj", "fee", "--amount-sats", "42", path_str(&first)]);
+    {
+        use concurrent_psbt::fee::GlobalFeeExt as _;
+        assert_eq!(again.global.fee_contributions().len(), 2);
+    }
+    assert_eq!(concurrent_psbt::fee::total_declared_fee(&again.global), 742);
+
+    // The CLI round-trip: `ptj fee` then `ptj inspect` shows the total.
+    let both = write_psbt(temp.path(), "both.psbt", again);
+    let inspected = inspect_json(&both);
+    assert_eq!(inspected["totals"]["declared_fee_sats"], 742);
+    assert_eq!(inspected["totals"]["declared_fee_undecoded_count"], 0);
+}
+
+#[test]
+fn fee_encrypts_with_group_secret() {
+    use concurrent_psbt::fee::GlobalFeeExt as _;
+    use concurrent_psbt::payments::negotiation::FORMAT_ENCRYPTED;
+
+    let temp = tempfile::tempdir().unwrap();
+    let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let declared = run_to_psbt([
+        "ptj", "fee", "--amount-sats", "9999", "--encrypt", "--secret", "aabb",
+        path_str(&base),
+    ]);
+    let contributions = declared.global.fee_contributions();
+    assert_eq!(contributions.len(), 1);
+    assert_eq!(contributions[0].1.first(), Some(&FORMAT_ENCRYPTED));
+    // Sealed: the plaintext termination sum cannot count it, and inspect
+    // reports the unreadable entry instead of hiding it.
+    assert_eq!(concurrent_psbt::fee::total_declared_fee(&declared.global), 0);
+    let sealed = write_psbt(temp.path(), "sealed.psbt", declared);
+    let inspected = inspect_json(&sealed);
+    assert_eq!(inspected["totals"]["declared_fee_sats"], 0);
+    assert_eq!(inspected["totals"]["declared_fee_undecoded_count"], 1);
+}
+
+#[test]
+fn fee_encrypt_requires_secret() {
+    let temp = tempfile::tempdir().unwrap();
+    let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let error = run_error(["ptj", "fee", "--amount-sats", "1", "--encrypt", path_str(&base)]);
+    assert!(error.to_string().contains("--secret"));
+}
+
+#[test]
+fn fee_reads_stdin_psbt_source_marker() {
+    let base = create_psbt(TXID, 0, 1, 50_000);
+    let declared = run_to_psbt_with_stdin(
+        ["ptj", "fee", "--amount-sats", "5", "-"],
+        encode_psbt(&base).as_bytes(),
+    );
+    assert_eq!(concurrent_psbt::fee::total_declared_fee(&declared.global), 5);
+}

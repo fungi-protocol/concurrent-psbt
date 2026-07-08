@@ -158,6 +158,7 @@ pub(crate) fn response_for(method: &str, path: &str, body: &[u8]) -> Response {
             "/api/create" => return create_response(body),
             "/api/edit" => return edit_response(body),
             "/api/export-bip174" => return export_bip174_response(body),
+            "/api/fee" => return fee_response(body),
             "/api/import-bip174" => return import_bip174_response(body),
             "/api/inspect" => return inspect_response(body),
             "/api/join" => return join_response(body),
@@ -1459,6 +1460,52 @@ fn confirm_response_result(body: &[u8]) -> Result<Vec<u8>> {
             ));
         }
     }
+    Ok(serde_json::json!({
+        "psbt": crate::io::encode_psbt(&psbt),
+        "inspect": crate::commands::inspect::inspect_psbt(&psbt),
+    })
+    .to_string()
+    .into_bytes())
+}
+
+// --- fee band: /api/fee ------------------------------------------------------
+//
+// Writes one PSBT_GLOBAL_EXPLICIT_FEE_CONTRIBUTION entry (grow-only, subtype
+// 0x22) via `commands::fee::add_fee_contribution` — the write seam a fee
+// panel needs. It works on any LOCAL PSBT: no session or transport is
+// required (a sneakernet coinjoin declares its termination fee here too).
+// The request mirrors the negotiation routes: `{psbt, amount_sats,
+// secret_hex?}` where `amount_sats` is the field codec's bare u64 and
+// `secret_hex` opts into the same deterministic AEAD as /api/pay (fee-subtype
+// AAD). Response `{psbt, inspect}` — inspect's totals.declared_fee_sats
+// reflects the plaintext contribution immediately.
+
+fn fee_response(body: &[u8]) -> Response {
+    match fee_response_result(body) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/json; charset=utf-8",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+fn fee_response_result(body: &[u8]) -> Result<Vec<u8>> {
+    let request: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
+    let psbt = request_string(&request, "psbt")?;
+    let mut psbt = crate::io::parse_psbt_bytes("request psbt", psbt.as_bytes())?;
+    let amount_sats = request
+        .get("amount_sats")
+        .ok_or_else(|| Error::new("request JSON must contain field `amount_sats` (u64 satoshis)"))?
+        .as_u64()
+        .ok_or_else(|| {
+            Error::new("request JSON field `amount_sats` must be a non-negative integer")
+        })?;
+    let secret = optional_hex_field(&request, "secret_hex")?;
+    crate::commands::fee::add_fee_contribution(&mut psbt, amount_sats, secret.as_deref())?;
     Ok(serde_json::json!({
         "psbt": crate::io::encode_psbt(&psbt),
         "inspect": crate::commands::inspect::inspect_psbt(&psbt),
@@ -3665,9 +3712,108 @@ mod tests {
     }
 
     #[test]
+    fn fee_endpoint_writes_contribution_and_inspect_reports_it() {
+        // One contribution: the response inspect already counts it.
+        let first = negotiation_ok(
+            "/api/fee",
+            &serde_json::json!({ "psbt": encoded_psbt(), "amount_sats": 1_234 }),
+        );
+        assert_eq!(first["inspect"]["totals"]["declared_fee_sats"], 1_234);
+        assert_eq!(
+            first["inspect"]["totals"]["declared_fee_undecoded_count"],
+            0
+        );
+
+        // A second contribution grows the band (fresh uuid, no replacement).
+        let second = negotiation_ok(
+            "/api/fee",
+            &serde_json::json!({
+                "psbt": first["psbt"].as_str().unwrap(),
+                "amount_sats": 66,
+            }),
+        );
+        assert_eq!(second["inspect"]["totals"]["declared_fee_sats"], 1_300);
+
+        // Round-trip through the plain inspect route: the written PSBT bytes
+        // carry the declared total on their own.
+        let inspected = negotiation_ok(
+            "/api/inspect",
+            &serde_json::json!({ "psbt": second["psbt"].as_str().unwrap() }),
+        );
+        assert_eq!(inspected["totals"]["declared_fee_sats"], 1_300);
+    }
+
+    #[test]
+    fn fee_endpoint_encrypted_contribution_needs_the_secret_to_count() {
+        let declared = negotiation_ok(
+            "/api/fee",
+            &serde_json::json!({
+                "psbt": encoded_psbt(),
+                "amount_sats": 9_999,
+                "secret_hex": "0011",
+            }),
+        );
+        // Honest inspect: the sealed contribution is NOT counted, and the
+        // undecoded count says one entry exists that the total could not read.
+        assert_eq!(declared["inspect"]["totals"]["declared_fee_sats"], 0);
+        assert_eq!(
+            declared["inspect"]["totals"]["declared_fee_undecoded_count"],
+            1
+        );
+
+        // The group secret recovers the amount through the shared AEAD under
+        // the fee subtype.
+        use concurrent_psbt::fee::{
+            FeeContribution, GlobalFeeExt as _, PSBT_GLOBAL_EXPLICIT_FEE_CONTRIBUTION_SUBTYPE,
+        };
+        let psbt = crate::io::parse_psbt_bytes(
+            "fee response psbt",
+            declared["psbt"].as_str().unwrap().as_bytes(),
+        )
+        .unwrap();
+        let contributions = psbt.global.fee_contributions();
+        assert_eq!(contributions.len(), 1);
+        let (id, blob) = &contributions[0];
+        let plaintext = crate::commands::negotiation::decrypt(
+            &[0x00, 0x11],
+            PSBT_GLOBAL_EXPLICIT_FEE_CONTRIBUTION_SUBTYPE,
+            id,
+            blob,
+        )
+        .unwrap()
+        .expect("stored blob is encrypted");
+        assert_eq!(
+            FeeContribution::decode(&plaintext).unwrap(),
+            FeeContribution { amount_sats: 9_999 }
+        );
+    }
+
+    #[test]
+    fn fee_endpoint_rejects_missing_or_malformed_amount() {
+        let missing = serde_json::json!({ "psbt": encoded_psbt() }).to_string();
+        let response = response_for("POST", "/api/fee", missing.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("`amount_sats`")
+        );
+
+        let fractional =
+            serde_json::json!({ "psbt": encoded_psbt(), "amount_sats": 12.5 }).to_string();
+        let response = response_for("POST", "/api/fee", fractional.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("non-negative integer")
+        );
+    }
+
+    #[test]
     fn negotiation_endpoints_report_json_errors() {
-        // Missing `psbt` (all three routes share the shape).
-        for path in ["/api/pay", "/api/confirm", "/api/payments"] {
+        // Missing `psbt` (the fee route shares the negotiation shape).
+        for path in ["/api/pay", "/api/confirm", "/api/payments", "/api/fee"] {
             let response = response_for("POST", path, b"{}");
             assert_eq!(response.status, 400, "{path}");
             assert_eq!(response.content_type, "application/json; charset=utf-8");
