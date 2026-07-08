@@ -9,7 +9,20 @@ path = "src/main.rs"
 
 [features]
 default = ["webgui"]
-webgui = []
+# The route-only parser/renderer deps ride the webgui gate instead of
+# burdening the plain CLI build: the universal-paste classifier
+# (/api/classify) grounds miniscript (output descriptors) and Matt Corallo's
+# bitcoin-payment-instructions (BIP 21/321 payment URIs); the lifehash
+# fingerprint route (GET /api/lifehash/<hex-digest>) grounds the lifehash
+# crate plus the png encoder. (A LATER task exposes lifehash as a
+# concurrent-psbt-wasm export for the PWA; the digest->image mapping must
+# stay identical across both surfaces.)
+webgui = [
+    "dep:bitcoin-payment-instructions",
+    "dep:lifehash",
+    "dep:miniscript",
+    "dep:png",
+]
 # WIP: interactive terminal UI (`ptj tui`). NOT in the default set — the TUI
 # pulls a terminal stack (ratatui + crossterm) the plain CLI doesn't need.
 tui = ["dep:ratatui", "dep:crossterm"]
@@ -68,6 +81,10 @@ transport-mdk = { path = "../transport-mdk", optional = true }
 transport-str0m = { path = "../transport-str0m", optional = true }
 transport-webrtc-rs = { path = "../transport-webrtc-rs", optional = true }
 transport-payjoin-dir = { path = "../transport-payjoin-dir", optional = true }
+miniscript = { version = "13.1.0", optional = true }
+bitcoin-payment-instructions = { version = "0.7.0", optional = true }
+lifehash = { version = "0.1.0", optional = true }
+png = { version = "0.17.16", optional = true }
 # TODO(transport-nostr): unauthored — no such crate exists yet.
 # transport-nostr = { path = "../transport-nostr", optional = true }
 

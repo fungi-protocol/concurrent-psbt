@@ -1,5 +1,7 @@
 pub(crate) mod assign_ids;
 pub(crate) mod atomize;
+#[cfg(feature = "webgui")]
+pub(crate) mod classify;
 pub(crate) mod concatenate;
 pub(crate) mod create;
 pub(crate) mod export_bip174;
@@ -8,6 +10,8 @@ pub(crate) mod field_edit;
 pub(crate) mod import_bip174;
 pub(crate) mod inspect;
 pub(crate) mod join;
+#[cfg(feature = "webgui")]
+pub(crate) mod lifehash;
 pub(crate) mod make_unordered;
 pub(crate) mod negotiation;
 pub(crate) mod sort;
