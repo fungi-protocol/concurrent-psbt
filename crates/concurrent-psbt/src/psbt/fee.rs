@@ -85,8 +85,11 @@ pub trait GlobalFeeExt {
     /// Remove every fee-contribution entry from the proprietary map.
     ///
     /// Fee metadata is negotiation state; it must not leak into the signing
-    /// artifact, so ordering/signing paths call this alongside
-    /// `clear_negotiation()`.
+    /// artifact. Ordering paths strip it via
+    /// [`GlobalRemovalExt::clear_removal_and_fee`](crate::psbt::removal::GlobalRemovalExt::clear_removal_and_fee)
+    /// (which clears this band together with the removal tombstones, next to
+    /// `clear_negotiation()` in the sorter); this method is the fee-only
+    /// primitive it delegates to.
     fn clear_fee_contributions(&mut self);
 }
 
