@@ -11,6 +11,12 @@ use ptj::cli::{Cli, Command, HexSeed, NetworkArg, OrderingArg, OutPointArg, Outp
 
 const TXID: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 const ADDRESS: &str = "1BoatSLRHtKNngkdXEeobR76b53LETtpyT";
+/// A 16-byte (spec-minimum) ordering seed for tests that execute commands.
+const SEED: &str = "abcdabcdabcdabcdabcdabcdabcdabcd";
+
+fn seed_bytes() -> Vec<u8> {
+    [0xab, 0xcd].repeat(8)
+}
 
 #[test]
 fn create_command_parses_typed_values_at_the_boundary() {
@@ -276,8 +282,15 @@ fn typed_arguments_reject_malformed_values() {
     );
     assert!(OrderingArg::from_str("sideways").is_err());
     assert!(NetworkArg::from_str("liquid").is_err());
+    // Odd-length hex-charset input stays an error (never a base58 fallback).
     assert!(HexSeed::from_str("abc").is_err());
-    assert!(HexSeed::from_str("zz").is_err());
+    // Liberal parsing: "zz" is outside the hex charset but valid base58.
+    assert_eq!(
+        HexSeed::from_str("zz").map(ptj::cli::HexSeed::into_bytes),
+        Ok(bitcoin::base58::decode("zz").unwrap())
+    );
+    // Undecodable in every supported encoding (0 and ! are not base58).
+    assert!(HexSeed::from_str("0!z").is_err());
     assert!(OutPointArg::from_str("not-an-outpoint").is_err());
     assert!(OutPointArg::from_str(&format!("{TXID}:not-a-vout")).is_err());
     assert!(OutputArg::from_str(&format!("{ADDRESS}:not-an-amount")).is_err());
@@ -415,14 +428,14 @@ fn create_emits_real_unordered_psbt_bytes() {
         "--output",
         &format!("{}:0.00123456", regtest_address(1)),
         "--seed",
-        "abcd",
+        SEED,
     ]);
 
     assert_eq!(psbt.global.input_count, 1);
     assert_eq!(psbt.global.output_count, 1);
     assert_eq!(psbt.global.tx_modifiable_flags & 0x03, 0x03);
     assert!(psbt.global.is_unordered());
-    assert_eq!(psbt.global.sort_seed(), Some(&[0xab, 0xcd][..]));
+    assert_eq!(psbt.global.sort_seed(), Some(&seed_bytes()[..]));
     assert_eq!(psbt.global.sort_deterministic(), None);
     assert_eq!(psbt.inputs[0].previous_txid.to_string(), TXID);
     assert_eq!(psbt.inputs[0].spent_output_index, 7);
@@ -458,6 +471,89 @@ fn create_explicit_ordering_rejects_seed() {
 }
 
 #[test]
+fn create_rejects_short_seed_unless_overridden() {
+    let error = run_error([
+        "ptj",
+        "create",
+        "--network",
+        "regtest",
+        "--ordering",
+        "deterministic",
+        "--seed",
+        "abcd",
+        "--input",
+        &format!("{TXID}:7"),
+    ]);
+    assert!(error.to_string().contains("128 bits"), "{error}");
+    assert!(error.to_string().contains("--allow-short-seed"), "{error}");
+
+    let overridden = run_to_psbt([
+        "ptj",
+        "create",
+        "--network",
+        "regtest",
+        "--ordering",
+        "deterministic",
+        "--seed",
+        "abcd",
+        "--allow-short-seed",
+        "--input",
+        &format!("{TXID}:7"),
+    ]);
+    assert_eq!(overridden.global.sort_seed(), Some(&[0xab, 0xcd][..]));
+    assert_eq!(overridden.global.sort_deterministic(), Some(0x01));
+}
+
+#[test]
+fn sort_rejects_short_seed_argument_unless_overridden() {
+    let temp = tempfile::tempdir().unwrap();
+    let unordered = create_psbt_without_seed(TXID, 7, 1, 123_456);
+    let path = write_psbt(temp.path(), "unordered.psbt", unordered);
+
+    let error = run_error(["ptj", "sort", "--seed", "abcd", path_str(&path)]);
+    assert!(error.to_string().contains("128 bits"), "{error}");
+    assert!(error.to_string().contains("--allow-short-seed"), "{error}");
+
+    let sorted = run_to_psbt([
+        "ptj",
+        "sort",
+        "--seed",
+        "abcd",
+        "--allow-short-seed",
+        path_str(&path),
+    ]);
+    assert!(!sorted.global.is_unordered());
+}
+
+#[test]
+fn sort_rejects_short_embedded_deterministic_seed_unless_overridden() {
+    let temp = tempfile::tempdir().unwrap();
+    // A deterministic-mode PSBT carrying a legacy short seed (authored with
+    // the explicit override).
+    let short_seeded = run_to_psbt([
+        "ptj",
+        "create",
+        "--network",
+        "regtest",
+        "--ordering",
+        "deterministic",
+        "--seed",
+        "abcd",
+        "--allow-short-seed",
+        "--input",
+        &format!("{TXID}:7"),
+    ]);
+    let path = write_psbt(temp.path(), "short-seeded.psbt", short_seeded);
+
+    let error = run_error(["ptj", "sort", path_str(&path)]);
+    assert!(error.to_string().contains("128 bits"), "{error}");
+
+    let sorted = run_to_psbt(["ptj", "sort", "--allow-short-seed", path_str(&path)]);
+    assert!(!sorted.global.is_unordered());
+    assert_eq!(sorted.global.sort_deterministic(), Some(0x01));
+}
+
+#[test]
 fn create_sets_explicit_and_deterministic_ordering_modes() {
     let explicit = run_to_psbt([
         "ptj",
@@ -478,11 +574,11 @@ fn create_sets_explicit_and_deterministic_ordering_modes() {
         "--ordering",
         "deterministic",
         "--seed",
-        "abcd",
+        SEED,
         "--input",
         &format!("{TXID}:7"),
     ]);
-    assert_eq!(deterministic.global.sort_seed(), Some(&[0xab, 0xcd][..]));
+    assert_eq!(deterministic.global.sort_seed(), Some(&seed_bytes()[..]));
     assert_eq!(deterministic.global.sort_deterministic(), Some(0x01));
 }
 
@@ -525,7 +621,7 @@ fn inspect_reports_psbt_state_as_json() {
     assert_eq!(inspected["modifiability"]["inputs"], true);
     assert_eq!(inspected["modifiability"]["outputs"], true);
     assert_eq!(inspected["sort"]["mode"], "deterministic");
-    assert_eq!(inspected["sort"]["seed_hex"], "abcd");
+    assert_eq!(inspected["sort"]["seed_hex"], SEED);
     // The psbt.md unordered unique id — the identity `ptj confirm` records.
     assert_eq!(inspected["unordered_unique_id_hex"], expected_unique_id);
 
@@ -657,8 +753,8 @@ fn sort_makes_join_paths_byte_identical() {
     let ab_path = write_psbt(temp.path(), "ab.psbt", ab);
     let ba_path = write_psbt(temp.path(), "ba.psbt", ba);
 
-    let sorted_ab = run_to_psbt(["ptj", "sort", "--seed", "deadbeef", path_str(&ab_path)]);
-    let sorted_ba = run_to_psbt(["ptj", "sort", "--seed", "deadbeef", path_str(&ba_path)]);
+    let sorted_ab = run_to_psbt(["ptj", "sort", "--seed", SEED, path_str(&ab_path)]);
+    let sorted_ba = run_to_psbt(["ptj", "sort", "--seed", SEED, path_str(&ba_path)]);
 
     assert!(!sorted_ab.global.is_unordered());
     assert_eq!(psbt_bytes(&sorted_ab), psbt_bytes(&sorted_ba));
@@ -756,8 +852,8 @@ fn sync_joins_positional_sources_and_prints_lub() {
 
     let repeated = run_to_psbt(["ptj", "sync", path_str(&a), path_str(&b), path_str(&a)]);
     let repeated_path = write_psbt(temp.path(), "repeated.psbt", repeated);
-    let sorted_synced = run_to_psbt(["ptj", "sort", "--seed", "abcd", path_str(&synced_path)]);
-    let sorted_repeated = run_to_psbt(["ptj", "sort", "--seed", "abcd", path_str(&repeated_path)]);
+    let sorted_synced = run_to_psbt(["ptj", "sort", "--seed", SEED, path_str(&synced_path)]);
+    let sorted_repeated = run_to_psbt(["ptj", "sort", "--seed", SEED, path_str(&repeated_path)]);
     assert_eq!(psbt_bytes(&sorted_repeated), psbt_bytes(&sorted_synced));
 }
 
@@ -816,7 +912,7 @@ fn sort_reads_stdin_psbt_source_marker() {
     let unordered = create_psbt(TXID, 0, 1, 50_000);
 
     let sorted = run_to_psbt_with_stdin(
-        ["ptj", "sort", "--seed", "abcd", "-"],
+        ["ptj", "sort", "--seed", SEED, "-"],
         encode_psbt(&unordered).as_bytes(),
     );
 
@@ -1127,6 +1223,164 @@ fn make_unordered_rejects_psbts_without_constructor_metadata() {
     assert!(error.to_string().contains("not modifiable"));
 }
 
+
+#[test]
+fn assign_ids_completes_the_bip174_import_round_trip() {
+    let temp = tempfile::tempdir().unwrap();
+    // A foreign BIP 174 fixture: strip the concurrent-psbt proprietaries so it
+    // looks like a PSBT authored by older Bitcoin Core (no unique ids).
+    let mut ordered = sorted_psbt(TXID, 0, 1, 50_000);
+    ordered.outputs[0].proprietaries.clear();
+    let ordered = write_psbt(temp.path(), "ordered.psbt", ordered);
+    let core_psbt =
+        ptj::run(Cli::try_parse_from(["ptj", "export-bip174", path_str(&ordered)]).unwrap())
+            .unwrap();
+    let core_path = temp.path().join("core.psbt");
+    std::fs::write(&core_path, core_psbt).unwrap();
+
+    let imported = run_to_psbt([
+        "ptj",
+        "import-bip174",
+        "--modifiable",
+        path_str(&core_path),
+    ]);
+    assert!(!imported.outputs[0].has_unique_id());
+    let imported_path = write_psbt(temp.path(), "imported.psbt", imported);
+
+    // Previously failed here: the import has no PSBT_OUT_UNIQUE_ID.
+    let error = run_error(["ptj", "make-unordered", path_str(&imported_path)]);
+    assert!(error.to_string().contains("PSBT_OUT_UNIQUE_ID"));
+
+    let assigned = run_to_psbt(["ptj", "assign-ids", path_str(&imported_path)]);
+    assert!(assigned.outputs[0].has_unique_id());
+    let assigned_path = write_psbt(temp.path(), "assigned.psbt", assigned);
+
+    let unordered = run_to_psbt(["ptj", "make-unordered", path_str(&assigned_path)]);
+    assert!(unordered.global.is_unordered());
+    assert!(unordered.outputs[0].has_unique_id());
+}
+
+#[test]
+fn assign_ids_is_idempotent_and_preserves_existing_ids() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut psbt = sorted_psbt(TXID, 0, 1, 50_000);
+    psbt.outputs[0].proprietaries.clear();
+    let path = write_psbt(temp.path(), "bare.psbt", psbt);
+
+    let first = run_to_psbt(["ptj", "assign-ids", path_str(&path)]);
+    let assigned_uid = first.outputs[0].unique_id().expect("assigned");
+    assert_eq!(assigned_uid.as_bytes().len(), 16);
+
+    let first_path = write_psbt(temp.path(), "first.psbt", first.clone());
+    let second = run_to_psbt(["ptj", "assign-ids", path_str(&first_path)]);
+    assert_eq!(psbt_bytes(&second), psbt_bytes(&first));
+}
+
+#[test]
+fn assign_ids_manual_directives_set_chosen_ids() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut psbt = sorted_psbt(TXID, 0, 1, 50_000);
+    psbt.outputs[0].proprietaries.clear();
+    let path = write_psbt(temp.path(), "bare.psbt", psbt);
+
+    let assigned = run_to_psbt([
+        "ptj",
+        "assign-ids",
+        "--id",
+        "out:0=0102030405060708090a0b0c0d0e0f10",
+        "--id",
+        "in:0=aa11",
+        path_str(&path),
+    ]);
+    assert_eq!(
+        assigned.outputs[0].unique_id().unwrap().into_bytes(),
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    );
+    assert_eq!(
+        concurrent_psbt::removal::InputUniqueIdExt::unique_id(&assigned.inputs[0]),
+        Some(vec![0xaa, 0x11]),
+    );
+
+    // Re-asserting the same id is idempotent; a different one needs --overwrite.
+    let assigned_path = write_psbt(temp.path(), "assigned.psbt", assigned);
+    let error = run_error(["ptj", "assign-ids", "--id", "out:0=ffff", path_str(&assigned_path)]);
+    assert!(error.to_string().contains("--overwrite"), "{error}");
+    let overwritten = run_to_psbt([
+        "ptj",
+        "assign-ids",
+        "--overwrite",
+        "--id",
+        "out:0=ffff",
+        path_str(&assigned_path),
+    ]);
+    assert_eq!(
+        overwritten.outputs[0].unique_id().unwrap().into_bytes(),
+        vec![0xff, 0xff],
+    );
+
+    let error = run_error(["ptj", "assign-ids", "--id", "out:5=abcd", path_str(&path)]);
+    assert!(error.to_string().contains("out of range"), "{error}");
+}
+
+#[test]
+fn assign_ids_rejects_colliding_manual_output_ids() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut psbt = run_to_psbt([
+        "ptj",
+        "create",
+        "--network",
+        "regtest",
+        "--input",
+        &format!("{TXID}:7"),
+        "--output",
+        &format!("{}:0.00050000", regtest_address(1)),
+        "--output",
+        &format!("{}:0.00060000", regtest_address(2)),
+        "--seed",
+        SEED,
+    ]);
+    for output in &mut psbt.outputs {
+        output.proprietaries.clear();
+    }
+    let path = write_psbt(temp.path(), "two-outputs.psbt", psbt);
+
+    let error = run_error([
+        "ptj",
+        "assign-ids",
+        "--id",
+        "out:0=abcd",
+        "--id",
+        "out:1=abcd",
+        path_str(&path),
+    ]);
+    assert!(error.to_string().contains("must be unique"), "{error}");
+
+    // --auto fills the outputs the manual directives did not cover.
+    let assigned = run_to_psbt([
+        "ptj",
+        "assign-ids",
+        "--auto",
+        "--id",
+        "out:0=abcd",
+        path_str(&path),
+    ]);
+    assert_eq!(
+        assigned.outputs[0].unique_id().unwrap().into_bytes(),
+        vec![0xab, 0xcd],
+    );
+    assert!(assigned.outputs[1].has_unique_id());
+
+    // Without --auto, manual-only leaves the other output untouched.
+    let manual_only = run_to_psbt([
+        "ptj",
+        "assign-ids",
+        "--id",
+        "out:0=abcd",
+        path_str(&path),
+    ]);
+    assert!(!manual_only.outputs[1].has_unique_id());
+}
+
 #[test]
 fn atomize_emits_joinable_unordered_fragments() {
     let temp = tempfile::tempdir().unwrap();
@@ -1332,6 +1586,28 @@ fn bip370_operations_reject_bip174_inputs_and_point_to_import() {
 }
 
 #[test]
+fn import_bip174_modifiable_flag_marks_the_import_constructor_ready() {
+    let temp = tempfile::tempdir().unwrap();
+    let ordered = write_psbt(temp.path(), "ordered.psbt", sorted_psbt(TXID, 0, 1, 50_000));
+    let core_psbt =
+        ptj::run(Cli::try_parse_from(["ptj", "export-bip174", path_str(&ordered)]).unwrap())
+            .unwrap();
+    let core_path = temp.path().join("core.psbt");
+    std::fs::write(&core_path, core_psbt).unwrap();
+
+    // Strict default: BIP 174 carries no TX_MODIFIABLE, so the import is not
+    // modifiable (asserted in the sibling test). --modifiable is the explicit
+    // user assertion that inputs and outputs may still be added.
+    let modifiable = run_to_psbt([
+        "ptj",
+        "import-bip174",
+        "--modifiable",
+        path_str(&core_path),
+    ]);
+    assert_eq!(modifiable.global.tx_modifiable_flags, 0x03);
+}
+
+#[test]
 fn import_bip174_upgrades_core_psbt_to_ordered_bip370() {
     let temp = tempfile::tempdir().unwrap();
     let mut ordered = sorted_psbt(TXID, 0, 1, 50_000);
@@ -1387,7 +1663,7 @@ fn run_or_write_atomically_writes_output_file() {
         "--output",
         &format!("{}:0.00123456", regtest_address(1)),
         "--seed",
-        "abcd",
+        SEED,
     ])
     .unwrap();
 
@@ -1418,7 +1694,7 @@ fn run_or_write_can_write_binary_psbt_file() {
         "--output",
         &format!("{}:0.00123456", regtest_address(1)),
         "--seed",
-        "abcd",
+        SEED,
     ])
     .unwrap();
 
@@ -1448,7 +1724,7 @@ fn run_or_write_binary_shortcut_writes_binary_psbt_file() {
         "--output",
         &format!("{}:0.00123456", regtest_address(1)),
         "--seed",
-        "abcd",
+        SEED,
     ])
     .unwrap();
 
@@ -1473,7 +1749,7 @@ fn run_or_write_rejects_binary_stdout() {
         "--output",
         &format!("{}:0.00123456", regtest_address(1)),
         "--seed",
-        "abcd",
+        SEED,
     ])
     .unwrap();
 
@@ -1750,7 +2026,7 @@ fn create_psbt(txid: &str, vout: u32, address_seed: u8, amount_sats: u64) -> psb
             btc_value(amount_sats)
         ),
         "--seed",
-        "abcd",
+        SEED,
     ])
 }
 
@@ -1785,7 +2061,7 @@ fn create_input_only_psbt(txid: &str, vout: u32) -> psbt_v2::v2::Psbt {
         "--input",
         &format!("{txid}:{vout}"),
         "--seed",
-        "abcd",
+        SEED,
     ])
 }
 
@@ -1796,7 +2072,7 @@ fn sorted_psbt(txid: &str, vout: u32, address_seed: u8, amount_sats: u64) -> psb
         "unordered.psbt",
         create_psbt(txid, vout, address_seed, amount_sats),
     );
-    run_to_psbt(["ptj", "sort", "--seed", "abcd", path_str(&unordered)])
+    run_to_psbt(["ptj", "sort", "--seed", SEED, path_str(&unordered)])
 }
 
 fn inspect_json(path: &std::path::Path) -> serde_json::Value {

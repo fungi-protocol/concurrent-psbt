@@ -23,6 +23,8 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Command {
+    /// Assign unique ids to inputs/outputs that lack them (spec identity fields)
+    AssignIds(AssignIdsConfig),
     /// Split a constructor PSBT into atomic unordered fragments
     Atomize(AtomizeConfig),
     /// Create a new PSBT with inputs and outputs
@@ -62,6 +64,7 @@ pub enum Command {
 impl Command {
     pub fn reads_stdin(&self) -> bool {
         match self {
+            Command::AssignIds(config) => is_stdin_path(&config.file),
             Command::Atomize(config) => is_stdin_path(&config.file),
             Command::Concatenate(config) => config.files.iter().any(|path| is_stdin_path(path)),
             Command::ExportBip174(config) => is_stdin_path(&config.file),
@@ -86,6 +89,7 @@ impl Command {
 
     pub(crate) fn stdin_source_count(&self) -> usize {
         match self {
+            Command::AssignIds(config) => usize::from(is_stdin_path(&config.file)),
             Command::Atomize(config) => usize::from(is_stdin_path(&config.file)),
             Command::Concatenate(config) => config
                 .files
@@ -124,6 +128,62 @@ fn is_stdin_path(path: &Path) -> bool {
 }
 
 #[derive(Args, Debug, Clone)]
+pub struct AssignIdsConfig {
+    /// Manual id assignment `<in|out>:<index>=<bytes>` (repeatable). `out`
+    /// sets PSBT_OUT_UNIQUE_ID, `in` sets the optional PSBT_IN_UNIQUE_ID
+    /// outpoint suffix; bytes accept hex/base58/bech32 by character set
+    #[arg(long = "id")]
+    pub ids: Vec<IdAssignment>,
+    /// Also assign fresh random 16-byte ids to outputs still missing one
+    /// (the default when no --id is given)
+    #[arg(long)]
+    pub auto: bool,
+    /// Replace an existing unique id that differs from the requested one
+    /// (default: error; matching ids are always accepted idempotently)
+    #[arg(long)]
+    pub overwrite: bool,
+    /// PSBT file to assign ids in
+    pub file: PathBuf,
+}
+
+/// One `--id <in|out>:<index>=<bytes>` directive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdAssignment {
+    pub target: IdTarget,
+    pub index: usize,
+    pub id: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdTarget {
+    Input,
+    Output,
+}
+
+impl FromStr for IdAssignment {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        let (selector, id) = value
+            .split_once('=')
+            .ok_or_else(|| format!("expected <in|out>:<index>=<bytes>, got {value}"))?;
+        let (kind, index) = selector
+            .split_once(':')
+            .ok_or_else(|| format!("expected selector <in|out>:<index>, got {selector}"))?;
+        let target = match kind {
+            "in" | "input" => IdTarget::Input,
+            "out" | "output" => IdTarget::Output,
+            other => return Err(format!("unknown id target {other} (expected in or out)")),
+        };
+        let index = index
+            .parse::<usize>()
+            .map_err(|error| format!("invalid {kind} index {index}: {error}"))?;
+        let id = crate::bytes_arg::parse_bytes_arg(id)?;
+        Ok(Self { target, index, id })
+    }
+}
+
+#[derive(Args, Debug, Clone)]
 pub struct AtomizeConfig {
     /// PSBT file to atomize
     pub file: PathBuf,
@@ -137,9 +197,12 @@ pub struct CreateConfig {
     /// Output in addr:amount_btc format (repeatable)
     #[arg(long = "output")]
     pub outputs: Vec<OutputArg>,
-    /// Sort seed as hex
+    /// Sort seed as hex (or base58/bech32, detected from the character set)
     #[arg(long)]
     pub seed: Option<HexSeed>,
+    /// Accept an ordering seed below the spec minimum of 128 bits (16 bytes)
+    #[arg(long = "allow-short-seed")]
+    pub allow_short_seed: bool,
     /// Ordering mode for the unordered PSBT
     #[arg(long = "ordering", value_enum, default_value_t = OrderingArg::Unset)]
     pub ordering: OrderingArg,
@@ -170,6 +233,10 @@ pub struct ExportBip174Config {
 
 #[derive(Args, Debug, Clone)]
 pub struct ImportBip174Config {
+    /// Mark the imported PSBT's inputs and outputs modifiable (BIP 174 has no
+    /// TX_MODIFIABLE field; this is an explicit assertion, off by default)
+    #[arg(long)]
+    pub modifiable: bool,
     /// BIP 174 PSBT file to import
     pub file: PathBuf,
 }
@@ -188,9 +255,12 @@ pub struct MakeUnorderedConfig {
 
 #[derive(Args, Debug, Clone)]
 pub struct SortConfig {
-    /// Sort seed as hex (overrides embedded seed)
+    /// Sort seed as hex (or base58/bech32; overrides embedded seed)
     #[arg(long)]
     pub seed: Option<HexSeed>,
+    /// Accept an ordering seed below the spec minimum of 128 bits (16 bytes)
+    #[arg(long = "allow-short-seed")]
+    pub allow_short_seed: bool,
     /// PSBT file to sort
     pub file: PathBuf,
 }
@@ -438,7 +508,8 @@ pub struct PaymentsConfig {
     pub file: PathBuf,
 }
 
-/// A fixed 32-byte value parsed from hex.
+/// A fixed 32-byte value parsed liberally (hex, base58, or bech32 detected
+/// from the character set; see [`crate::bytes_arg`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hex32([u8; 32]);
 
@@ -452,13 +523,17 @@ impl FromStr for Hex32 {
     type Err = String;
 
     fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        let bytes = decode_hex(value)?;
+        let bytes = crate::bytes_arg::parse_bytes_arg(value)?;
+        let len = bytes.len();
         <[u8; 32]>::try_from(bytes.as_slice())
             .map(Self)
-            .map_err(|_| format!("expected 32 bytes (64 hex chars), got {}", value.len() / 2))
+            .map_err(|_| format!("expected 32 bytes (64 hex chars), got {len}"))
     }
 }
 
+/// A byte-string argument parsed liberally (hex, base58, or bech32 detected
+/// from the character set; see [`crate::bytes_arg`]). The name is historical:
+/// hex remains the canonical form, and any string of hex digits parses as hex.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HexSeed(Vec<u8>);
 
@@ -476,7 +551,7 @@ impl FromStr for HexSeed {
     type Err = String;
 
     fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        decode_hex(value).map(Self)
+        crate::bytes_arg::parse_bytes_arg(value).map(Self)
     }
 }
 
@@ -538,26 +613,3 @@ impl FromStr for OutputArg {
     }
 }
 
-fn decode_hex(value: &str) -> std::result::Result<Vec<u8>, String> {
-    if !value.len().is_multiple_of(2) {
-        return Err(format!("hex string has odd length: {value}"));
-    }
-    value
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| {
-            let high = hex_nibble(pair[0]).ok_or_else(|| format!("invalid hex: {value}"))?;
-            let low = hex_nibble(pair[1]).ok_or_else(|| format!("invalid hex: {value}"))?;
-            Ok((high << 4) | low)
-        })
-        .collect()
-}
-
-fn hex_nibble(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}

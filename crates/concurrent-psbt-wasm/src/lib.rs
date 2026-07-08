@@ -39,6 +39,7 @@
 
 use wasm_bindgen::prelude::*;
 
+mod bytes_arg;
 mod dto;
 mod negotiation;
 mod ops;
@@ -113,11 +114,19 @@ pub fn join(psbts: JsValue) -> Result<JsValue, JsError> {
 /// `POST /api/sort` — order an unordered PSBT; optional seed.
 ///
 /// Canonical Backend arity: `sort(psbt, seedHex?)` — two positional args, NOT a
-/// request object (matches `Backend.sortPsbt(psbt, seedHex?)` in the shared
-/// frontend). Response: `{ psbt, inspect }`.
+/// request object (matches `Backend.sortPsbt(psbt, seedHex?, allowShortSeed?)`
+/// in the shared frontend). Response: `{ psbt, inspect }`.
 #[wasm_bindgen(js_name = sort)]
-pub fn sort(psbt: String, seed_hex: Option<String>) -> Result<JsValue, JsError> {
-    finish(ops::sort(&psbt, seed_hex.as_deref()))
+pub fn sort(
+    psbt: String,
+    seed_hex: Option<String>,
+    allow_short_seed: Option<bool>,
+) -> Result<JsValue, JsError> {
+    finish(ops::sort(
+        &psbt,
+        seed_hex.as_deref(),
+        allow_short_seed.unwrap_or(false),
+    ))
 }
 
 /// `POST /api/make-unordered` — clear ordering, returning an unordered PSBT.
@@ -151,10 +160,24 @@ pub fn export_bip174(psbt: String) -> Result<JsValue, JsError> {
 }
 
 /// `POST /api/import-bip174` — convert base64 BIP-174 to a BIP-370 PSBT.
-/// Request: `{ psbt }`. Response: `{ psbt, inspect }`.
+/// Request: `{ psbt, modifiable? }` (positional here: `importBip174(psbt,
+/// modifiable?)`). BIP 174 has no TX_MODIFIABLE field; passing `true` is the
+/// caller's explicit assertion that inputs/outputs may still be added.
+/// Response: `{ psbt, inspect }`.
 #[wasm_bindgen(js_name = importBip174)]
-pub fn import_bip174(psbt: String) -> Result<JsValue, JsError> {
-    finish(ops::import_bip174(&psbt))
+pub fn import_bip174(psbt: String, modifiable: Option<bool>) -> Result<JsValue, JsError> {
+    finish(ops::import_bip174(&psbt, modifiable.unwrap_or(false)))
+}
+
+/// `POST /api/assign-ids` — assign spec identity fields (PSBT_OUT_UNIQUE_ID,
+/// optional PSBT_IN_UNIQUE_ID) to entries that lack them. Request mirrors the
+/// webgui body: `{ psbt, ids?: [{target, index, id}], auto?, overwrite? }`.
+/// Response: `{ psbt, inspect }`.
+#[wasm_bindgen(js_name = assignIds)]
+pub fn assign_ids(request: JsValue) -> Result<JsValue, JsError> {
+    let req: dto::AssignIdsRequest = serde_wasm_bindgen::from_value(request)
+        .map_err(|e| JsError::new(&format!("parsing assign-ids request: {e}")))?;
+    finish(ops::assign_ids(req))
 }
 
 /// `POST /api/sync`, local branch — the Layer-2 lattice fold with NO network.
