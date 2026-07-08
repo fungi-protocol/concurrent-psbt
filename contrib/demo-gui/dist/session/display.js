@@ -27,7 +27,7 @@
 // the card: the shell renders them as LifeHash fingerprints (lazy <img>s on
 // GET /api/lifehash/<hex>, see lifehashBadge in ./app.ts) with full
 // bitvomit on expand — this module exposes the digest strings.
-import { formatSatAmount } from "../model.js";
+import { amountParts, formatSatAmount } from "../model.js";
 import { addressFromScript } from "./encoding.js";
 import { asArray, asBoolean, asNumber, asObject, asString, fragmentSummary, } from "./state.js";
 import { scriptFromAddress } from "./encoding.js";
@@ -132,6 +132,38 @@ export function outputViews(inspect, network, provenance) {
             provenance: (uniqueIdHex && provenance?.outputs[uniqueIdHex]) || null,
         };
     });
+}
+function amountSpanPart(part, text) {
+    return { part, className: `session-amount-${part}`, text };
+}
+// Split a leading ₿ off into the symbol part (the analog of the demo's
+// appendAmountPartTspans): amountParts rides the currency symbol inside
+// `prefix` (≥ 1 BTC) or `muted` (< 1 BTC).
+function pushAmountText(parts, text, part) {
+    if (!text)
+        return;
+    if (text.startsWith("₿")) {
+        parts.push(amountSpanPart("symbol", "₿"));
+        text = text.slice(1);
+    }
+    if (text)
+        parts.push(amountSpanPart(part, text));
+}
+export function amountSpanParts(valueSats) {
+    const raw = amountParts(valueSats);
+    const parts = [];
+    pushAmountText(parts, raw.prefix, "digits");
+    pushAmountText(parts, raw.muted, "scale");
+    pushAmountText(parts, raw.sats, "digits");
+    return parts;
+}
+// Signed variant for balance deltas: the sign is a significant digit (it
+// inherits the surrounding color — deficit contexts render it red).
+export function signedAmountSpanParts(valueSats) {
+    const parts = amountSpanParts(Math.abs(valueSats));
+    if (valueSats < 0)
+        parts.unshift(amountSpanPart("digits", "−"));
+    return parts;
 }
 function groupSlot(key, label, kind) {
     return {

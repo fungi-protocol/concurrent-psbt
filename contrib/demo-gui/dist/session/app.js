@@ -19,9 +19,9 @@
 import { addressChipDigestHex, groupChipDigestHex, lifehashSrc } from "./display.js";
 import { HttpBackend } from "../shared-frontend/backends/http.js";
 import { PtjBackendError } from "../shared-frontend/core/types.js";
-import { amountParts, seedFromRandomBytes } from "../model.js";
+import { seedFromRandomBytes } from "../model.js";
 import { addFragment, asArray, asObject, asString, buildConfirmArgs, buildCreateRequest, buildPayArgs, buildSyncRequest, bytesToBase64, emptySession, fragmentSummary, negotiationView, pastedPsbt, removeFragment, selectedFragments, setSelected, } from "./state.js";
-import { elisionLabel, fragmentCardModel, } from "./display.js";
+import { amountSpanParts, elisionLabel, fragmentCardModel, } from "./display.js";
 import { classifyPaste, mintFromPaste } from "./ingest.js";
 import { actionState, addFragmentToSession, addPeerToSession, applyTxOutputs, beginWire, completeWire, dropFragmentKey, emptyObjects, enrichDescriptor, enrichPayment, idleWire, mintSession, overviewFocus, peerByKey, sessionByKey, sessionFocus, validateFocus, wireVerdict, } from "./wiring.js";
 import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, validateEditor, violationsFromServer, } from "./editor.js";
@@ -161,14 +161,14 @@ function lifehashBadge(hex, title) {
     }, { once: true });
     return img;
 }
+// BIP 177 sat-first emphasis (display.ts amountSpanParts): symbol/scale/
+// digits spans whose classes carry only opacity and weight — every part
+// inherits the surrounding color (the ead6ca05 rule).
 function amountSpan(sats) {
-    const parts = amountParts(sats);
     const node = span("session-amount", "");
-    if (parts.prefix)
-        node.append(span("session-amount-whole", parts.prefix));
-    node.append(span("session-amount-muted", parts.muted));
-    if (parts.sats)
-        node.append(span("session-amount-sats", parts.sats));
+    for (const part of amountSpanParts(sats)) {
+        node.append(span(part.className, part.text));
+    }
     return node;
 }
 // --- fragment set plumbing ----------------------------------------------------
