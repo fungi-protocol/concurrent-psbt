@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Partial Transaction Joiner</title>
-    <link rel="stylesheet" href="styles.css?v=20260709-wiring-labels">
+    <link rel="stylesheet" href="styles.css?v=20260709-wiring-queue">
   </head>
   <body>
     <header class="app-header">
@@ -39,6 +39,18 @@
         <div id="wireStatus" class="session-wire-status" role="status" hidden>
           <span id="wireStatusText"></span>
           <button id="wireCancel" type="button">Cancel wiring</button>
+        </div>
+        <!-- Pending-wire queue: completed wire gestures accumulate here as
+             visible edges instead of executing immediately. Each edge has
+             its own Join; the toolbar Join applies whole connected
+             components; Cancel wires discards the queue. -->
+        <div id="wireQueue" class="session-wire-queue" hidden>
+          <div class="session-wire-queue-head">
+            <span id="wireQueueSummary" class="item-meta"></span>
+            <button id="wireJoinAll" type="button" class="primary" title="Apply every pending wire, whole connected components at a time (fragment clusters join in one n-ary call)">Join</button>
+            <button id="wireClearAll" type="button" title="Discard all pending wires without applying them">Cancel wires</button>
+          </div>
+          <ul id="wireQueueList" class="session-wire-queue-list"></ul>
         </div>
 
         <div class="session-load">
@@ -374,6 +386,6 @@
       </section>
     </main>
 
-    <script type="module" src="dist/session/app.js?v=20260709-wiring-labels"></script>
+    <script type="module" src="dist/session/app.js?v=20260709-wiring-queue"></script>
   </body>
 </html>

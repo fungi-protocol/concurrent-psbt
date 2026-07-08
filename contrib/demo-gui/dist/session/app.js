@@ -23,7 +23,7 @@ import { amountParts, seedFromRandomBytes } from "../model.js";
 import { addFragment, asArray, asObject, asString, buildConfirmArgs, buildCreateRequest, buildPayArgs, buildSyncRequest, bytesToBase64, emptySession, fragmentSummary, negotiationView, pastedPsbt, removeFragment, selectedFragments, setSelected, } from "./state.js";
 import { elisionLabel, fragmentCardModel, } from "./display.js";
 import { classifyPaste, mintFromPaste } from "./ingest.js";
-import { actionState, addFragmentToSession, addPeerToSession, applyTxOutputs, beginWire, completeWire, dropFragmentKey, emptyObjects, enrichDescriptor, enrichPayment, idleWire, mintSession, overviewFocus, peerByKey, sessionByKey, sessionFocus, validateFocus, wireDisposition, wireVerdict, } from "./wiring.js";
+import { actionState, addFragmentToSession, addPeerToSession, applyTxOutputs, beginWire, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, enrichPayment, idleWire, mintSession, overviewFocus, peerByKey, pruneWires, queueWire, sessionByKey, sessionFocus, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapFragmentRef, } from "./wiring.js";
 import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, validateEditor, violationsFromServer, } from "./editor.js";
 const backend = new HttpBackend();
 // --- shell state ------------------------------------------------------------
@@ -31,6 +31,11 @@ let session = emptySession();
 let objects = emptyObjects();
 let focus = overviewFocus();
 let wire = idleWire();
+// The pending-wire queue: completed wire gestures accumulate here as
+// visible edges (each with its own Join) instead of executing immediately;
+// the toolbar Join applies whole connected components. Pruned against the
+// live object graph on every render.
+let pendingWires = [];
 let editor = null;
 // Server-side fixes queued for the next editor save (violation fix_ids the
 // user accepted) and gate overrides armed for it (violation override_params).
@@ -303,23 +308,18 @@ function cancelWire() {
     wire = idleWire();
     render();
 }
+// Completing a wire gesture QUEUES the edge (compatible verdicts) or
+// reports why it cannot wire (blocked/unbacked) — nothing executes on tap.
 function wireTo(target) {
+    const source = wire.source;
     const done = completeWire(wire, target, objects);
     wire = done.gesture;
-    if (!done.verdict) {
+    if (!done.verdict || !source) {
         render();
         return;
     }
-    void performWire(done.verdict, target);
-}
-async function performWire(v, target) {
-    const source = wireSource;
-    wireSource = null;
-    if (!source) {
-        render();
-        return;
-    }
-    if (!v.allowed) {
+    const v = done.verdict;
+    if (wireDisposition(v) !== "compatible") {
         const action = v.label ?? `${nodeName(source)} → ${nodeName(target)}`;
         const text = wireDisposition(v) === "blocked"
             ? `${action} — blocked: ${v.reason}`
@@ -332,13 +332,38 @@ async function performWire(v, target) {
         render();
         return;
     }
+    const queued = queueWire(pendingWires, source, target, objects);
+    pendingWires = queued.wires;
+    if (queued.queued) {
+        logEvent(`queued: ${v.label ?? `${nodeName(source)} ⋈ ${nodeName(target)}`} — ` +
+            "Join on the wire applies it alone; the toolbar Join applies whole components");
+        showStatus("", false);
+    }
+    else if (queued.duplicate) {
+        showStatus(`${v.label ?? "that wire"} is already queued`, false);
+    }
+    render();
+}
+// Execute ONE wire now (per-edge Join, or a component's non-join edge).
+// The verdict is recomputed at execution time — queued wires can go stale —
+// and a failure pulses the target card. Returns whether the wire applied.
+async function executeWire(source, target) {
+    const v = wireVerdict(source, target, objects);
+    if (wireDisposition(v) !== "compatible") {
+        const text = `${v.label ?? `${nodeName(source)} → ${nodeName(target)}`} is no longer applicable: ` +
+            `${v.reason ?? v.needs ?? "the verdict changed"}`;
+        showStatus(text, true);
+        logEvent(text);
+        flashWireRejection(target, v.reason ?? v.needs ?? "no longer applicable");
+        return false;
+    }
     try {
         switch (v.kind) {
             case "fragment-join": {
                 const left = fragmentByKey(source.key);
                 const right = fragmentByKey(target.key);
                 if (!left || !right)
-                    break;
+                    return false;
                 const joined = await addResponse(await backend.joinPsbts([left.psbt, right.psbt]), "join", `⊔ join of ${left.key}, ${right.key}`);
                 logEvent(`wired ${left.key} ⋈ ${right.key} → ${joined.key} (lattice join)`);
                 break;
@@ -364,7 +389,7 @@ async function performWire(v, target) {
                 const payment = objects.payments.find((candidate) => candidate.key === paymentKey);
                 const fragment = fragmentByKey(fragmentKey);
                 if (!payment || !fragment)
-                    break;
+                    return false;
                 const paid = await addResponse(await backend.pay(fragment.psbt, {
                     address: payment.address,
                     amountBtc: (payment.amountSats / 100_000_000).toFixed(8),
@@ -376,7 +401,8 @@ async function performWire(v, target) {
                 break;
             }
             case "add-create-input": {
-                const utxo = objects.utxos.find((candidate) => candidate.key === source.key);
+                const utxoKey = source.kind === "utxo" ? source.key : target.key;
+                const utxo = objects.utxos.find((candidate) => candidate.key === utxoKey);
                 addCreateRow("input");
                 if (utxo?.txid && utxo.vout !== null) {
                     const rows = el("createInputs");
@@ -384,30 +410,120 @@ async function performWire(v, target) {
                     const vouts = rows.querySelectorAll("input[data-role=vout]");
                     txids[txids.length - 1].value = utxo.txid;
                     vouts[vouts.length - 1].value = String(utxo.vout);
-                    logEvent(`wired ${source.key} → create: input row prefilled`);
+                    logEvent(`wired ${utxoKey} → create: input row prefilled`);
                 }
                 else {
-                    logEvent(`wired ${source.key} → create: added an input row, but the transaction is not decoded ` +
+                    logEvent(`wired ${utxoKey} → create: added an input row, but the transaction is not decoded ` +
                         "(deep classify pending or unavailable) — enter txid:vout manually");
                 }
                 break;
             }
             default:
-                break;
+                return false;
         }
         showStatus("", false);
+        return true;
     }
     catch (error) {
         reportError(`wire ${v.kind}`, error);
+        flashWireRejection(target, error instanceof Error ? error.message : String(error));
+        return false;
+    }
+}
+// One n-ary /api/join call for a component's fragment-join cluster (the
+// grow-only analog of the demo's successive pairwise LUBs).
+async function executeJoinGroup(group) {
+    const members = group.fragments
+        .map((key) => fragmentByKey(key))
+        .filter((fragment) => fragment !== null);
+    if (members.length < 2)
+        return null;
+    try {
+        const joined = await addResponse(await backend.joinPsbts(members.map((fragment) => fragment.psbt)), "join", `⊔ join of ${members.map((fragment) => fragment.key).join(", ")}`);
+        logEvent(`wired ${members.map((fragment) => fragment.key).join(" ⋈ ")} → ${joined.key} (lattice join)`);
+        return joined.key;
+    }
+    catch (error) {
+        reportError("wire fragment-join", error);
+        flashWireRejection({ kind: "fragment", key: members[0].key }, error instanceof Error ? error.message : String(error));
+        return null;
+    }
+}
+function livePendingWires() {
+    pendingWires = pruneWires(pendingWires, objects, session.fragments.map((fragment) => fragment.key));
+    return pendingWires;
+}
+async function joinPendingWire(key) {
+    const entry = livePendingWires().find((candidate) => wireKey(candidate.source, candidate.target) === key);
+    if (!entry) {
+        showStatus("that queued wire is no longer joinable", true);
+        render();
+        return;
+    }
+    const applied = await executeWire(entry.source, entry.target);
+    if (applied) {
+        pendingWires = unqueueWire(pendingWires, key);
     }
     render();
 }
-// completeWire consumes the gesture before performWire runs, so the source
-// ref is stashed here for the async continuation.
-let wireSource = null;
-function wireTargetRef(target) {
-    wireSource = wire.source;
-    wireTo(target);
+// The toolbar Join: apply the whole queue, one connected component at a
+// time. Fragment-join clusters collapse into single n-ary joins; the
+// remaining wires run with consumed fragment endpoints remapped to their
+// cluster's result. Applied wires leave the queue; failed ones stay queued
+// (their cards pulse) so the user can retry or cancel.
+async function joinAllWires() {
+    const components = wireComponents(livePendingWires());
+    if (!components.length) {
+        showStatus("queue one or more wires before joining", true);
+        render();
+        return;
+    }
+    const consumed = new Set();
+    let applied = 0;
+    let failed = 0;
+    for (const component of components) {
+        const plan = componentPlan(component);
+        const remap = new Map();
+        for (const group of plan.joinGroups) {
+            const resultKey = await executeJoinGroup(group);
+            if (resultKey !== null) {
+                applied += group.wires.length;
+                for (const wireEntry of group.wires) {
+                    consumed.add(wireKey(wireEntry.source, wireEntry.target));
+                }
+                for (const memberKey of group.fragments) {
+                    remap.set(memberKey, resultKey);
+                }
+            }
+            else {
+                failed += group.wires.length;
+            }
+        }
+        for (const wireEntry of plan.rest) {
+            const ok = await executeWire(remapFragmentRef(wireEntry.source, remap), remapFragmentRef(wireEntry.target, remap));
+            if (ok) {
+                applied += 1;
+                consumed.add(wireKey(wireEntry.source, wireEntry.target));
+            }
+            else {
+                failed += 1;
+            }
+        }
+    }
+    pendingWires = pendingWires.filter((wireEntry) => !consumed.has(wireKey(wireEntry.source, wireEntry.target)));
+    const summary = `Join applied ${applied} wire${applied === 1 ? "" : "s"} across ` +
+        `${components.length} component${components.length === 1 ? "" : "s"}` +
+        (failed ? `; ${failed} failed (kept queued)` : "");
+    logEvent(summary);
+    showStatus(summary, failed > 0);
+    render();
+}
+function clearPendingWires() {
+    if (pendingWires.length) {
+        logEvent(`cancelled ${pendingWires.length} pending wire(s)`);
+    }
+    pendingWires = [];
+    render();
 }
 // --- fragment cards --------------------------------------------------------------
 const INPUT_ROWS_SHOWN = 3;
@@ -599,6 +715,12 @@ function decorateWireTarget(node, ref) {
         node.classList.add("session-wire-rejected");
         node.append(span("session-wire-reason", wireRejection.text));
     }
+    // Cards with at least one queued wire wear the pending-edge vocabulary
+    // (the demo's animated orange dashes, card-shaped).
+    if (pendingWires.some((wireEntry) => (wireEntry.source.kind === ref.kind && wireEntry.source.key === ref.key) ||
+        (wireEntry.target.kind === ref.kind && wireEntry.target.key === ref.key))) {
+        node.classList.add("session-wire-pending");
+    }
     if (!wire.source)
         return;
     if (wire.source.kind === ref.kind && wire.source.key === ref.key) {
@@ -628,7 +750,7 @@ function decorateWireTarget(node, ref) {
         if (event.target.closest("button, input, textarea, select, a"))
             return;
         event.preventDefault();
-        wireTargetRef(ref);
+        wireTo(ref);
     });
 }
 // --- objects rail ------------------------------------------------------------------
@@ -767,11 +889,41 @@ function renderWireStatus() {
     const host = el("wireStatus");
     if (!wire.source) {
         host.hidden = true;
+    }
+    else {
+        host.hidden = false;
+        el("wireStatusText").textContent =
+            `wiring from ${nodeName(wire.source)} — tap a highlighted card to queue the wire ` +
+                "(dimmed cards explain why not)";
+    }
+    renderWireQueue();
+}
+// The pending-wire queue panel: one row per queued edge with its action
+// label, an edge-local Join, and a discard; the header carries the
+// wire/component summary next to the toolbar Join and Cancel wires.
+function renderWireQueue() {
+    const wires = livePendingWires();
+    const host = el("wireQueue");
+    const list = el("wireQueueList");
+    list.textContent = "";
+    if (!wires.length) {
+        host.hidden = true;
         return;
     }
     host.hidden = false;
-    el("wireStatusText").textContent =
-        `wiring from ${nodeName(wire.source)} — tap a highlighted card to join (dimmed cards explain why not)`;
+    el("wireQueueSummary").textContent = wireQueueSummary(wires).text;
+    for (const wireEntry of wires) {
+        const key = wireKey(wireEntry.source, wireEntry.target);
+        const v = wireVerdict(wireEntry.source, wireEntry.target, objects);
+        const item = document.createElement("li");
+        item.className = "session-wire-queue-row";
+        item.append(span("session-wire-queue-label", v.label ?? `${nodeName(wireEntry.source)} ⋈ ${nodeName(wireEntry.target)}`), button("Join", "Apply this wire alone", () => void joinPendingWire(key)), button("✕", "Discard this wire without applying it", () => {
+            pendingWires = unqueueWire(pendingWires, key);
+            logEvent(`discarded pending wire ${nodeName(wireEntry.source)} ⋈ ${nodeName(wireEntry.target)}`);
+            render();
+        }));
+        list.append(item);
+    }
 }
 function renderFocus() {
     focus = validateFocus(focus, objects.sessions.map((sessionObject) => sessionObject.key));
@@ -1552,6 +1704,8 @@ function wireDom() {
     });
     el("displayNetwork").addEventListener("change", render);
     el("wireCancel").addEventListener("click", cancelWire);
+    el("wireJoinAll").addEventListener("click", () => void joinAllWires());
+    el("wireClearAll").addEventListener("click", clearPendingWires);
     el("focusBack").addEventListener("click", () => {
         focus = overviewFocus();
         render();
@@ -1575,7 +1729,7 @@ function wireDom() {
     });
     el("createWireTarget").addEventListener("click", () => {
         if (wire.source?.kind === "utxo") {
-            wireTargetRef({ kind: "create", key: "create" });
+            wireTo({ kind: "create", key: "create" });
         }
     });
     el("syncTransport").addEventListener("change", renderSyncFields);

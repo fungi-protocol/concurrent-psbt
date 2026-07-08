@@ -642,6 +642,226 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
 }
 
 // ---------------------------------------------------------------------------
+// Pending-wire queue (the demo's join-select graph, ported): completing a
+// wire gesture QUEUES the edge instead of executing it, visualizing the
+// flexibility of the join operation. Each queued edge carries its own Join;
+// the toolbar Join applies whole connected components. Everything here is
+// pure — the shell holds the PendingWire[] and calls the backend.
+//
+// Divergence from the demo, deliberate: the session fragment set is
+// grow-only (joins ADD their result, sources stay), so instead of the
+// demo's successive pairwise LUBs with id remapping, a component's
+// fragment-join cluster executes as ONE n-ary /api/join call, and the
+// component's remaining wires run with consumed fragment endpoints remapped
+// to the cluster's result.
+// ---------------------------------------------------------------------------
+
+export interface PendingWire {
+  source: NodeRef;
+  target: NodeRef;
+}
+
+function nodeId(ref: NodeRef): string {
+  return `${ref.kind}:${ref.key}`;
+}
+
+// Direction-insensitive identity of a wire (the demo's joinWireKey).
+export function wireKey(a: NodeRef, b: NodeRef): string {
+  return [nodeId(a), nodeId(b)].sort().join("::");
+}
+
+export interface QueueWireResult {
+  wires: PendingWire[];
+  // The edge is newly queued (false for rejected verdicts AND duplicates).
+  queued: boolean;
+  // True when the pair was already in the queue.
+  duplicate: boolean;
+  // The verdict the queue decision was based on — the shell reports its
+  // label (queued) or reason/needs (rejected).
+  verdict: WireVerdict;
+}
+
+// Only compatible wires queue; blocked/unbacked verdicts come back for the
+// shell's rejection feedback. Duplicates (either direction) are no-ops.
+export function queueWire(
+  wires: PendingWire[],
+  source: NodeRef,
+  target: NodeRef,
+  state: ObjectsState,
+): QueueWireResult {
+  const v = wireVerdict(source, target, state);
+  if (wireDisposition(v) !== "compatible") {
+    return { wires, queued: false, duplicate: false, verdict: v };
+  }
+  const key = wireKey(source, target);
+  if (wires.some((wire) => wireKey(wire.source, wire.target) === key)) {
+    return { wires, queued: false, duplicate: true, verdict: v };
+  }
+  return { wires: [...wires, { source, target }], queued: true, duplicate: false, verdict: v };
+}
+
+export function unqueueWire(wires: PendingWire[], key: string): PendingWire[] {
+  return wires.filter((wire) => wireKey(wire.source, wire.target) !== key);
+}
+
+export function nodeExists(
+  ref: NodeRef,
+  state: ObjectsState,
+  fragmentKeys: readonly string[],
+): boolean {
+  switch (ref.kind) {
+    case "fragment":
+      return fragmentKeys.includes(ref.key);
+    case "session":
+      return sessionByKey(state, ref.key) !== null;
+    case "peer":
+      return peerByKey(state, ref.key) !== null;
+    case "payment":
+      return state.payments.some((payment) => payment.key === ref.key);
+    case "utxo":
+      return state.utxos.some((utxo) => utxo.key === ref.key);
+    case "descriptor":
+      return state.descriptors.some((descriptor) => descriptor.key === ref.key);
+    case "create":
+      return true;
+  }
+}
+
+// Re-validate the queue against current state (the demo's validJoinWires):
+// wires lose their place when an endpoint disappears or the pair's verdict
+// is no longer compatible (e.g. the fragment was published to the session
+// through another path).
+export function pruneWires(
+  wires: PendingWire[],
+  state: ObjectsState,
+  fragmentKeys: readonly string[],
+): PendingWire[] {
+  return wires.filter(
+    (wire) =>
+      nodeExists(wire.source, state, fragmentKeys) &&
+      nodeExists(wire.target, state, fragmentKeys) &&
+      wireDisposition(wireVerdict(wire.source, wire.target, state)) === "compatible",
+  );
+}
+
+export interface WireComponent {
+  // Distinct endpoints in first-seen queue order.
+  nodes: NodeRef[];
+  // The component's wires in queue order.
+  wires: PendingWire[];
+}
+
+// Connected components of the pending-wire graph (the demo's
+// joinComponents): the toolbar Join applies each component as a unit.
+export function wireComponents(wires: PendingWire[]): WireComponent[] {
+  const adjacency = new Map<string, Set<string>>();
+  const refs = new Map<string, NodeRef>();
+  for (const wire of wires) {
+    const a = nodeId(wire.source);
+    const b = nodeId(wire.target);
+    refs.set(a, wire.source);
+    refs.set(b, wire.target);
+    if (!adjacency.has(a)) adjacency.set(a, new Set());
+    if (!adjacency.has(b)) adjacency.set(b, new Set());
+    adjacency.get(a)!.add(b);
+    adjacency.get(b)!.add(a);
+  }
+  const components: WireComponent[] = [];
+  const seen = new Set<string>();
+  for (const startId of adjacency.keys()) {
+    if (seen.has(startId)) continue;
+    const stack = [startId];
+    const memberIds = new Set<string>();
+    while (stack.length) {
+      const current = stack.pop()!;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      memberIds.add(current);
+      for (const next of adjacency.get(current) ?? []) stack.push(next);
+    }
+    // First-seen order over the queue keeps the report deterministic.
+    const nodes: NodeRef[] = [];
+    for (const wire of wires) {
+      for (const ref of [wire.source, wire.target]) {
+        const id = nodeId(ref);
+        if (memberIds.has(id) && !nodes.some((candidate) => nodeId(candidate) === id)) {
+          nodes.push(ref);
+        }
+      }
+    }
+    components.push({
+      nodes,
+      wires: wires.filter(
+        (wire) => memberIds.has(nodeId(wire.source)) && memberIds.has(nodeId(wire.target)),
+      ),
+    });
+  }
+  return components;
+}
+
+export interface FragmentJoinGroup {
+  // Distinct fragment keys connected by fragment-join wires (>= 2): one
+  // n-ary /api/join call joins the whole group.
+  fragments: string[];
+  // The queued wires the group consumes when it joins.
+  wires: PendingWire[];
+}
+
+export interface ComponentPlan {
+  joinGroups: FragmentJoinGroup[];
+  // The component's non-fragment-join wires in queue order; the shell
+  // remaps fragment endpoints through the clusters' join results before
+  // executing each one.
+  rest: PendingWire[];
+}
+
+export function componentPlan(component: WireComponent): ComponentPlan {
+  const joinWires = component.wires.filter(
+    (wire) => wire.source.kind === "fragment" && wire.target.kind === "fragment",
+  );
+  const clusters = wireComponents(joinWires);
+  return {
+    joinGroups: clusters
+      .map((cluster) => ({
+        fragments: cluster.nodes.map((ref) => ref.key),
+        wires: cluster.wires,
+      }))
+      .filter((group) => group.fragments.length >= 2),
+    rest: component.wires.filter(
+      (wire) => !(wire.source.kind === "fragment" && wire.target.kind === "fragment"),
+    ),
+  };
+}
+
+// Follow a consumed fragment endpoint to its join result (the session-side
+// analog of the demo's remapNodeId).
+export function remapFragmentRef(ref: NodeRef, remap: ReadonlyMap<string, string>): NodeRef {
+  if (ref.kind !== "fragment") return ref;
+  const mapped = remap.get(ref.key);
+  return mapped === undefined ? ref : { kind: "fragment", key: mapped };
+}
+
+export interface WireQueueSummary {
+  wireCount: number;
+  componentCount: number;
+  text: string;
+}
+
+export function wireQueueSummary(wires: PendingWire[]): WireQueueSummary {
+  const wireCount = wires.length;
+  const componentCount = wireComponents(wires).length;
+  return {
+    wireCount,
+    componentCount,
+    text:
+      wireCount === 0
+        ? "no pending wires"
+        : `${wireCount} pending wire${wireCount === 1 ? "" : "s"} in ` +
+          `${componentCount} component${componentCount === 1 ? "" : "s"}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Wire gesture state machine (tap-first: works identically for click and
 // touch — select a source, then pick a target; no drag required).
 // ---------------------------------------------------------------------------
