@@ -1,3 +1,4 @@
+pub(crate) mod assign_ids;
 pub(crate) mod atomize;
 pub(crate) mod concatenate;
 pub(crate) mod create;
@@ -20,6 +21,9 @@ pub(crate) fn run(command: Command) -> Result<String> {
 pub(crate) fn run_with_stdin(command: Command, stdin: Option<&[u8]>) -> Result<String> {
     validate_stdin_shape(&command, stdin)?;
     match command {
+        Command::AssignIds(config) => {
+            assign_ids::run(config, stdin).map(|psbt| crate::io::encode_psbt(&psbt))
+        }
         Command::Atomize(config) => atomize::run(config, stdin),
         Command::Concatenate(config) => {
             concatenate::run(config, stdin).map(|psbt| crate::io::encode_psbt(&psbt))

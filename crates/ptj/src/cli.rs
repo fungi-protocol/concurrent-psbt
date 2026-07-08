@@ -23,6 +23,8 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum Command {
+    /// Assign unique ids to inputs/outputs that lack them (spec identity fields)
+    AssignIds(AssignIdsConfig),
     /// Split a constructor PSBT into atomic unordered fragments
     Atomize(AtomizeConfig),
     /// Create a new PSBT with inputs and outputs
@@ -62,6 +64,7 @@ pub enum Command {
 impl Command {
     pub fn reads_stdin(&self) -> bool {
         match self {
+            Command::AssignIds(config) => is_stdin_path(&config.file),
             Command::Atomize(config) => is_stdin_path(&config.file),
             Command::Concatenate(config) => config.files.iter().any(|path| is_stdin_path(path)),
             Command::ExportBip174(config) => is_stdin_path(&config.file),
@@ -86,6 +89,7 @@ impl Command {
 
     pub(crate) fn stdin_source_count(&self) -> usize {
         match self {
+            Command::AssignIds(config) => usize::from(is_stdin_path(&config.file)),
             Command::Atomize(config) => usize::from(is_stdin_path(&config.file)),
             Command::Concatenate(config) => config
                 .files
@@ -121,6 +125,62 @@ impl Command {
 
 fn is_stdin_path(path: &Path) -> bool {
     path == Path::new("-")
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct AssignIdsConfig {
+    /// Manual id assignment `<in|out>:<index>=<bytes>` (repeatable). `out`
+    /// sets PSBT_OUT_UNIQUE_ID, `in` sets the optional PSBT_IN_UNIQUE_ID
+    /// outpoint suffix; bytes accept hex/base58/bech32 by character set
+    #[arg(long = "id")]
+    pub ids: Vec<IdAssignment>,
+    /// Also assign fresh random 16-byte ids to outputs still missing one
+    /// (the default when no --id is given)
+    #[arg(long)]
+    pub auto: bool,
+    /// Replace an existing unique id that differs from the requested one
+    /// (default: error; matching ids are always accepted idempotently)
+    #[arg(long)]
+    pub overwrite: bool,
+    /// PSBT file to assign ids in
+    pub file: PathBuf,
+}
+
+/// One `--id <in|out>:<index>=<bytes>` directive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdAssignment {
+    pub target: IdTarget,
+    pub index: usize,
+    pub id: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdTarget {
+    Input,
+    Output,
+}
+
+impl FromStr for IdAssignment {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        let (selector, id) = value
+            .split_once('=')
+            .ok_or_else(|| format!("expected <in|out>:<index>=<bytes>, got {value}"))?;
+        let (kind, index) = selector
+            .split_once(':')
+            .ok_or_else(|| format!("expected selector <in|out>:<index>, got {selector}"))?;
+        let target = match kind {
+            "in" | "input" => IdTarget::Input,
+            "out" | "output" => IdTarget::Output,
+            other => return Err(format!("unknown id target {other} (expected in or out)")),
+        };
+        let index = index
+            .parse::<usize>()
+            .map_err(|error| format!("invalid {kind} index {index}: {error}"))?;
+        let id = crate::bytes_arg::parse_bytes_arg(id)?;
+        Ok(Self { target, index, id })
+    }
 }
 
 #[derive(Args, Debug, Clone)]
