@@ -32,6 +32,7 @@ const stubModule: PtjWasmModule = {
   concatenate: () => ({ psbt: "" }),
   exportBip174: () => ({ format: "bip174", psbt: "" }),
   importBip174: () => ({ psbt: "" }),
+  assignIds: () => ({ psbt: "" }),
   pay: () => ({ psbt: "" }),
   confirm: () => ({ psbt: "" }),
   payments: () => ({ payments: [], confirmations: [] }),
