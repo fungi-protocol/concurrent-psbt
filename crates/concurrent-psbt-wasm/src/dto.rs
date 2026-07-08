@@ -48,6 +48,29 @@ pub struct CreateOutput {
 // NOTE: sort takes positional args (psbt, seed_hex?, allow_short_seed?)
 // matching the canonical Backend arity — no SortRequest DTO.
 
+/// `POST /api/assign-ids` body. Mirrors webgui `assign_ids_response_result`:
+/// no `ids` means auto-assign; `auto: true` combines with manual directives
+/// to fill the remainder; `overwrite` permits replacing a differing id.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AssignIdsRequest {
+    pub psbt: String,
+    #[serde(default)]
+    pub ids: Vec<IdAssignment>,
+    #[serde(default)]
+    pub auto: bool,
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+/// One `{target: "in"|"out", index, id}` directive; `id` bytes accept
+/// hex/base58/bech32 by character set (see `bytes_arg`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct IdAssignment {
+    pub target: String,
+    pub index: usize,
+    pub id: String,
+}
+
 /// Negotiation `pay` body. `payment_hex` is the opaque record bytes (hex); the
 /// frontend encodes the address/amount/label record the same way `ptj pay`
 /// would build it, keeping the wasm core mechanism-only. `secret_hex` opt-in
