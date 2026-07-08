@@ -24,6 +24,7 @@ import {
   type ApplyEditsResponse,
   type AssignIdsOptions,
   type AtomizeResponse,
+  type ClassifyResponse,
   type ConfirmationRecord,
   type ConfirmOptions,
   type CreatePsbtRequest,
@@ -190,6 +191,18 @@ export class WasmBackend implements Backend {
       0,
       "WasmBackend does not support field edits yet; use a server backend " +
         "(ptj webgui /api/edit)",
+    );
+  }
+
+  async classifyPaste(_payload: string, _network?: string): Promise<ClassifyResponse> {
+    // Deep classification leans on miniscript + bitcoin-payment-instructions
+    // server-side; the wasm wrapper exports no classify op yet. The shallow
+    // paste router still classifies locally — this seam only ENRICHES — so
+    // rejecting degrades gracefully to the shallow card.
+    throw new PtjBackendError(
+      0,
+      "WasmBackend does not support deep paste classification yet; use a " +
+        "server backend (ptj webgui /api/classify)",
     );
   }
 

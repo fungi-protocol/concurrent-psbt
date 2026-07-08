@@ -122,6 +122,9 @@ export class HttpBackend {
         }
         return payload;
     }
+    classifyPaste(payload, network) {
+        return this.postJson("/api/classify", { payload, network });
+    }
     // Negotiation band: served by the webgui's /api/{pay,confirm,payments}
     // routes (crates/ptj/src/webgui.rs pay_response/confirm_response/
     // payments_response). Opaque records pass through unchanged (wasm parity);

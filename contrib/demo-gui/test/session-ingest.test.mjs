@@ -14,14 +14,16 @@ test("classifyPaste: payment URIs win and carry parsed fields", () => {
   assert.equal(paste.payload, "bitcoin:bcrt1qexample?amount=0.001&label=lunch");
   assert.match(paste.detail, /bcrt1qexample/);
   assert.match(paste.detail, /100000 sats/);
-  assert.match(paste.needsBackend, /bitcoin-payment-instructions/);
+  // Deep BIP 321 validation now folds in via Backend.classifyPaste.
+  assert.equal(paste.needsBackend, null);
 });
 
 test("classifyPaste: descriptors, private and public", () => {
   const pub = classifyPaste("wpkh(xpub6BosfCnifzxcFwrSzQiqu2DBVTshkCXacvNsWGYJVVhhawA7d4R5WSWGFNbi8Aw6ZRc1brxMyWMzG3DSSSSoekkudhUd9yLb6qx39T9nMdj/0/*)#checksum");
   assert.equal(pub.kind, "descriptor");
   assert.match(pub.detail, /public output descriptor/);
-  assert.match(pub.needsBackend, /miniscript/);
+  // Miniscript validation/derivation now folds in via Backend.classifyPaste.
+  assert.equal(pub.needsBackend, null);
 
   const priv = classifyPaste("tr(xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi/86h/0h/0h/0/*)");
   assert.equal(priv.kind, "descriptor");
@@ -50,14 +52,15 @@ test("classifyPaste: PSBTs in base64 and hex both canonicalize to base64", () =>
   assert.match(hex.detail, /hex PSBT/);
 });
 
-test("classifyPaste: versioned tx hex is a transaction pending backend decode", () => {
+test("classifyPaste: versioned tx hex is a transaction (deep decode via the seam)", () => {
   // A minimal-looking segwit tx skeleton: version 2 LE + filler to pass the
   // size floor. Shallow classification looks at charset + version only.
   const txHex = "02000000" + "00".repeat(96);
   const tx = classifyPaste(txHex);
   assert.equal(tx.kind, "transaction-hex");
   assert.equal(tx.payload, txHex);
-  assert.match(tx.needsBackend, /tx decode/);
+  // The tx decode now folds in via Backend.classifyPaste.
+  assert.equal(tx.needsBackend, null);
 
   // Version 0 is not a real tx version: falls through to unknown.
   assert.equal(classifyPaste("00000000" + "00".repeat(96)).kind, "unknown");
@@ -105,7 +108,7 @@ test("mintFromPaste routes classifications into the object graph", () => {
   const tx = mintFromPaste(state, classifyPaste("01000000" + "11".repeat(80)));
   state = tx.state;
   assert.deepEqual(tx.minted, { kind: "utxo", key: "utxo-5" });
-  assert.match(tx.log, /pending backend decode/);
+  assert.match(tx.log, /outputs decode via classifyPaste/);
 
   // PSBTs and unknowns mint nothing (the fragment set owns PSBTs).
   const psbt = mintFromPaste(state, classifyPaste(PSBT_B64));

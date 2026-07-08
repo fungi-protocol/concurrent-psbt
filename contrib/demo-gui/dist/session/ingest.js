@@ -9,10 +9,13 @@
 // Shallow means: enough syntax to pick a node kind and a card label. DEEP
 // parsing (descriptor validation and script derivation via miniscript, BIP
 // 321 validation via bitcoin-payment-instructions, transaction decode into
-// spendable outputs) is a BACKEND seam — Backend.classifyPaste(payload) ->
-// {kind, details} — which does not exist yet; every classification names
-// what it is waiting on in `needsBackend` so the UI stays honest instead of
-// half-parsing consensus data in the frontend.
+// spendable outputs) is the Backend.classifyPaste seam (/api/classify): the
+// shell mints the shallow node instantly, requests the deep classification
+// asynchronously, and folds the details back into the node
+// (enrichDescriptor / enrichPayment / applyTxOutputs in ./wiring.ts).
+// Consensus data is still never half-parsed in the frontend; a remaining
+// deep-parse gap, if a kind has one, is named in `needsBackend` so the UI
+// stays honest.
 //
 // Recognized today:
 //   bitcoin: URI            -> payment instruction (BIP 21 / BIP 321)
@@ -20,8 +23,8 @@
 //   npub1...                -> peer (nostr identity)
 //   iroh document ticket    -> peer (iroh transport)
 //   base64 or hex PSBT      -> fragment (handled by the shell: backend inspect)
-//   fully-signed tx hex     -> transaction object (spendable outputs pending
-//                              backend decode; chain sources stay manual)
+//   fully-signed tx hex     -> transaction object (outputs decoded by the
+//                              classify enrichment; chain sources stay manual)
 import { bytesToBase64, pastedPsbt, } from "./state.js";
 import { hexToBytes, normalizeHexInput } from "./encoding.js";
 import { descriptorLooksPrivate, looksLikeDescriptor, parseBitcoinUri, } from "../model.js";
@@ -56,7 +59,7 @@ export function classifyPaste(text) {
             kind: "payment-uri",
             payload: uri.uri,
             detail: `payment instruction: ${uri.address} (${uri.valueSats} sats)`,
-            needsBackend: "classifyPaste (bitcoin-payment-instructions) for full BIP 321 validation",
+            needsBackend: null,
         };
     }
     if (looksLikeDescriptor(trimmed)) {
@@ -65,7 +68,7 @@ export function classifyPaste(text) {
             kind: "descriptor",
             payload: trimmed,
             detail: `${isPrivate ? "private" : "public"} output descriptor`,
-            needsBackend: "classifyPaste (miniscript) for descriptor validation and script derivation",
+            needsBackend: null,
         };
     }
     const npub = trimmed.match(NPUB_PATTERN)?.[0];
@@ -108,7 +111,7 @@ export function classifyPaste(text) {
                 kind: "transaction-hex",
                 payload: hex,
                 detail: `transaction hex (${bytes.length} bytes)`,
-                needsBackend: "classifyPaste (tx decode) to list this transaction's spendable outputs",
+                needsBackend: null,
             };
         }
     }
@@ -162,7 +165,7 @@ export function mintFromPaste(state, pasted) {
             return {
                 state: minted.state,
                 minted: { kind: "utxo", key: minted.utxo.key },
-                log: `minted ${minted.utxo.key} from a signed transaction (outputs pending backend decode)`,
+                log: `minted ${minted.utxo.key} from a signed transaction (outputs decode via classifyPaste)`,
             };
         }
         default:
