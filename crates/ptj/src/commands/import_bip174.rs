@@ -9,14 +9,14 @@ use crate::{Error, Result, io};
 
 pub(super) fn run(config: ImportBip174Config, stdin: Option<&[u8]>) -> Result<Psbt> {
     let psbt = io::read_bip174_source(&config.file, stdin)?;
-    import_bip174_psbt(psbt)
+    import_bip174_psbt(psbt, config.modifiable)
 }
 
-pub(crate) fn import_bip174_psbt(psbt: bip174::Psbt) -> Result<Psbt> {
-    from_bip174(psbt)
+pub(crate) fn import_bip174_psbt(psbt: bip174::Psbt, modifiable: bool) -> Result<Psbt> {
+    from_bip174(psbt, modifiable)
 }
 
-fn from_bip174(psbt: bip174::Psbt) -> Result<Psbt> {
+fn from_bip174(psbt: bip174::Psbt, modifiable: bool) -> Result<Psbt> {
     let bip174::Psbt {
         unsigned_tx,
         version: _,
@@ -50,7 +50,13 @@ fn from_bip174(psbt: bip174::Psbt) -> Result<Psbt> {
         unknowns: map_unknowns(unknown),
         ..Global::default()
     };
-    global.tx_modifiable_flags = 0;
+    // BIP 174 has no TX_MODIFIABLE field, so import cannot know whether the
+    // author still considers the transaction modifiable. Strict by default
+    // (0x00: constructor operations refuse the PSBT), overridable always:
+    // --modifiable / `modifiable: true` is the user's explicit assertion that
+    // inputs and outputs may still be added, enabling make-unordered /
+    // atomize / join on the import.
+    global.tx_modifiable_flags = if modifiable { 0x03 } else { 0 };
 
     let inputs = unsigned_tx
         .input

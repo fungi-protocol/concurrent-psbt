@@ -148,7 +148,7 @@ fn map_unknowns_out(
 
 // --- import (v0 -> v2) ---------------------------------------------------
 
-pub fn import_bip174_psbt(psbt: bip174::Psbt) -> Result<Psbt, String> {
+pub fn import_bip174_psbt(psbt: bip174::Psbt, modifiable: bool) -> Result<Psbt, String> {
     let bip174::Psbt {
         unsigned_tx,
         version: _,
@@ -178,7 +178,10 @@ pub fn import_bip174_psbt(psbt: bip174::Psbt) -> Result<Psbt, String> {
         unknowns: map_unknowns_in(unknown),
         ..Global::default()
     };
-    global.tx_modifiable_flags = 0;
+    // BIP 174 has no TX_MODIFIABLE field. Strict by default, overridable
+    // always: `modifiable` is the caller's explicit assertion that inputs and
+    // outputs may still be added (mirrors ptj import-bip174 --modifiable).
+    global.tx_modifiable_flags = if modifiable { 0x03 } else { 0 };
 
     let inputs = unsigned_tx
         .input

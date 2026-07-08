@@ -61,6 +61,20 @@ pub(crate) struct Response {
     pub(crate) body: Vec<u8>,
 }
 
+impl Response {
+    /// The Cache-Control policy for this response. Everything the webgui
+    /// serves is per-request state (`no-store`) EXCEPT the lifehash PNGs:
+    /// those are content-addressed — the digest in the URL fully determines
+    /// the (release-stable) image — so they are immutable.
+    fn cache_control(&self) -> &'static str {
+        if self.content_type == "image/png" {
+            "public, max-age=31536000, immutable"
+        } else {
+            "no-store"
+        }
+    }
+}
+
 pub fn asset(path: &str) -> Option<Asset> {
     let path = path.split_once('?').map_or(path, |(path, _)| path);
     match path {
@@ -136,10 +150,13 @@ pub(crate) fn response_for(method: &str, path: &str, body: &[u8]) -> Response {
     let path = path.split_once('?').map_or(path, |(path, _)| path);
     if method == "POST" {
         match path {
+            "/api/assign-ids" => return assign_ids_response(body),
             "/api/atomize" => return atomize_response(body),
+            "/api/classify" => return classify_response(body),
             "/api/concatenate" => return concatenate_response(body),
             "/api/confirm" => return confirm_response(body),
             "/api/create" => return create_response(body),
+            "/api/edit" => return edit_response(body),
             "/api/export-bip174" => return export_bip174_response(body),
             "/api/import-bip174" => return import_bip174_response(body),
             "/api/inspect" => return inspect_response(body),
@@ -155,6 +172,16 @@ pub(crate) fn response_for(method: &str, path: &str, body: &[u8]) -> Response {
 
     if method != "GET" && method != "HEAD" {
         return text_response(405, "Method Not Allowed", "method not allowed");
+    }
+
+    // GET /api/lifehash/<hex-digest> -> PNG fingerprint (content-addressed:
+    // the digest fully determines the image, so responses are immutable).
+    if let Some(digest) = path.strip_prefix("/api/lifehash/") {
+        let mut response = lifehash_response(digest);
+        if method == "HEAD" {
+            response.body = Vec::new();
+        }
+        return response;
     }
 
     let Some(asset) = asset(path) else {
@@ -719,6 +746,280 @@ fn concatenate_response_result(body: &[u8]) -> Result<Vec<u8>> {
     .into_bytes())
 }
 
+fn classify_response(body: &[u8]) -> Response {
+    match classify_response_result(body) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/json; charset=utf-8",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+/// `/api/classify`: universal paste ingestion. Request `{payload, network?}`
+/// (network is the `/api/create` selector, default bitcoin); the response is
+/// `{kind, ...details}` from `crate::commands::classify` — descriptors,
+/// BIP 21/321 payment instructions (incl. bare addresses and BOLT 11/12),
+/// npub peer ids, and raw signed transactions. PSBT pastes are redirected to
+/// the existing PSBT routes by the error text.
+fn classify_response_result(body: &[u8]) -> Result<Vec<u8>> {
+    let request: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
+    let payload = request_string(&request, "payload")?;
+    let network = match request.get("network") {
+        Some(value) => {
+            let value = value
+                .as_str()
+                .ok_or_else(|| Error::new("request JSON field `network` must be a string"))?;
+            NetworkArg::from_str(value).map_err(Error::new)?
+        }
+        None => NetworkArg(bitcoin::Network::Bitcoin),
+    };
+    Ok(crate::commands::classify::classify(payload, network.0)?
+        .to_string()
+        .into_bytes())
+}
+
+fn assign_ids_response(body: &[u8]) -> Response {
+    match assign_ids_response_result(body) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/json; charset=utf-8",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+fn assign_ids_response_result(body: &[u8]) -> Result<Vec<u8>> {
+    let request: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
+    let psbt = request
+        .get("psbt")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Error::new("request JSON must contain string field `psbt`"))?;
+    let psbt = crate::io::parse_psbt_bytes("request psbt", psbt.as_bytes())?;
+    let ids = parse_id_assignments(&request)?;
+    // CLI parity: no directives means auto-assign; `auto` also combines with
+    // manual directives to fill the remainder.
+    let auto = optional_bool(&request, "auto")? || ids.is_empty();
+    let overwrite = optional_bool(&request, "overwrite")?;
+    let assigned = crate::commands::assign_ids::assign_ids_psbt(psbt, &ids, auto, overwrite)?;
+    Ok(serde_json::json!({
+        "psbt": crate::io::encode_psbt(&assigned),
+        "inspect": crate::commands::inspect::inspect_psbt(&assigned),
+    })
+    .to_string()
+    .into_bytes())
+}
+
+/// Parse the optional `ids` array: `[{"target":"in"|"out","index":n,"id":"<bytes>"}]`
+/// (id bytes accept hex/base58/bech32, like the CLI's --id values).
+fn parse_id_assignments(request: &serde_json::Value) -> Result<Vec<crate::cli::IdAssignment>> {
+    let Some(value) = request.get("ids") else {
+        return Ok(vec![]);
+    };
+    let items = value
+        .as_array()
+        .ok_or_else(|| Error::new("request JSON field `ids` must be an array"))?;
+    items
+        .iter()
+        .enumerate()
+        .map(|(position, item)| {
+            let object = item.as_object().ok_or_else(|| {
+                Error::new(format!("request JSON ids[{position}] must be an object"))
+            })?;
+            let target = match object_string(object, "target", &format!("ids[{position}]"))? {
+                "in" | "input" => crate::cli::IdTarget::Input,
+                "out" | "output" => crate::cli::IdTarget::Output,
+                other => {
+                    return Err(Error::new(format!(
+                        "request JSON ids[{position}].target must be `in` or `out`, got {other}"
+                    )));
+                }
+            };
+            let index = object
+                .get("index")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| {
+                    Error::new(format!(
+                        "request JSON ids[{position}].index must be a non-negative integer"
+                    ))
+                })
+                .and_then(|index| {
+                    usize::try_from(index).map_err(|_| {
+                        Error::new(format!("request JSON ids[{position}].index exceeds usize"))
+                    })
+                })?;
+            let id = object_string(object, "id", &format!("ids[{position}]"))?;
+            let id = crate::bytes_arg::parse_bytes_arg(id).map_err(Error::new)?;
+            Ok(crate::cli::IdAssignment { target, index, id })
+        })
+        .collect()
+}
+
+fn edit_response(body: &[u8]) -> Response {
+    match edit_response_result(body) {
+        Ok(response) => response,
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+/// `/api/edit`: field-level raw-keymap editing with save-time validation and
+/// structured fix offers (`crate::commands::field_edit`). Grow-only: edits
+/// mint a NEW fragment; the submitted PSBT is never mutated in place.
+///
+/// Request: `{psbt, edits: [{map, key, value|null}], apply_fixes?: [fix_id],
+/// <override_param>?: bool}` — `map` selects `global` / `input:<i>` /
+/// `output:<i>`, `key` is the full raw key (`inspect`'s `raw.*[].key_hex`;
+/// hex/base58/bech32 accepted), `value` sets bytes or deletes on `null`, and
+/// `edits: []` is a pure validation pass. Violations return 400 with
+/// `violations[]` (each `{id, message, override_param}` plus flat `fix_id` /
+/// `fix_label` / `warning_text` when a server-side fix is offered); every
+/// gate is waived by its named `override_param` boolean, and requested
+/// `apply_fixes` run before validation with their caveats echoed in
+/// `applied_fixes[].warning_text`.
+fn edit_response_result(body: &[u8]) -> Result<Response> {
+    let request: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
+    let psbt = request_string(&request, "psbt")?;
+    let psbt = crate::io::parse_psbt_bytes("request psbt", psbt.as_bytes())?;
+    let edits = parse_field_edits(&request)?;
+
+    let mut edited = crate::commands::field_edit::apply_edits(&psbt, &edits)?;
+
+    let mut applied_fixes = Vec::new();
+    if let Some(fixes) = request.get("apply_fixes") {
+        let fixes = fixes
+            .as_array()
+            .ok_or_else(|| Error::new("request JSON field `apply_fixes` must be an array"))?;
+        for (position, fix) in fixes.iter().enumerate() {
+            let fix_id = fix.as_str().ok_or_else(|| {
+                Error::new(format!("request apply_fixes[{position}] must be a string"))
+            })?;
+            edited = crate::commands::field_edit::apply_fix(edited, fix_id)?;
+            let mut applied = serde_json::json!({ "fix_id": fix_id });
+            if let Some(warning) = crate::commands::field_edit::fix_warning(fix_id) {
+                applied["warning_text"] = serde_json::Value::String(warning.to_owned());
+            }
+            applied_fixes.push(applied);
+        }
+    }
+
+    let mut remaining = Vec::new();
+    let mut overridden = Vec::new();
+    for violation in crate::commands::field_edit::validate(&edited) {
+        if optional_bool(&request, violation.override_param)? {
+            overridden.push(violation_json(&violation));
+        } else {
+            remaining.push(violation_json(&violation));
+        }
+    }
+
+    if !remaining.is_empty() {
+        let count = remaining.len();
+        return Ok(Response {
+            status: 400,
+            reason: "Bad Request",
+            content_type: "application/json; charset=utf-8",
+            body: serde_json::json!({
+                "error": format!(
+                    "save-time validation failed ({count} violation{}); apply an offered \
+                     fix, set the named override, or amend the edits",
+                    if count == 1 { "" } else { "s" },
+                ),
+                "violations": remaining,
+            })
+            .to_string()
+            .into_bytes(),
+        });
+    }
+
+    Ok(Response {
+        status: 200,
+        reason: "OK",
+        content_type: "application/json; charset=utf-8",
+        body: serde_json::json!({
+            "psbt": crate::io::encode_psbt(&edited),
+            "inspect": crate::commands::inspect::inspect_psbt(&edited),
+            "violations": [],
+            "overridden": overridden,
+            "applied_fixes": applied_fixes,
+        })
+        .to_string()
+        .into_bytes(),
+    })
+}
+
+/// Parse the required `edits` array:
+/// `[{"map": "global"|"input:<i>"|"output:<i>", "key": "<bytes>",
+/// "value": "<bytes>"|null}]` (key/value bytes accept hex/base58/bech32,
+/// like the CLI's byte arguments).
+fn parse_field_edits(
+    request: &serde_json::Value,
+) -> Result<Vec<crate::commands::field_edit::FieldEdit>> {
+    let edits = request
+        .get("edits")
+        .ok_or_else(|| Error::new("request JSON must contain array field `edits`"))?
+        .as_array()
+        .ok_or_else(|| Error::new("request JSON field `edits` must be an array"))?;
+    edits
+        .iter()
+        .enumerate()
+        .map(|(position, item)| {
+            let object = item.as_object().ok_or_else(|| {
+                Error::new(format!("request JSON edits[{position}] must be an object"))
+            })?;
+            let map = object_string(object, "map", &format!("edits[{position}]"))?;
+            let map = crate::commands::field_edit::MapTarget::parse(map)
+                .map_err(|error| Error::new(format!("request edits[{position}]: {error}")))?;
+            let key = object_string(object, "key", &format!("edits[{position}]"))?;
+            let key = crate::bytes_arg::parse_bytes_arg(key)
+                .map_err(|error| Error::new(format!("request edits[{position}].key: {error}")))?;
+            let value = match object.get("value") {
+                None => {
+                    return Err(Error::new(format!(
+                        "request edits[{position}] must contain `value` (bytes to set) or \
+                         `value: null` (delete the entry)"
+                    )));
+                }
+                Some(serde_json::Value::Null) => None,
+                Some(value) => {
+                    let value = value.as_str().ok_or_else(|| {
+                        Error::new(format!(
+                            "request edits[{position}].value must be a string or null"
+                        ))
+                    })?;
+                    Some(crate::bytes_arg::parse_bytes_arg(value).map_err(|error| {
+                        Error::new(format!("request edits[{position}].value: {error}"))
+                    })?)
+                }
+            };
+            Ok(crate::commands::field_edit::FieldEdit { map, key, value })
+        })
+        .collect()
+}
+
+/// Serialize a save-time violation, flattening the fix offer per the seam
+/// contract: `{id, message, override_param}` plus `fix_id` / `fix_label` /
+/// `warning_text` when a fix is offered.
+fn violation_json(violation: &crate::commands::field_edit::Violation) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "id": violation.id,
+        "message": violation.message,
+        "override_param": violation.override_param,
+    });
+    if let Some(fix) = &violation.fix {
+        value["fix_id"] = serde_json::Value::String(fix.fix_id.to_owned());
+        value["fix_label"] = serde_json::Value::String(fix.fix_label.to_owned());
+        value["warning_text"] = serde_json::Value::String(fix.warning_text.to_owned());
+    }
+    value
+}
+
 fn create_response(body: &[u8]) -> Response {
     match create_response_result(body) {
         Ok(body) => Response {
@@ -785,11 +1086,13 @@ fn create_config_from_request(request: &serde_json::Value) -> Result<CreateConfi
         .map(parse_create_outputs)
         .transpose()?
         .unwrap_or_default();
+    let allow_short_seed = optional_bool(request, "allow_short_seed")?;
 
     Ok(CreateConfig {
         inputs,
         outputs,
         seed,
+        allow_short_seed,
         ordering,
         network,
     })
@@ -916,8 +1219,9 @@ fn import_bip174_response_result(body: &[u8]) -> Result<Vec<u8>> {
         .get("psbt")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| Error::new("request JSON must contain string field `psbt`"))?;
+    let modifiable = optional_bool(&request, "modifiable")?;
     let psbt = crate::io::parse_bip174_bytes("request psbt", psbt.as_bytes())?;
-    let imported = crate::commands::import_bip174::import_bip174_psbt(psbt)?;
+    let imported = crate::commands::import_bip174::import_bip174_psbt(psbt, modifiable)?;
     Ok(serde_json::json!({
         "psbt": crate::io::encode_psbt(&imported),
         "inspect": crate::commands::inspect::inspect_psbt(&imported),
@@ -955,11 +1259,12 @@ fn sort_response_result(body: &[u8]) -> Result<Vec<u8>> {
                 .map(crate::cli::HexSeed::into_bytes)
         })
         .transpose()?;
+    let allow_short_seed = optional_bool(&request, "allow_short_seed")?;
     let psbt = crate::io::parse_psbt_bytes("request psbt", psbt.as_bytes())?;
     let constructor =
         concurrent_psbt::roles::constructor::dynamic::Constructor::try_from_psbt(psbt)
             .map_err(|error| Error::new(format!("request psbt: {error}")))?;
-    let sorted = crate::commands::sort::sort_psbt(constructor.into_inner(), seed)?;
+    let sorted = crate::commands::sort::sort_psbt(constructor.into_inner(), seed, allow_short_seed)?;
     Ok(serde_json::json!({
         "psbt": crate::io::encode_psbt(&sorted),
         "inspect": crate::commands::inspect::inspect_psbt(&sorted),
@@ -1192,6 +1497,17 @@ fn request_string<'a>(request: &'a serde_json::Value, field: &str) -> Result<&'a
         .ok_or_else(|| Error::new(format!("request JSON must contain string field `{field}`")))
 }
 
+/// Read an optional boolean field (`allow_short_seed`, ...); absent or null
+/// means `false`.
+fn optional_bool(request: &serde_json::Value, field: &str) -> Result<bool> {
+    match request.get(field) {
+        None | Some(serde_json::Value::Null) => Ok(false),
+        Some(value) => value.as_bool().ok_or_else(|| {
+            Error::new(format!("request JSON field `{field}` must be a boolean"))
+        }),
+    }
+}
+
 /// Read an optional hex-string field (`secret_hex`, ...) to raw bytes, with
 /// the same error text as the CLI's hex arguments.
 fn optional_hex_field(request: &serde_json::Value, field: &str) -> Result<Option<Vec<u8>>> {
@@ -1220,6 +1536,30 @@ fn optional_hex32_field(request: &serde_json::Value, field: &str) -> Result<Opti
                 .map(crate::cli::Hex32::into_array)
         })
         .transpose()
+}
+
+/// `GET /api/lifehash/<hex-digest>`: the LifeHash fingerprint of the digest
+/// as a PNG (`crate::commands::lifehash` — Version2, 32x32 RGB, the frozen
+/// digest→image mapping the later wasm export must reproduce). The digest
+/// path segment rides the liberal bytes_arg parsing (hex canonical); 32
+/// bytes render as a digest, other lengths as data. Errors are the usual
+/// JSON `{error}` with status 400.
+fn lifehash_response(digest: &str) -> Response {
+    match lifehash_response_result(digest) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "image/png",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+fn lifehash_response_result(digest: &str) -> Result<Vec<u8>> {
+    let input = crate::bytes_arg::parse_bytes_arg(digest)
+        .map_err(|error| Error::new(format!("lifehash digest: {error}")))?;
+    crate::commands::lifehash::png_for_input(&input)
 }
 
 fn text_response(status: u16, reason: &'static str, body: &'static str) -> Response {
@@ -1289,11 +1629,12 @@ fn content_length(headers: &str) -> Result<usize> {
 fn write_http_response(stream: &mut TcpStream, response: &Response) -> Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: {cache_control}\r\nConnection: close\r\n\r\n",
         response.body.len(),
         status = response.status,
         reason = response.reason,
         content_type = response.content_type,
+        cache_control = response.cache_control(),
     )
     .map_err(|error| Error::new(format!("writing HTTP headers: {error}")))?;
     stream
@@ -1312,6 +1653,12 @@ mod tests {
     use crate::cli::Cli;
 
     const TXID: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+    /// A 16-byte (spec-minimum) ordering seed for fixtures and requests.
+    const SEED_HEX: &str = "abcdabcdabcdabcdabcdabcdabcdabcd";
+
+    fn seed_bytes() -> Vec<u8> {
+        [0xab, 0xcd].repeat(8)
+    }
 
     #[test]
     fn inspect_endpoint_parses_real_psbt_bytes() {
@@ -1327,7 +1674,51 @@ mod tests {
         assert_eq!(inspected["input_count"], 1);
         assert_eq!(inspected["output_count"], 1);
         assert_eq!(inspected["sort"]["mode"], "unset");
-        assert_eq!(inspected["sort"]["seed_hex"], "abcd");
+        assert_eq!(inspected["sort"]["seed_hex"], SEED_HEX);
+    }
+
+    #[test]
+    fn inspect_endpoint_exposes_raw_keymap_entries() {
+        let request = serde_json::json!({ "psbt": encoded_psbt() }).to_string();
+
+        let response = response_for("POST", "/api/inspect", request.as_bytes());
+
+        assert_eq!(response.status, 200);
+        let inspected: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let raw = &inspected["raw"];
+        assert!(raw["global"].as_array().unwrap().len() >= 4, "{raw}");
+        assert_eq!(raw["inputs"].as_array().unwrap().len(), 1);
+        assert_eq!(raw["outputs"].as_array().unwrap().len(), 1);
+
+        // Every entry carries the raw handle plus its classification.
+        for entry in raw["global"].as_array().unwrap() {
+            assert!(entry["key_hex"].is_string(), "{entry}");
+            assert!(entry["value_hex"].is_string(), "{entry}");
+            assert!(entry["key_type"].is_u64(), "{entry}");
+            assert!(
+                matches!(
+                    entry["kind"].as_str(),
+                    Some("known" | "unknown" | "proprietary")
+                ),
+                "{entry}"
+            );
+        }
+
+        // The fixture's output unique id is a proprietary entry with the
+        // BIP 174 envelope broken out.
+        let output_entries = raw["outputs"][0].as_array().unwrap();
+        let proprietary = output_entries
+            .iter()
+            .find(|entry| entry["kind"] == "proprietary")
+            .expect("output unique id must appear as a proprietary raw entry");
+        assert_eq!(proprietary["key_type"], 0xFC);
+        assert!(proprietary["proprietary"]["prefix_hex"].is_string());
+
+        // Typed fields appear as `known` raw entries (e.g. the output amount).
+        assert!(
+            output_entries.iter().any(|entry| entry["kind"] == "known"),
+            "{output_entries:?}"
+        );
     }
 
     #[test]
@@ -1419,6 +1810,89 @@ mod tests {
     }
 
     #[test]
+    fn lifehash_endpoint_serves_stable_png_fingerprints() {
+        let response = response_for("GET", "/api/lifehash/deadbeef", b"");
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "image/png");
+        assert_eq!(&response.body[..8], b"\x89PNG\r\n\x1a\n");
+        // Deterministic: the same digest yields byte-identical PNGs (query
+        // strings are ignored like every other route).
+        let again = response_for("GET", "/api/lifehash/deadbeef?v=1", b"");
+        assert_eq!(again.body, response.body);
+        // Distinct digests yield distinct fingerprints.
+        let other = response_for("GET", "/api/lifehash/00ff80", b"");
+        assert_ne!(other.body, response.body);
+
+        // HEAD mirrors GET with an empty body.
+        let head = response_for("HEAD", "/api/lifehash/deadbeef", b"");
+        assert_eq!(head.status, 200);
+        assert_eq!(head.content_type, "image/png");
+        assert!(head.body.is_empty());
+
+        // POST is not an API the fingerprint route serves.
+        assert_eq!(response_for("POST", "/api/lifehash/deadbeef", b"").status, 405);
+    }
+
+    #[test]
+    fn lifehash_endpoint_reports_json_errors() {
+        // Liberal digest parsing: odd-length hex is the bytes_arg error.
+        let response = response_for("GET", "/api/lifehash/abc", b"");
+        assert_eq!(response.status, 400);
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("odd length")
+        );
+
+        let response = response_for("GET", "/api/lifehash/", b"");
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("empty byte string")
+        );
+    }
+
+    #[test]
+    fn lifehash_responses_are_cacheable_on_the_wire() {
+        // The PNG body is binary, so this rides the bytes round-trip and
+        // inspects the header block lossily.
+        let response =
+            round_trip_http_bytes("GET /api/lifehash/deadbeef HTTP/1.1\r\nHost: x\r\n\r\n");
+        let headers = String::from_utf8_lossy(&response);
+        assert!(headers.starts_with("HTTP/1.1 200 OK\r\n"), "{headers}");
+        assert!(headers.contains("Content-Type: image/png\r\n"), "{headers}");
+        assert!(
+            headers.contains("Cache-Control: public, max-age=31536000, immutable\r\n"),
+            "{headers}"
+        );
+
+        // Everything else stays no-store.
+        let response = round_trip_http("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert!(response.contains("Cache-Control: no-store\r\n"), "{response}");
+    }
+
+    /// Like `round_trip_http`, but tolerating a binary response body.
+    fn round_trip_http_bytes(request: &str) -> Vec<u8> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_connection(stream).unwrap();
+        });
+
+        let mut client = TcpStream::connect(addr).unwrap();
+        client.write_all(request.as_bytes()).unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        server.join().unwrap();
+        response
+    }
+
+    #[test]
     fn inspect_endpoint_reports_json_errors() {
         let missing = response_for("POST", "/api/inspect", b"{}");
         assert_eq!(missing.status, 400);
@@ -1481,10 +1955,484 @@ mod tests {
     }
 
     #[test]
+    fn classify_endpoint_parses_descriptors() {
+        const XPUB: &str = "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8";
+        let request = serde_json::json!({ "payload": format!("wpkh({XPUB}/0/*)") }).to_string();
+
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["kind"], "descriptor");
+        assert_eq!(body["has_private_keys"], false);
+        assert_eq!(body["is_ranged"], true);
+        assert_eq!(body["derived"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn classify_endpoint_parses_payment_uris_with_network_selector() {
+        let request = serde_json::json!({
+            "payload": format!(
+                "bitcoin:{}?amount=0.00025&label=lunch",
+                regtest_address(3),
+            ),
+            "network": "regtest",
+        })
+        .to_string();
+
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["kind"], "payment");
+        assert_eq!(body["amount_sats"], 25_000);
+        assert_eq!(body["label"], "lunch");
+        assert_eq!(body["methods"][0]["type"], "onchain");
+        assert_eq!(body["methods"][0]["address"], regtest_address(3));
+    }
+
+    #[test]
+    fn classify_endpoint_parses_peer_ids_and_transactions() {
+        use bitcoin::bech32::{self, Hrp};
+        let npub =
+            bech32::encode::<bech32::Bech32>(Hrp::parse("npub").unwrap(), &[0x22; 32]).unwrap();
+        let request = serde_json::json!({ "payload": npub }).to_string();
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["kind"], "peer_id");
+        assert_eq!(body["format"], "npub");
+        assert_eq!(body["id_hex"], "22".repeat(32));
+
+        // A raw signed transaction pastes into spendable outpoints.
+        let transaction = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: format!("{TXID}:7").parse().unwrap(),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::from_slice(&[vec![0xAA; 71], vec![0xBB; 33]]),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(70_000),
+                script_pubkey: regtest_address(2)
+                    .parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
+                    .unwrap()
+                    .assume_checked()
+                    .script_pubkey(),
+            }],
+        };
+        let request = serde_json::json!({
+            "payload": bitcoin::consensus::encode::serialize_hex(&transaction),
+            "network": "regtest",
+        })
+        .to_string();
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["kind"], "transaction");
+        assert_eq!(body["fully_signed"], true);
+        assert_eq!(body["outputs"][0]["amount_sats"], 70_000);
+        assert_eq!(body["outputs"][0]["address"], regtest_address(2));
+    }
+
+    #[test]
+    fn classify_endpoint_reports_json_errors() {
+        let missing = response_for("POST", "/api/classify", b"{}");
+        assert_eq!(missing.status, 400);
+        assert!(
+            String::from_utf8(missing.body)
+                .unwrap()
+                .contains("`payload`")
+        );
+
+        // PSBT pastes are redirected to the PSBT routes.
+        let request = serde_json::json!({ "payload": encoded_psbt() }).to_string();
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("/api/inspect")
+        );
+
+        // Unclassifiable payloads name every decoder that was tried.
+        let request = serde_json::json!({ "payload": "!!!" }).to_string();
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+        assert_eq!(response.status, 400);
+        let error = String::from_utf8(response.body).unwrap();
+        assert!(error.contains("not an output descriptor"), "{error}");
+        assert!(error.contains("not payment instructions"), "{error}");
+    }
+
+    /// The fixture PSBT with its output unique ids stripped — imported
+    /// BIP 174 data before `assign-ids`.
+    fn encoded_psbt_without_uids() -> String {
+        let mut psbt =
+            crate::io::parse_psbt_bytes("fixture psbt", encoded_psbt().as_bytes()).unwrap();
+        for output in &mut psbt.outputs {
+            output.proprietaries.clear();
+        }
+        crate::io::encode_psbt(&psbt)
+    }
+
+    #[test]
+    fn assign_ids_endpoint_auto_assigns_missing_output_ids() {
+        use concurrent_psbt::output::OutputUniqueIdExt as _;
+
+        let request = serde_json::json!({ "psbt": encoded_psbt_without_uids() }).to_string();
+        let response = response_for("POST", "/api/assign-ids", request.as_bytes());
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let assigned = crate::io::parse_psbt_bytes(
+            "assigned response psbt",
+            body["psbt"].as_str().unwrap().as_bytes(),
+        )
+        .unwrap();
+        assert!(assigned.outputs.iter().all(|output| output.has_unique_id()));
+        assert_eq!(body["inspect"]["output_count"], 1);
+
+        // Idempotent: a second pass returns the identical PSBT.
+        let again = serde_json::json!({ "psbt": body["psbt"] }).to_string();
+        let second = response_for("POST", "/api/assign-ids", again.as_bytes());
+        assert_eq!(second.status, 200);
+        let second_body: serde_json::Value = serde_json::from_slice(&second.body).unwrap();
+        assert_eq!(second_body["psbt"], body["psbt"]);
+    }
+
+    #[test]
+    fn assign_ids_endpoint_applies_manual_directives() {
+        use concurrent_psbt::output::OutputUniqueIdExt as _;
+
+        let request = serde_json::json!({
+            "psbt": encoded_psbt_without_uids(),
+            "ids": [
+                { "target": "out", "index": 0, "id": "0102030405060708090a0b0c0d0e0f10" },
+                { "target": "in", "index": 0, "id": "aa11" },
+            ],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/assign-ids", request.as_bytes());
+
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let assigned = crate::io::parse_psbt_bytes(
+            "assigned response psbt",
+            body["psbt"].as_str().unwrap().as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            assigned.outputs[0].unique_id().unwrap().into_bytes(),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+        );
+        assert_eq!(
+            concurrent_psbt::removal::InputUniqueIdExt::unique_id(&assigned.inputs[0]),
+            Some(vec![0xaa, 0x11]),
+        );
+    }
+
+    #[test]
+    fn assign_ids_endpoint_reports_json_errors() {
+        let missing = response_for("POST", "/api/assign-ids", b"{}");
+        assert_eq!(missing.status, 400);
+        assert!(String::from_utf8(missing.body).unwrap().contains("`psbt`"));
+
+        let bad_id = serde_json::json!({
+            "psbt": encoded_psbt_without_uids(),
+            "ids": [{ "target": "out", "index": 0, "id": "0!z" }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/assign-ids", bad_id.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("could not decode byte string")
+        );
+
+        let bad_target = serde_json::json!({
+            "psbt": encoded_psbt_without_uids(),
+            "ids": [{ "target": "sideways", "index": 0, "id": "abcd" }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/assign-ids", bad_target.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(String::from_utf8(response.body).unwrap().contains("target"));
+    }
+
+    #[test]
+    fn edit_endpoint_sets_and_deletes_raw_entries() {
+        // Set an unknown global key: the edit mints a NEW fragment whose
+        // inspect raw view classifies the entry as `unknown`.
+        let original = encoded_psbt();
+        let request = serde_json::json!({
+            "psbt": original,
+            "edits": [{ "map": "global", "key": "ef01", "value": "aabb" }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", request.as_bytes());
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let edited = body["psbt"].as_str().unwrap();
+        assert_ne!(edited, original, "edits must mint a new fragment");
+        assert_eq!(body["violations"], serde_json::json!([]));
+        assert_eq!(body["applied_fixes"], serde_json::json!([]));
+        let unknown = body["inspect"]["raw"]["global"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["key_hex"] == "ef01")
+            .expect("the new entry must appear in the raw view");
+        assert_eq!(unknown["kind"], "unknown");
+        assert_eq!(unknown["value_hex"], "aabb");
+
+        // Deleting the entry again round-trips back to the original bytes.
+        let request = serde_json::json!({
+            "psbt": edited,
+            "edits": [{ "map": "global", "key": "ef01", "value": null }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", request.as_bytes());
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["psbt"].as_str().unwrap(), original);
+    }
+
+    #[test]
+    fn edit_endpoint_edits_known_fields() {
+        // PSBT_OUT_AMOUNT (keytype 0x03) is a typed field; raw edits reach it
+        // like any other entry, and the typed inspect view reflects the edit.
+        let request = serde_json::json!({
+            "psbt": encoded_psbt(),
+            // 2_000_000 sats as the 8-byte little-endian PSBT_OUT_AMOUNT.
+            "edits": [{ "map": "out:0", "key": "03", "value": "80841e0000000000" }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", request.as_bytes());
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["inspect"]["outputs"][0]["amount_sats"], 2_000_000);
+    }
+
+    #[test]
+    fn edit_endpoint_reports_structured_violations_with_fix_offers() {
+        // The canonical save-time case: an unordered PSBT whose outputs lack
+        // unique ids. `edits: []` is a pure validation pass.
+        let request = serde_json::json!({
+            "psbt": encoded_psbt_without_uids(),
+            "edits": [],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("save-time validation failed")
+        );
+        let violations = body["violations"].as_array().unwrap();
+        assert_eq!(violations.len(), 1);
+        let violation = &violations[0];
+        assert_eq!(violation["id"], "unordered-missing-output-ids");
+        assert_eq!(violation["override_param"], "allow_missing_output_ids");
+        assert!(
+            violation["message"]
+                .as_str()
+                .unwrap()
+                .contains("PSBT_OUT_UNIQUE_ID")
+        );
+        // The structured fix offer wires the assign-ids machinery, warning
+        // text included (it is part of the contract).
+        assert_eq!(violation["fix_id"], "assign-ids");
+        assert!(violation["fix_label"].is_string());
+        assert!(
+            violation["warning_text"]
+                .as_str()
+                .unwrap()
+                .contains("duplicate txouts if done more than once")
+        );
+    }
+
+    #[test]
+    fn edit_endpoint_applies_offered_fixes() {
+        use concurrent_psbt::output::OutputUniqueIdExt as _;
+
+        let request = serde_json::json!({
+            "psbt": encoded_psbt_without_uids(),
+            "edits": [],
+            "apply_fixes": ["assign-ids"],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", request.as_bytes());
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let fixed = crate::io::parse_psbt_bytes(
+            "fixed response psbt",
+            body["psbt"].as_str().unwrap().as_bytes(),
+        )
+        .unwrap();
+        assert!(fixed.outputs.iter().all(|output| output.has_unique_id()));
+        assert_eq!(body["violations"], serde_json::json!([]));
+        let applied = body["applied_fixes"].as_array().unwrap();
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0]["fix_id"], "assign-ids");
+        // Applying the fix re-informs about the duplicate-txout caveat.
+        assert!(
+            applied[0]["warning_text"]
+                .as_str()
+                .unwrap()
+                .contains("duplicate txouts")
+        );
+    }
+
+    #[test]
+    fn edit_endpoint_honors_explicit_overrides() {
+        use concurrent_psbt::output::OutputUniqueIdExt as _;
+
+        let request = serde_json::json!({
+            "psbt": encoded_psbt_without_uids(),
+            "edits": [],
+            "allow_missing_output_ids": true,
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", request.as_bytes());
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        // The gate is waived, not fixed: the fragment still lacks the ids and
+        // the response says which gates were overridden.
+        let saved = crate::io::parse_psbt_bytes(
+            "overridden response psbt",
+            body["psbt"].as_str().unwrap().as_bytes(),
+        )
+        .unwrap();
+        assert!(saved.outputs.iter().all(|output| !output.has_unique_id()));
+        let overridden = body["overridden"].as_array().unwrap();
+        assert_eq!(overridden.len(), 1);
+        assert_eq!(overridden[0]["id"], "unordered-missing-output-ids");
+    }
+
+    #[test]
+    fn edit_endpoint_reports_json_errors() {
+        let missing = response_for("POST", "/api/edit", b"{}");
+        assert_eq!(missing.status, 400);
+        assert!(String::from_utf8(missing.body).unwrap().contains("`psbt`"));
+
+        let no_edits = serde_json::json!({ "psbt": encoded_psbt() }).to_string();
+        let response = response_for("POST", "/api/edit", no_edits.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(String::from_utf8(response.body).unwrap().contains("`edits`"));
+
+        let bad_map = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "edits": [{ "map": "sideways", "key": "ef", "value": "01" }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", bad_map.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(String::from_utf8(response.body).unwrap().contains("sideways"));
+
+        let bad_key = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "edits": [{ "map": "global", "key": "0!z", "value": "01" }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", bad_key.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("could not decode byte string")
+        );
+
+        let missing_value = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "edits": [{ "map": "global", "key": "ef" }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", missing_value.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("`value: null`")
+        );
+
+        let delete_absent = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "edits": [{ "map": "in:0", "key": "ef", "value": null }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", delete_absent.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("nothing to delete")
+        );
+
+        let unknown_fix = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "edits": [],
+            "apply_fixes": ["reticulate-splines"],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", unknown_fix.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("unknown fix id")
+        );
+    }
+
+    #[test]
     fn sort_endpoint_returns_ordered_psbt_and_inspection() {
         let request = serde_json::json!({
             "psbt": encoded_psbt(),
-            "seed_hex": "deadbeef",
+            "seed_hex": "deadbeefdeadbeefdeadbeefdeadbeef",
         })
         .to_string();
 
@@ -1502,6 +2450,34 @@ mod tests {
         assert_eq!(sorted.global.output_count, 1);
         assert_eq!(body["inspect"]["ordering"], "ordered");
         assert_eq!(body["inspect"]["sort"]["mode"], "unset");
+        assert_eq!(
+            body["inspect"]["sort"]["seed_hex"],
+            "deadbeefdeadbeefdeadbeefdeadbeef"
+        );
+    }
+
+    #[test]
+    fn sort_endpoint_rejects_short_seed_unless_overridden() {
+        let short = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "seed_hex": "deadbeef",
+        })
+        .to_string();
+        let rejected = response_for("POST", "/api/sort", short.as_bytes());
+        assert_eq!(rejected.status, 400);
+        let message = String::from_utf8(rejected.body).unwrap();
+        assert!(message.contains("128 bits"), "{message}");
+        assert!(message.contains("allow_short_seed"), "{message}");
+
+        let overridden = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "seed_hex": "deadbeef",
+            "allow_short_seed": true,
+        })
+        .to_string();
+        let response = response_for("POST", "/api/sort", overridden.as_bytes());
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(body["inspect"]["sort"]["seed_hex"], "deadbeef");
     }
 
@@ -1679,7 +2655,7 @@ mod tests {
                 { "address": regtest_address(1), "amount_btc": "0.00050000" },
             ],
             "ordering": "deterministic",
-            "seed_hex": "abcd",
+            "seed_hex": SEED_HEX,
         })
         .to_string();
 
@@ -1703,17 +2679,36 @@ mod tests {
         assert_eq!(body["inspect"]["input_count"], 1);
         assert_eq!(body["inspect"]["output_count"], 1);
         assert_eq!(body["inspect"]["sort"]["mode"], "deterministic");
-        assert_eq!(body["inspect"]["sort"]["seed_hex"], "abcd");
+        assert_eq!(body["inspect"]["sort"]["seed_hex"], SEED_HEX);
+    }
+
+    #[test]
+    fn create_endpoint_rejects_short_seed_unless_overridden() {
+        let short = serde_json::json!({
+            "network": "regtest",
+            "inputs": [{ "txid": TXID, "vout": 7 }],
+            "ordering": "deterministic",
+            "seed_hex": "abcd",
+        })
+        .to_string();
+        let rejected = response_for("POST", "/api/create", short.as_bytes());
+        assert_eq!(rejected.status, 400);
+        let message = String::from_utf8(rejected.body).unwrap();
+        assert!(message.contains("128 bits"), "{message}");
+        assert!(message.contains("allow_short_seed"), "{message}");
     }
 
     #[test]
     fn create_endpoint_preserves_unset_ordering_seed_without_deterministic_mode() {
+        // The short legacy seed rides on the explicit allow_short_seed
+        // override; without it the boundary rejects seeds below 128 bits.
         let request = serde_json::json!({
             "network": "regtest",
             "inputs": [
                 { "txid": TXID, "vout": 7 },
             ],
             "seed_hex": "abcd",
+            "allow_short_seed": true,
         })
         .to_string();
 
@@ -1840,6 +2835,28 @@ mod tests {
     }
 
     #[test]
+    fn import_bip174_endpoint_marks_modifiable_on_request() {
+        let exported = crate::commands::export_bip174::export_bip174_psbt(
+            crate::io::parse_psbt_bytes("fixture psbt", encoded_ordered_psbt().as_bytes()).unwrap(),
+        )
+        .unwrap();
+        let request = serde_json::json!({ "psbt": exported, "modifiable": true }).to_string();
+
+        let response = response_for("POST", "/api/import-bip174", request.as_bytes());
+
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let imported = crate::io::parse_psbt_bytes(
+            "imported response psbt",
+            body["psbt"].as_str().unwrap().as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(imported.global.tx_modifiable_flags, 0x03);
+        assert_eq!(body["inspect"]["modifiability"]["inputs"], true);
+        assert_eq!(body["inspect"]["modifiability"]["outputs"], true);
+    }
+
+    #[test]
     fn import_bip174_endpoint_reports_json_errors() {
         let missing = response_for("POST", "/api/import-bip174", b"{}");
         assert_eq!(missing.status, 400);
@@ -1909,7 +2926,7 @@ mod tests {
         let constructor =
             concurrent_psbt::roles::constructor::dynamic::Constructor::try_from_psbt(psbt).unwrap();
         let sorted =
-            crate::commands::sort::sort_psbt(constructor.into_inner(), Some(vec![0xab, 0xcd]))
+            crate::commands::sort::sort_psbt(constructor.into_inner(), Some(seed_bytes()), false)
                 .unwrap();
         crate::io::encode_psbt(&sorted)
     }
@@ -1924,7 +2941,7 @@ mod tests {
                 "--input",
                 &format!("{TXID}:7"),
                 "--seed",
-                "abcd",
+                SEED_HEX,
             ])
             .unwrap(),
         )
@@ -1947,7 +2964,7 @@ mod tests {
                     btc_value(amount_sats)
                 ),
                 "--seed",
-                "abcd",
+                SEED_HEX,
             ])
             .unwrap(),
         )
@@ -1972,6 +2989,7 @@ mod tests {
             outputs: vec![],
             ordering: crate::cli::OrderingArg::Unset,
             seed: None,
+            allow_short_seed: false,
             network: crate::cli::NetworkArg(bitcoin::Network::Regtest),
         })
         .expect("empty create");
@@ -2258,6 +3276,7 @@ mod tests {
             outputs: vec![],
             ordering: crate::cli::OrderingArg::Unset,
             seed: None,
+            allow_short_seed: false,
             network: crate::cli::NetworkArg(bitcoin::Network::Regtest),
         })
         .expect("empty create");
