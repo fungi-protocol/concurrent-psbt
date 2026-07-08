@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
+  amountBits,
   amountSpanParts,
   cardGroups,
   elisionLabel,
@@ -293,6 +294,38 @@ test("signedAmountSpanParts: the sign is a significant digit", () => {
   assert.deepEqual(flatten(negative), ["digits:−", "symbol:₿", "scale:0.00000", "digits:600"]);
   assert.deepEqual(signedAmountSpanParts(600), amountSpanParts(600));
   assert.deepEqual(signedAmountSpanParts(0), amountSpanParts(0));
+});
+
+test("amountBits: base-2 fingerprint at natural bit length", () => {
+  assert.equal(amountBits(0), "0");
+  assert.equal(amountBits(1), "1");
+  // 600 sats: 1001011000 — Hamming weight 4.
+  assert.equal(amountBits(600), "1001011000");
+  assert.equal([...amountBits(600)].filter((bit) => bit === "1").length, 4);
+});
+
+test("amountBits: low-Hamming-weight values read as a single mark", () => {
+  for (const value of [2 ** 20, 0x100000]) {
+    const bits = amountBits(value);
+    assert.equal(bits, "1" + "0".repeat(20));
+    assert.equal(bits.length, 21, "natural length doubles as a log2 magnitude cue");
+    assert.equal([...bits].filter((bit) => bit === "1").length, 1);
+  }
+});
+
+test("amountBits: exact across the full sat range (BigInt)", () => {
+  // All 21M BTC: 2,100,000,000,000,000 sats ≈ 2^51.
+  const max = 2_100_000_000_000_000;
+  const bits = amountBits(max);
+  assert.equal(bits, BigInt(max).toString(2));
+  assert.equal(bits.length, 51);
+  assert.ok(bits.startsWith("1"));
+});
+
+test("amountBits: sign and junk fold to the magnitude fingerprint", () => {
+  assert.equal(amountBits(-600), amountBits(600));
+  assert.equal(amountBits(NaN), "0");
+  assert.equal(amountBits(600.9), amountBits(600));
 });
 
 // The ead6ca05 regression, mirrored at the stylesheet level: the scaffold

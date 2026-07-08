@@ -21,7 +21,7 @@ import { HttpBackend } from "../shared-frontend/backends/http.js";
 import { PtjBackendError } from "../shared-frontend/core/types.js";
 import { seedFromRandomBytes } from "../model.js";
 import { addFragment, asArray, asObject, asString, buildConfirmArgs, buildCreateRequest, buildPayArgs, buildSyncRequest, bytesToBase64, emptySession, fragmentSummary, negotiationView, pastedPsbt, removeFragment, selectedFragments, setSelected, } from "./state.js";
-import { amountSpanParts, elisionLabel, fragmentCardModel, } from "./display.js";
+import { amountBits, amountSpanParts, elisionLabel, fragmentCardModel, } from "./display.js";
 import { classifyPaste, mintFromPaste } from "./ingest.js";
 import { actionState, addFragmentToSession, addPeerToSession, applyTxOutputs, beginWire, completeWire, dropFragmentKey, emptyObjects, enrichDescriptor, enrichPayment, idleWire, mintSession, overviewFocus, peerByKey, sessionByKey, sessionFocus, validateFocus, wireVerdict, } from "./wiring.js";
 import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, validateEditor, violationsFromServer, } from "./editor.js";
@@ -163,12 +163,25 @@ function lifehashBadge(hex, title) {
 }
 // BIP 177 sat-first emphasis (display.ts amountSpanParts): symbol/scale/
 // digits spans whose classes carry only opacity and weight — every part
-// inherits the surrounding color (the ead6ca05 rule).
+// inherits the surrounding color (the ead6ca05 rule). Underneath, the
+// binary fingerprint (display.ts amountBits): a thin barcode of the value
+// in base 2, LSB right-aligned under the last digit, for at-a-glance
+// recognition of low-Hamming-weight values.
 function amountSpan(sats) {
     const node = span("session-amount", "");
+    const text = span("session-amount-text", "");
     for (const part of amountSpanParts(sats)) {
-        node.append(span(part.className, part.text));
+        text.append(span(part.className, part.text));
     }
+    node.append(text);
+    const bits = amountBits(sats);
+    const row = span("session-amount-bits", "");
+    row.title = `binary ${bits}`;
+    row.setAttribute("aria-hidden", "true");
+    for (const bit of bits) {
+        row.append(span(`session-amount-bit session-amount-bit-${bit}`, ""));
+    }
+    node.append(row);
     return node;
 }
 // --- fragment set plumbing ----------------------------------------------------

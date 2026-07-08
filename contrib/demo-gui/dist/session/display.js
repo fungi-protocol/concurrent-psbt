@@ -178,6 +178,17 @@ export function signedAmountSpanParts(valueSats) {
         parts.unshift(amountSpanPart("digits", "−"));
     return parts;
 }
+// Binary fingerprint: the sat value in base 2, rendered as a thin barcode
+// row directly under the decimal amount — LSB right-aligned under the last
+// digit, natural bit length (no padding: the row length doubles as a log2
+// magnitude cue). 1-bits draw as crisp marks and 0-bits as nearly invisible
+// slots, so values with low Hamming weight in base two (round binary
+// numbers) are recognizable at a glance by people who do not spot them in
+// decimal. BigInt keeps every sat-range value exact (21M BTC ≈ 2^51 sats).
+export function amountBits(valueSats) {
+    const sats = Math.trunc(Math.abs(Number(valueSats || 0)));
+    return BigInt(sats).toString(2);
+}
 function groupSlot(key, label, kind) {
     return {
         group: { key, label, kind, inputs: [], outputs: [], inputSubtotalSats: 0, outputSubtotalSats: 0 },
