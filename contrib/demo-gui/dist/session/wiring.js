@@ -342,6 +342,139 @@ export function wireVerdict(source, target, state) {
     }
     return verdict("none", false, false, `no join is defined for ${a} + ${b}`);
 }
+function nodeId(ref) {
+    return `${ref.kind}:${ref.key}`;
+}
+// Direction-insensitive identity of a wire (the demo's joinWireKey).
+export function wireKey(a, b) {
+    return [nodeId(a), nodeId(b)].sort().join("::");
+}
+// Only compatible wires queue; blocked/unbacked verdicts come back for the
+// shell's rejection feedback. Duplicates (either direction) are no-ops.
+export function queueWire(wires, source, target, state) {
+    const v = wireVerdict(source, target, state);
+    if (wireDisposition(v) !== "compatible") {
+        return { wires, queued: false, duplicate: false, verdict: v };
+    }
+    const key = wireKey(source, target);
+    if (wires.some((wire) => wireKey(wire.source, wire.target) === key)) {
+        return { wires, queued: false, duplicate: true, verdict: v };
+    }
+    return { wires: [...wires, { source, target }], queued: true, duplicate: false, verdict: v };
+}
+export function unqueueWire(wires, key) {
+    return wires.filter((wire) => wireKey(wire.source, wire.target) !== key);
+}
+export function nodeExists(ref, state, fragmentKeys) {
+    switch (ref.kind) {
+        case "fragment":
+            return fragmentKeys.includes(ref.key);
+        case "session":
+            return sessionByKey(state, ref.key) !== null;
+        case "peer":
+            return peerByKey(state, ref.key) !== null;
+        case "payment":
+            return state.payments.some((payment) => payment.key === ref.key);
+        case "utxo":
+            return state.utxos.some((utxo) => utxo.key === ref.key);
+        case "descriptor":
+            return state.descriptors.some((descriptor) => descriptor.key === ref.key);
+        case "create":
+            return true;
+    }
+}
+// Re-validate the queue against current state (the demo's validJoinWires):
+// wires lose their place when an endpoint disappears or the pair's verdict
+// is no longer compatible (e.g. the fragment was published to the session
+// through another path).
+export function pruneWires(wires, state, fragmentKeys) {
+    return wires.filter((wire) => nodeExists(wire.source, state, fragmentKeys) &&
+        nodeExists(wire.target, state, fragmentKeys) &&
+        wireDisposition(wireVerdict(wire.source, wire.target, state)) === "compatible");
+}
+// Connected components of the pending-wire graph (the demo's
+// joinComponents): the toolbar Join applies each component as a unit.
+export function wireComponents(wires) {
+    const adjacency = new Map();
+    const refs = new Map();
+    for (const wire of wires) {
+        const a = nodeId(wire.source);
+        const b = nodeId(wire.target);
+        refs.set(a, wire.source);
+        refs.set(b, wire.target);
+        if (!adjacency.has(a))
+            adjacency.set(a, new Set());
+        if (!adjacency.has(b))
+            adjacency.set(b, new Set());
+        adjacency.get(a).add(b);
+        adjacency.get(b).add(a);
+    }
+    const components = [];
+    const seen = new Set();
+    for (const startId of adjacency.keys()) {
+        if (seen.has(startId))
+            continue;
+        const stack = [startId];
+        const memberIds = new Set();
+        while (stack.length) {
+            const current = stack.pop();
+            if (seen.has(current))
+                continue;
+            seen.add(current);
+            memberIds.add(current);
+            for (const next of adjacency.get(current) ?? [])
+                stack.push(next);
+        }
+        // First-seen order over the queue keeps the report deterministic.
+        const nodes = [];
+        for (const wire of wires) {
+            for (const ref of [wire.source, wire.target]) {
+                const id = nodeId(ref);
+                if (memberIds.has(id) && !nodes.some((candidate) => nodeId(candidate) === id)) {
+                    nodes.push(ref);
+                }
+            }
+        }
+        components.push({
+            nodes,
+            wires: wires.filter((wire) => memberIds.has(nodeId(wire.source)) && memberIds.has(nodeId(wire.target))),
+        });
+    }
+    return components;
+}
+export function componentPlan(component) {
+    const joinWires = component.wires.filter((wire) => wire.source.kind === "fragment" && wire.target.kind === "fragment");
+    const clusters = wireComponents(joinWires);
+    return {
+        joinGroups: clusters
+            .map((cluster) => ({
+            fragments: cluster.nodes.map((ref) => ref.key),
+            wires: cluster.wires,
+        }))
+            .filter((group) => group.fragments.length >= 2),
+        rest: component.wires.filter((wire) => !(wire.source.kind === "fragment" && wire.target.kind === "fragment")),
+    };
+}
+// Follow a consumed fragment endpoint to its join result (the session-side
+// analog of the demo's remapNodeId).
+export function remapFragmentRef(ref, remap) {
+    if (ref.kind !== "fragment")
+        return ref;
+    const mapped = remap.get(ref.key);
+    return mapped === undefined ? ref : { kind: "fragment", key: mapped };
+}
+export function wireQueueSummary(wires) {
+    const wireCount = wires.length;
+    const componentCount = wireComponents(wires).length;
+    return {
+        wireCount,
+        componentCount,
+        text: wireCount === 0
+            ? "no pending wires"
+            : `${wireCount} pending wire${wireCount === 1 ? "" : "s"} in ` +
+                `${componentCount} component${componentCount === 1 ? "" : "s"}`,
+    };
+}
 export function idleWire() {
     return { source: null };
 }

@@ -17,14 +17,23 @@ import {
   mintPayment,
   mintPeer,
   mintSession,
+  componentPlan,
   mintUtxo,
   nodeDisplayName,
+  nodeExists,
   overviewFocus,
   peerByKey,
+  pruneWires,
+  queueWire,
+  remapFragmentRef,
   sessionByKey,
   sessionFocus,
+  unqueueWire,
   validateFocus,
+  wireComponents,
   wireDisposition,
+  wireKey,
+  wireQueueSummary,
   wireVerdict,
 } from "../dist/session/wiring.js";
 
@@ -326,6 +335,173 @@ test("wire gesture arms, cancels on re-tap, and yields verdicts", () => {
   // Completing from idle is a no-op.
   const idle = completeWire(idleWire(), { kind: "fragment", key: "psbt-2" }, state);
   assert.equal(idle.verdict, null);
+});
+
+// --- pending-wire queue --------------------------------------------------------
+
+test("wireKey is direction-insensitive; queueWire dedupes both directions", () => {
+  const state = emptyObjects();
+  const a = ref("fragment", "psbt-1");
+  const b = ref("fragment", "psbt-2");
+  assert.equal(wireKey(a, b), wireKey(b, a));
+
+  const first = queueWire([], a, b, state);
+  assert.equal(first.queued, true);
+  assert.equal(first.duplicate, false);
+  assert.equal(first.wires.length, 1);
+  assert.equal(first.verdict.label, "Join psbt-1 into psbt-2");
+
+  const again = queueWire(first.wires, b, a, state);
+  assert.equal(again.queued, false);
+  assert.equal(again.duplicate, true);
+  assert.equal(again.wires.length, 1);
+});
+
+test("queueWire refuses non-compatible verdicts and returns them for reporting", () => {
+  let state = emptyObjects();
+  state = mintSession(state, "s", "iroh").state;
+  state = addFragmentToSession(state, "session-1", "psbt-1");
+
+  // Blocked (member already in the session): not queued, verdict says why.
+  const blocked = queueWire([], ref("fragment", "psbt-1"), ref("session", "session-1"), state);
+  assert.equal(blocked.queued, false);
+  assert.equal(blocked.duplicate, false);
+  assert.deepEqual(blocked.wires, []);
+  assert.match(blocked.verdict.reason, /already in the session/);
+
+  // Unbacked (session merge before the seam): not queued either.
+  const unbacked = queueWire([], ref("session", "session-1"), ref("session", "session-9"), state);
+  assert.equal(unbacked.queued, false);
+  assert.match(unbacked.verdict.needs, /session-state merge seam/);
+});
+
+test("unqueueWire removes exactly the keyed wire", () => {
+  const state = emptyObjects();
+  let wires = queueWire([], ref("fragment", "psbt-1"), ref("fragment", "psbt-2"), state).wires;
+  wires = queueWire(wires, ref("fragment", "psbt-2"), ref("fragment", "psbt-3"), state).wires;
+  assert.equal(wires.length, 2);
+
+  const key = wireKey(ref("fragment", "psbt-2"), ref("fragment", "psbt-1"));
+  const rest = unqueueWire(wires, key);
+  assert.equal(rest.length, 1);
+  assert.equal(rest[0].source.key, "psbt-2");
+  assert.equal(rest[0].target.key, "psbt-3");
+});
+
+test("nodeExists and pruneWires: vanished endpoints and stale verdicts drop", () => {
+  let state = emptyObjects();
+  state = mintSession(state, "s", "iroh").state;
+  const fragments = ["psbt-1", "psbt-2"];
+
+  assert.equal(nodeExists(ref("fragment", "psbt-1"), state, fragments), true);
+  assert.equal(nodeExists(ref("fragment", "psbt-9"), state, fragments), false);
+  assert.equal(nodeExists(ref("session", "session-1"), state, fragments), true);
+  assert.equal(nodeExists(ref("session", "session-9"), state, fragments), false);
+  assert.equal(nodeExists(ref("create", "create"), state, []), true);
+
+  let wires = queueWire([], ref("fragment", "psbt-1"), ref("fragment", "psbt-2"), state).wires;
+  wires = queueWire(wires, ref("fragment", "psbt-1"), ref("session", "session-1"), state).wires;
+  assert.equal(wires.length, 2);
+
+  // Everything still valid: prune keeps both.
+  assert.equal(pruneWires(wires, state, fragments).length, 2);
+
+  // The fragment joined the session through another path: the queued
+  // publish wire is no longer compatible and drops; the join stays.
+  const joinedState = addFragmentToSession(state, "session-1", "psbt-1");
+  const pruned = pruneWires(wires, joinedState, fragments);
+  assert.equal(pruned.length, 1);
+  assert.equal(pruned[0].target.key, "psbt-2");
+
+  // A removed fragment takes its wires with it (psbt-2 gone drops the join;
+  // the psbt-1 publish wire survives); removing both fragments empties the
+  // queue.
+  const withoutPsbt2 = pruneWires(wires, state, ["psbt-1"]);
+  assert.equal(withoutPsbt2.length, 1);
+  assert.equal(withoutPsbt2[0].target.kind, "session");
+  assert.deepEqual(pruneWires(wires, state, []), []);
+});
+
+test("wireComponents groups queued wires into connected components", () => {
+  const state = emptyObjects();
+  let wires = queueWire([], ref("fragment", "psbt-1"), ref("fragment", "psbt-2"), state).wires;
+  wires = queueWire(wires, ref("fragment", "psbt-2"), ref("fragment", "psbt-3"), state).wires;
+  wires = queueWire(wires, ref("fragment", "psbt-8"), ref("fragment", "psbt-9"), state).wires;
+
+  const components = wireComponents(wires);
+  assert.equal(components.length, 2);
+  const chain = components.find((component) => component.nodes.length === 3);
+  assert.deepEqual(
+    chain.nodes.map((node) => node.key),
+    ["psbt-1", "psbt-2", "psbt-3"],
+  );
+  assert.equal(chain.wires.length, 2);
+  const pair = components.find((component) => component.nodes.length === 2);
+  assert.deepEqual(
+    pair.nodes.map((node) => node.key),
+    ["psbt-8", "psbt-9"],
+  );
+
+  assert.deepEqual(wireComponents([]), []);
+});
+
+test("componentPlan collapses fragment-join clusters into n-ary groups", () => {
+  let state = emptyObjects();
+  state = mintSession(state, "s", "iroh").state;
+
+  // Chain psbt-1 ⋈ psbt-2 ⋈ psbt-3 plus a publish wire into the session:
+  // one component, one 3-fragment join group, one remaining wire.
+  let wires = queueWire([], ref("fragment", "psbt-1"), ref("fragment", "psbt-2"), state).wires;
+  wires = queueWire(wires, ref("fragment", "psbt-2"), ref("fragment", "psbt-3"), state).wires;
+  wires = queueWire(wires, ref("fragment", "psbt-2"), ref("session", "session-1"), state).wires;
+
+  const components = wireComponents(wires);
+  assert.equal(components.length, 1);
+  const plan = componentPlan(components[0]);
+  assert.equal(plan.joinGroups.length, 1);
+  assert.deepEqual(plan.joinGroups[0].fragments, ["psbt-1", "psbt-2", "psbt-3"]);
+  assert.equal(plan.joinGroups[0].wires.length, 2);
+  assert.equal(plan.rest.length, 1);
+  assert.equal(plan.rest[0].target.kind, "session");
+
+  // The rest wire executes against the cluster's join result.
+  const remap = new Map([
+    ["psbt-1", "psbt-4"],
+    ["psbt-2", "psbt-4"],
+    ["psbt-3", "psbt-4"],
+  ]);
+  assert.deepEqual(remapFragmentRef(plan.rest[0].source, remap), {
+    kind: "fragment",
+    key: "psbt-4",
+  });
+  // Non-fragment refs and unmapped fragments pass through untouched.
+  assert.deepEqual(remapFragmentRef(ref("session", "session-1"), remap), ref("session", "session-1"));
+  assert.deepEqual(remapFragmentRef(ref("fragment", "psbt-7"), remap), ref("fragment", "psbt-7"));
+
+  // A component with no fragment-join edges plans no join groups.
+  const publishOnly = wireComponents(
+    queueWire([], ref("fragment", "psbt-7"), ref("session", "session-1"), state).wires,
+  );
+  const publishPlan = componentPlan(publishOnly[0]);
+  assert.deepEqual(publishPlan.joinGroups, []);
+  assert.equal(publishPlan.rest.length, 1);
+});
+
+test("wireQueueSummary counts wires and components", () => {
+  const state = emptyObjects();
+  assert.equal(wireQueueSummary([]).text, "no pending wires");
+
+  let wires = queueWire([], ref("fragment", "psbt-1"), ref("fragment", "psbt-2"), state).wires;
+  const one = wireQueueSummary(wires);
+  assert.equal(one.wireCount, 1);
+  assert.equal(one.componentCount, 1);
+  assert.equal(one.text, "1 pending wire in 1 component");
+
+  wires = queueWire(wires, ref("fragment", "psbt-8"), ref("fragment", "psbt-9"), state).wires;
+  const two = wireQueueSummary(wires);
+  assert.equal(two.wireCount, 2);
+  assert.equal(two.componentCount, 2);
+  assert.equal(two.text, "2 pending wires in 2 components");
 });
 
 // --- contextual enablement ----------------------------------------------------
