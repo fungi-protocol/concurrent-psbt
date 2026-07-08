@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Partial Transaction Joiner</title>
-    <link rel="stylesheet" href="styles.css?v=20260708-session-v1">
+    <link rel="stylesheet" href="styles.css?v=20260708-session-v2">
   </head>
   <body>
     <header class="app-header">
@@ -13,23 +13,43 @@
         <p>Real PSBTs only: everything below drives the ptj backend on this machine. Warning: every peer can see session details and can stall coordination. Funds stay safe because wallets sign only after the final transaction gives each participant what they approved and accounts for every sat through inputs, outputs, and explicit fees.</p>
       </div>
       <div class="header-actions">
+        <label class="field-label compact" for="displayNetwork">
+          Display network
+          <select id="displayNetwork">
+            <option value="bitcoin">bitcoin</option>
+            <option value="testnet">testnet</option>
+            <option value="signet">signet</option>
+            <option value="regtest" selected>regtest</option>
+          </select>
+        </label>
         <a class="session-demo-link" href="/demo">Demo sandbox</a>
       </div>
     </header>
 
-    <main class="session-layout">
-      <section class="control-section session-panel session-panel-wide" aria-label="Loaded PSBT fragments">
+    <main class="session-layout" id="sessionLayout">
+      <!-- Focus bar: visible in single-session focus mode (mobile-first). -->
+      <nav id="focusBar" class="session-focus-bar" hidden>
+        <button id="focusBack" type="button">← All objects</button>
+        <span id="focusTitle" class="item-title"></span>
+      </nav>
+
+      <section class="control-section session-panel session-panel-wide" aria-label="Loaded PSBT fragments" data-focus-hide="">
         <h2>Session</h2>
         <div id="sessionStatus" class="session-status" role="status"></div>
+        <div id="wireStatus" class="session-wire-status" role="status" hidden>
+          <span id="wireStatusText"></span>
+          <button id="wireCancel" type="button">Cancel wiring</button>
+        </div>
 
         <div class="session-load">
           <label class="field-label" for="pasteInput">
-            Paste a base64 PSBT (v2 or BIP 174)
-            <textarea id="pasteInput" rows="3" spellcheck="false" placeholder="cHNidP8B…"></textarea>
+            Paste anything: PSBT (base64 or hex), bitcoin: URI, descriptor, npub, iroh ticket, signed tx hex
+            <textarea id="pasteInput" rows="3" spellcheck="false" placeholder="cHNidP8B… / bitcoin:… / wpkh(… / npub1… / doc… / 0200…"></textarea>
           </label>
           <div class="session-load-actions">
-            <button id="addV2" type="button" class="primary">Add PSBT v2</button>
-            <button id="addBip174" type="button">Import BIP 174</button>
+            <button id="addObject" type="button" class="primary">Add object</button>
+            <button id="addV2" type="button" title="Decode strictly as a PSBT v2 (BIP 370)">Add PSBT v2</button>
+            <button id="addBip174" type="button" title="Decode strictly as BIP 174 and upgrade">Import BIP 174</button>
             <label class="session-upload">
               Upload file
               <input id="uploadInput" type="file">
@@ -38,26 +58,60 @@
         </div>
 
         <p id="fragmentEmpty">No PSBTs loaded yet. Paste, upload, or create one.</p>
-        <ul id="fragmentList" class="item-list"></ul>
+        <ul id="fragmentList" class="item-list session-card-list"></ul>
+      </section>
 
-        <div class="session-ops">
+      <!-- Selection-scoped operations: rendered as a bottom bar on narrow
+           viewports. Buttons are enabled/disabled by the presenter's
+           contextual rules; overridable correctness gates surface in
+           #gateOverrides, never silently. -->
+      <section class="control-section session-panel session-panel-wide session-ops-panel" aria-label="Operations on the selection">
+        <div class="session-ops" id="sessionOps">
           <span id="selectionCount" class="item-meta">none selected</span>
-          <button id="opJoin" type="button" class="primary" title="Lattice join of the selected unordered PSBTs">Join</button>
-          <button id="opConcatenate" type="button" title="Concatenate the selected PSBTs in list order">Concatenate</button>
-          <button id="opMakeUnordered" type="button" title="Shuffle an ordered PSBT into unordered form">Make unordered</button>
-          <button id="opSort" type="button" title="Run the sorter role on the selected PSBT">Sort</button>
+          <button id="opJoin" type="button" class="primary" data-action="join" title="Lattice join of the selected unordered PSBTs">Join</button>
+          <button id="opConcatenate" type="button" data-action="concatenate" title="Concatenate the selected PSBTs in list order">Concatenate</button>
+          <button id="opMakeUnordered" type="button" data-action="make-unordered" title="Shuffle an ordered PSBT into unordered form">Make unordered</button>
+          <button id="opSort" type="button" data-action="sort" title="Run the sorter role on the selected PSBT">Sort</button>
           <label class="field-label compact session-seed" for="sortSeed">
             sort seed (hex, optional)
             <input id="sortSeed" autocomplete="off" spellcheck="false" placeholder="abcd">
           </label>
-          <button id="opAtomize" type="button" title="Split the selected PSBT into single-element fragments">Atomize</button>
-          <button id="opExportV2" type="button">Export v2</button>
-          <button id="opExportBip174" type="button">Export BIP 174</button>
+          <button id="opAtomize" type="button" data-action="atomize" title="Split the selected PSBT into single-element fragments">Atomize</button>
+          <!-- TODO(assign-ids): wire to the Backend seam method `assignIds`
+               once the server-side unique-id assignment route lands. Until
+               then this stays visibly disabled (needs backend) and manual
+               per-output id entry lives in the fragment editor. -->
+          <button id="opAssignIds" type="button" data-action="assign-ids" title="Assign unique ids to outputs missing them (needs backend: assignIds)">Assign ids</button>
+          <button id="opExportV2" type="button" data-action="export-v2">Export v2</button>
+          <button id="opExportBip174" type="button" data-action="export-bip174">Export BIP 174</button>
         </div>
+        <div id="gateOverrides" class="session-gate-overrides"></div>
       </section>
 
-      <section class="control-section session-panel" aria-label="Create a payment request PSBT">
-        <h2>Create</h2>
+      <section class="control-section session-panel" aria-label="Sessions, peers, and other objects" data-focus-hide="">
+        <h2>Objects</h2>
+        <p class="item-meta">Wire any two cards to join them: fragment⋈fragment joins PSBTs, fragment→session incorporates, peer→session syncs. Pairs without a backend seam say so.</p>
+        <form id="newSessionForm" class="split-row session-new-object">
+          <label class="field-label" for="newSessionName">
+            New session
+            <input id="newSessionName" autocomplete="off" placeholder="name">
+          </label>
+          <label class="field-label compact" for="newSessionTransport">
+            transport
+            <select id="newSessionTransport">
+              <option value="local" selected>local</option>
+              <option value="iroh">iroh</option>
+              <option value="str0m">str0m</option>
+              <option value="webrtc-rs">webrtc-rs</option>
+            </select>
+          </label>
+          <button type="submit">Create</button>
+        </form>
+        <ul id="objectList" class="item-list session-card-list"></ul>
+      </section>
+
+      <section class="control-section session-panel" aria-label="Create a payment request PSBT" data-focus-hide="">
+        <h2>Create <span id="createWireTarget" class="session-wire-target" hidden>wire target</span></h2>
         <form id="createForm" class="stack-form">
           <div class="split-row">
             <label class="field-label" for="createNetwork">
@@ -95,8 +149,14 @@
         </form>
       </section>
 
+      <!-- No data-focus-hide: syncing is a session action, so the panel
+           stays available in single-session focus mode. -->
       <section class="control-section session-panel" aria-label="Sync fragments over a transport">
         <h2>Sync</h2>
+        <div class="session-sync-state">
+          <span id="syncStateChip" class="session-sync-chip session-sync-idle">idle</span>
+          <span id="syncStateDetail" class="item-meta"></span>
+        </div>
         <form id="syncForm" class="stack-form">
           <label class="field-label" for="syncTransport">
             Transport
@@ -165,13 +225,22 @@
               <input id="syncSignalTimeoutMs" autocomplete="off" inputmode="numeric" placeholder="60000">
             </label>
           </div>
-          <button id="syncRun" type="submit" class="primary">Sync selected fragments</button>
+          <button id="syncRun" type="submit" class="primary" data-action="sync">Sync selected fragments</button>
         </form>
+        <div id="syncTicketPanel" class="session-ticket" hidden>
+          <div class="session-output-heading">
+            <h2>iroh document ticket</h2>
+            <button id="syncTicketCopy" type="button">Copy</button>
+          </div>
+          <p class="item-meta">Share this with peers; pasting it on their session page wires them in.</p>
+          <textarea id="syncTicketBody" rows="3" readonly spellcheck="false"></textarea>
+        </div>
+        <ol id="syncResults" class="event-log session-sync-results"></ol>
       </section>
 
-      <section class="control-section session-panel" aria-label="Payment negotiation">
+      <section class="control-section session-panel" aria-label="Payment negotiation" data-focus-hide="">
         <h2>Negotiation</h2>
-        <p class="item-meta">Targets the one selected fragment. Records are grow-only; results are added as new fragments.</p>
+        <p id="negotiationTargetLine" class="item-meta">Targets the one selected fragment. Records are grow-only; results are added as new fragments.</p>
 
         <form id="payForm" class="stack-form">
           <h2>Pay</h2>
@@ -226,7 +295,7 @@
               <input id="payDummy" autocomplete="off" inputmode="numeric" placeholder="0">
             </label>
           </div>
-          <button type="submit" class="primary">Attach payment</button>
+          <button id="payRun" type="submit" class="primary" data-action="pay">Attach payment</button>
         </form>
 
         <form id="confirmForm" class="stack-form">
@@ -251,7 +320,7 @@
             Secret (hex, optional — encrypts)
             <input id="confirmSecretHex" autocomplete="off" spellcheck="false" placeholder="shared secret hex">
           </label>
-          <button type="submit" class="primary">Attach confirmation</button>
+          <button id="confirmRun" type="submit" class="primary" data-action="confirm">Attach confirmation</button>
         </form>
 
         <form id="paymentsForm" class="stack-form">
@@ -260,24 +329,44 @@
             Secret (hex, optional — decrypts encrypted records)
             <input id="paymentsSecretHex" autocomplete="off" spellcheck="false" placeholder="shared secret hex">
           </label>
-          <button type="submit">List payments and confirmations</button>
+          <button id="paymentsRun" type="submit" data-action="payments">List payments and confirmations</button>
         </form>
+      </section>
+
+      <section id="editorPanel" class="control-section session-panel session-panel-wide" aria-label="Fragment field editor" hidden>
+        <div class="session-output-heading">
+          <h2 id="editorTitle">Field editor</h2>
+          <button id="editorClose" type="button" aria-label="Close editor">×</button>
+        </div>
+        <p class="item-meta">Every field parses liberally (hex, base64, addresses — whatever the context admits). Unknown/proprietary keymap entries are not shown yet: the inspect route does not expose raw key/value pairs.</p>
+        <div id="editorSections" class="session-editor-sections"></div>
+        <div id="editorViolations" class="session-editor-violations"></div>
+        <div class="session-load-actions">
+          <button id="editorValidate" type="button" class="primary">Validate</button>
+          <!-- TODO(applyPsbtEdits): the save path needs a backend field-edit
+               route (Backend seam method `applyPsbtEdits`: psbt + edited
+               fields -> re-encoded psbt). Saving mints a NEW fragment. -->
+          <button id="editorSave" type="button" disabled title="needs backend: applyPsbtEdits (field-edit route)">Save as new fragment (needs backend)</button>
+        </div>
       </section>
 
       <section id="outputPanel" class="control-section session-panel session-panel-wide" aria-label="Exported output" hidden>
         <div class="session-output-heading">
           <h2 id="outputTitle">Output</h2>
-          <button id="outputClose" type="button" aria-label="Close output panel">×</button>
+          <div>
+            <button id="outputCopy" type="button">Copy</button>
+            <button id="outputClose" type="button" aria-label="Close output panel">×</button>
+          </div>
         </div>
         <textarea id="outputBody" rows="6" readonly spellcheck="false"></textarea>
       </section>
 
-      <section class="control-section session-panel session-panel-wide" aria-label="Event log">
+      <section class="control-section session-panel session-panel-wide" aria-label="Event log" data-focus-hide="">
         <h2>Event log</h2>
         <ol id="sessionLog" class="event-log"></ol>
       </section>
     </main>
 
-    <script type="module" src="dist/session/app.js?v=20260708-session-v1"></script>
+    <script type="module" src="dist/session/app.js?v=20260708-session-v2"></script>
   </body>
 </html>
