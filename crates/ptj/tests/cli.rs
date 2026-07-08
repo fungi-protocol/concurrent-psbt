@@ -684,6 +684,48 @@ fn inspect_reports_transaction_details_and_totals() {
 }
 
 #[test]
+fn inspect_reports_declared_fee_totals() {
+    use concurrent_psbt::fee::{FeeContribution, GlobalFeeExt as _};
+    use concurrent_psbt::payments::negotiation::FORMAT_ENCRYPTED;
+
+    let temp = tempfile::tempdir().unwrap();
+    let mut psbt = create_psbt(TXID, 7, 1, 123_456);
+
+    // No contributions: zero total, zero unreadable.
+    let clean = write_psbt(temp.path(), "clean.psbt", psbt.clone());
+    let inspected = inspect_json(&clean);
+    assert_eq!(inspected["totals"]["declared_fee_sats"], 0);
+    assert_eq!(inspected["totals"]["declared_fee_undecoded_count"], 0);
+
+    // Plaintext contributions sum; an encrypted-format blob is stored in the
+    // band but cannot be counted without the group secret — it must show up
+    // in the undecoded count instead of silently vanishing.
+    psbt.global
+        .add_fee_contribution([1u8; 16], FeeContribution { amount_sats: 700 }.encode());
+    psbt.global
+        .add_fee_contribution([2u8; 16], FeeContribution { amount_sats: 42 }.encode());
+    let mut opaque = FeeContribution { amount_sats: 9_999 }.encode();
+    opaque[0] = FORMAT_ENCRYPTED;
+    psbt.global.add_fee_contribution([3u8; 16], opaque);
+
+    let declared = write_psbt(temp.path(), "declared.psbt", psbt);
+    let inspected = inspect_json(&declared);
+    assert_eq!(inspected["totals"]["declared_fee_sats"], 742);
+    assert_eq!(inspected["totals"]["declared_fee_undecoded_count"], 1);
+    // The band entries also remain visible as raw proprietary keymap rows.
+    assert_eq!(
+        inspected["raw"]["global"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["proprietary"]["subtype"]
+                == concurrent_psbt::fee::PSBT_GLOBAL_EXPLICIT_FEE_CONTRIBUTION_SUBTYPE)
+            .count(),
+        3
+    );
+}
+
+#[test]
 fn join_is_idempotent_on_real_psbt_files() {
     let temp = tempfile::tempdir().unwrap();
     let a = write_psbt(temp.path(), "a.psbt", create_psbt(TXID, 0, 1, 50_000));
