@@ -148,18 +148,29 @@ export function selectedFragments(state: SessionState): SessionFragment[] {
 // on the seam) into what the fragment list and negotiation panel display.
 // ---------------------------------------------------------------------------
 
-function asObject(value: unknown): Record<string, unknown> | null {
+// Exported: the sibling presenter modules (display/editor/wiring) project the
+// same open inspect JSON and must share ONE set of defensive readers instead
+// of each reinventing subtly different ones.
+export function asObject(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
 }
 
-function asString(value: unknown): string | null {
+export function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
-function asNumber(value: unknown): number | null {
+export function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+export function asBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+export function asArray(value: unknown): unknown[] | null {
+  return Array.isArray(value) ? value : null;
 }
 
 export interface FragmentSummary {
@@ -175,12 +186,22 @@ export interface FragmentSummary {
   knownInputSats: number | null;
   outputSats: number | null;
   feeSats: number | null;
+  // BIP 370 tx-modifiable flags as booleans (inspect `modifiability`): the
+  // contextual-enablement gates (atomize/edit) key off these.
+  modifiableInputs: boolean | null;
+  modifiableOutputs: boolean | null;
+  // How many outputs carry a PSBT_OUT_UNIQUE_ID (inspect `outputs[].
+  // unique_id_hex`); null when the outputs array is absent. Drives the
+  // unique-id presence indicator and the assign-ids affordance.
+  outputUidPresent: number | null;
 }
 
 export function fragmentSummary(inspect: InspectResponse | null): FragmentSummary {
   const root = asObject(inspect);
   const sort = asObject(root?.sort);
   const totals = asObject(root?.totals);
+  const modifiability = asObject(root?.modifiability);
+  const outputs = asArray(root?.outputs);
   return {
     format: asString(root?.format),
     ordering: asString(root?.ordering),
@@ -192,6 +213,12 @@ export function fragmentSummary(inspect: InspectResponse | null): FragmentSummar
     knownInputSats: asNumber(totals?.known_input_sats),
     outputSats: asNumber(totals?.output_sats),
     feeSats: asNumber(totals?.fee_sats_if_inputs_known),
+    modifiableInputs: asBoolean(modifiability?.inputs),
+    modifiableOutputs: asBoolean(modifiability?.outputs),
+    outputUidPresent:
+      outputs === null
+        ? null
+        : outputs.filter((output) => asString(asObject(output)?.unique_id_hex) !== null).length,
   };
 }
 
