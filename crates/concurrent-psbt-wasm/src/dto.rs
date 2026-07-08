@@ -23,6 +23,10 @@ pub struct CreateRequest {
     pub ordering: Option<String>,
     #[serde(default)]
     pub seed_hex: Option<String>,
+    /// Explicit override for ordering seeds below the spec minimum of 128
+    /// bits, mirroring the webgui route's `allow_short_seed` field.
+    #[serde(default)]
+    pub allow_short_seed: bool,
     #[serde(default)]
     pub inputs: Vec<CreateInput>,
     #[serde(default)]
@@ -41,8 +45,8 @@ pub struct CreateOutput {
     pub amount_btc: String,
 }
 
-// NOTE: sort takes positional args (psbt, seed_hex?) matching the canonical
-// Backend arity — no SortRequest DTO.
+// NOTE: sort takes positional args (psbt, seed_hex?, allow_short_seed?)
+// matching the canonical Backend arity — no SortRequest DTO.
 
 /// Negotiation `pay` body. `payment_hex` is the opaque record bytes (hex); the
 /// frontend encodes the address/amount/label record the same way `ptj pay`
