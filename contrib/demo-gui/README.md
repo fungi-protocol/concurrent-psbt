@@ -25,8 +25,9 @@ rules, single-session focus), `ingest.ts` (universal paste classification),
 and `editor.ts` (field-by-field editor with save-time violations + offered
 fixes) — all unit-tested by `test/session*.test.mjs`. The thin DOM shell in
 `src/session/app.ts` drives ONE `HttpBackend` instance. LifeHash
-fingerprints render as images from the (queued) `GET /api/lifehash/<hex>`
-route, with marked placeholders until it lands. Surfaces:
+fingerprints render as lazy-loaded images from the `GET /api/lifehash/<hex>`
+route (PNG, cacheable), with marked placeholder chips wherever a shell
+cannot serve it. Surfaces:
 
 - **Session**: paste ANYTHING — PSBT (base64 or hex), `bitcoin:` URI,
   output descriptor, npub, iroh ticket, signed tx hex — and the right object
