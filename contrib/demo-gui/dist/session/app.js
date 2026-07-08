@@ -20,7 +20,7 @@ import { addressChipDigestHex, groupChipDigestHex } from "./display.js";
 import { HttpBackend } from "../shared-frontend/backends/http.js";
 import { PtjBackendError } from "../shared-frontend/core/types.js";
 import { amountParts, seedFromRandomBytes } from "../model.js";
-import { addFragment, buildConfirmArgs, buildCreateRequest, buildPayArgs, buildSyncRequest, bytesToBase64, emptySession, fragmentSummary, negotiationView, pastedPsbt, removeFragment, selectedFragments, setSelected, } from "./state.js";
+import { addFragment, asArray, asObject, asString, buildConfirmArgs, buildCreateRequest, buildPayArgs, buildSyncRequest, bytesToBase64, emptySession, fragmentSummary, negotiationView, pastedPsbt, removeFragment, selectedFragments, setSelected, } from "./state.js";
 import { elisionLabel, fragmentCardModel, } from "./display.js";
 import { classifyPaste, mintFromPaste } from "./ingest.js";
 import { actionState, addFragmentToSession, addPeerToSession, beginWire, completeWire, dropFragmentKey, emptyObjects, idleWire, mintSession, overviewFocus, peerByKey, sessionByKey, sessionFocus, validateFocus, wireVerdict, } from "./wiring.js";
@@ -32,6 +32,8 @@ let objects = emptyObjects();
 let focus = overviewFocus();
 let wire = idleWire();
 let editor = null;
+// The fragment the assign-ids panel is parameterizing (null = panel closed).
+let assignIdsTarget = null;
 // Armed correctness-gate overrides. Cleared whenever the selection changes:
 // an override is an explicit, per-situation decision, never a sticky default.
 const overrides = new Set();
@@ -934,6 +936,80 @@ async function atomizeSelected() {
         reportError("atomize", error);
     }
 }
+// --- assign ids -------------------------------------------------------------
+//
+// Backend.assignIds carries the /api/assign-ids contract: manual per-output
+// directives ({target: "out", index, id}) combine with auto-fill of the
+// remainder. The id text goes to the backend VERBATIM — it is parsed
+// liberally server-side (hex/base58/bech32 by character set), the UI adds no
+// parsing of its own. Overwriting an existing id is the explicit
+// per-invocation choice (strict by default, overridable — the backend
+// re-validates either way). Input-map ids (PSBT_IN_UNIQUE_ID) have no
+// inspect surface yet, so the panel lists outputs only.
+function openAssignIds() {
+    const selected = requireEnabled("assign-ids");
+    if (!selected)
+        return;
+    const fragment = selected[0];
+    assignIdsTarget = fragment.key;
+    renderAssignIds(fragment);
+    el("assignIdsPanel").hidden = false;
+}
+function renderAssignIds(fragment) {
+    el("assignIdsTitle").textContent = `Assign unique ids — ${fragment.key}`;
+    const host = el("assignIdsRows");
+    host.textContent = "";
+    const outputs = asArray(asObject(fragment.inspect)?.outputs) ?? [];
+    outputs.forEach((raw, index) => {
+        const current = asString(asObject(raw)?.unique_id_hex);
+        const row = document.createElement("label");
+        row.className = "field-label session-editor-field";
+        row.append(span("", `output ${index}${current ? "" : " — id missing"}`));
+        const input = document.createElement("input");
+        input.dataset.index = String(index);
+        input.autocomplete = "off";
+        input.spellcheck = false;
+        input.placeholder = current
+            ? `${current.slice(0, 16)}… (blank keeps the current id)`
+            : "blank auto-assigns (or type an id: hex/base58/bech32)";
+        row.append(input);
+        host.append(row);
+    });
+    el("assignIdsAuto").checked = true;
+    el("assignIdsOverwrite").checked = false;
+}
+async function runAssignIds() {
+    const fragment = assignIdsTarget ? fragmentByKey(assignIdsTarget) : null;
+    if (!fragment) {
+        assignIdsTarget = null;
+        el("assignIdsPanel").hidden = true;
+        return;
+    }
+    const ids = Array.from(el("assignIdsRows").querySelectorAll("input[data-index]"))
+        .filter((input) => input.value.trim())
+        .map((input) => ({
+        target: "out",
+        index: Number(input.dataset.index),
+        id: input.value.trim(),
+    }));
+    const auto = el("assignIdsAuto").checked;
+    const overwrite = el("assignIdsOverwrite").checked;
+    try {
+        const added = await addResponse(await backend.assignIds(fragment.psbt, {
+            ids: ids.length ? ids : undefined,
+            auto,
+            overwrite,
+        }), "assign-ids", `assign-ids of ${fragment.key}`);
+        logEvent(`assign-ids minted ${added.key} from ${fragment.key}` +
+            ` (${ids.length} manual id(s), auto=${auto}, overwrite=${overwrite})`);
+        assignIdsTarget = null;
+        el("assignIdsPanel").hidden = true;
+        showStatus("", false);
+    }
+    catch (error) {
+        reportError("assign ids", error);
+    }
+}
 function exportSelectedV2() {
     const selected = requireEnabled("export-v2");
     if (!selected)
@@ -1252,14 +1328,10 @@ function wireDom() {
     el("opAtomize").addEventListener("click", () => void atomizeSelected());
     el("opExportV2").addEventListener("click", exportSelectedV2);
     el("opExportBip174").addEventListener("click", () => void exportSelectedBip174());
-    // TODO(assign-ids): when the Backend seam method `assignIds(psbt)` lands,
-    // remove the pending-seam branch in wiring.js actionState("assign-ids")
-    // and call it here (result added as a new fragment). Manual per-output id
-    // entry already works through the field editor (Edit → unique id fields →
-    // the assign-uids fix or hand-typed ids), pending applyPsbtEdits.
-    el("opAssignIds").addEventListener("click", () => {
-        const state = actionState("assign-ids", enablementContext());
-        showStatus(`assign ids: ${state.reason ?? "unavailable"} (needs backend: ${state.needsBackend ?? "assignIds"})`, true);
+    el("opAssignIds").addEventListener("click", openAssignIds);
+    el("assignIdsRun").addEventListener("click", () => void runAssignIds());
+    el("assignIdsClose").addEventListener("click", () => {
+        el("assignIdsPanel").hidden = true;
     });
     el("displayNetwork").addEventListener("change", render);
     el("wireCancel").addEventListener("click", cancelWire);
