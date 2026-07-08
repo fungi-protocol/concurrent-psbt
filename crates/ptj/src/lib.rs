@@ -6,6 +6,7 @@ pub mod tui;
 #[cfg(feature = "webgui")]
 pub mod webgui;
 
+mod bytes_arg;
 mod commands;
 mod error;
 mod io;

@@ -438,7 +438,8 @@ pub struct PaymentsConfig {
     pub file: PathBuf,
 }
 
-/// A fixed 32-byte value parsed from hex.
+/// A fixed 32-byte value parsed liberally (hex, base58, or bech32 detected
+/// from the character set; see [`crate::bytes_arg`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hex32([u8; 32]);
 
@@ -452,13 +453,17 @@ impl FromStr for Hex32 {
     type Err = String;
 
     fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        let bytes = decode_hex(value)?;
+        let bytes = crate::bytes_arg::parse_bytes_arg(value)?;
+        let len = bytes.len();
         <[u8; 32]>::try_from(bytes.as_slice())
             .map(Self)
-            .map_err(|_| format!("expected 32 bytes (64 hex chars), got {}", value.len() / 2))
+            .map_err(|_| format!("expected 32 bytes (64 hex chars), got {len}"))
     }
 }
 
+/// A byte-string argument parsed liberally (hex, base58, or bech32 detected
+/// from the character set; see [`crate::bytes_arg`]). The name is historical:
+/// hex remains the canonical form, and any string of hex digits parses as hex.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HexSeed(Vec<u8>);
 
@@ -476,7 +481,7 @@ impl FromStr for HexSeed {
     type Err = String;
 
     fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        decode_hex(value).map(Self)
+        crate::bytes_arg::parse_bytes_arg(value).map(Self)
     }
 }
 
@@ -538,26 +543,3 @@ impl FromStr for OutputArg {
     }
 }
 
-fn decode_hex(value: &str) -> std::result::Result<Vec<u8>, String> {
-    if !value.len().is_multiple_of(2) {
-        return Err(format!("hex string has odd length: {value}"));
-    }
-    value
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| {
-            let high = hex_nibble(pair[0]).ok_or_else(|| format!("invalid hex: {value}"))?;
-            let low = hex_nibble(pair[1]).ok_or_else(|| format!("invalid hex: {value}"))?;
-            Ok((high << 4) | low)
-        })
-        .collect()
-}
-
-fn hex_nibble(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
