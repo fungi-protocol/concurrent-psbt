@@ -551,3 +551,81 @@ export function fragmentCardModel(
 export function elisionLabel(shown: number, total: number): string | null {
   return total > shown ? `+${total - shown} more` : null;
 }
+
+// ---------------------------------------------------------------------------
+// Status badges — emoji + text pills (the demo's status emoji set,
+// src/app.ts psbtStatusBadges, merged into the session's pills).
+// ---------------------------------------------------------------------------
+//
+// A pill with an emoji collapses to emoji-only when the card gets too
+// narrow (the title carries the words); a pill whose TEXT is the content
+// (the format name, the ids count) has no emoji and never collapses. The
+// demo's ✍ sign / ✓ finalize badges are role-typestate derivations the
+// session does not model yet — they follow with the role surface.
+
+export interface BadgeView {
+  emoji: string | null;
+  text: string;
+  tone: "neutral" | "good" | "warn";
+  title: string;
+}
+
+export function fragmentBadges(
+  card: Pick<FragmentCardModel, "summary" | "uidPresent" | "uidTotal">,
+): BadgeView[] {
+  const { summary, uidPresent, uidTotal } = card;
+  const badges: BadgeView[] = [];
+  badges.push({
+    emoji: null,
+    text: summary.format ?? "not decoded",
+    tone: "neutral",
+    title: "PSBT serialization format",
+  });
+  badges.push(
+    summary.ordering === "unordered"
+      ? {
+          emoji: "🔀",
+          text: "unordered",
+          tone: "good",
+          title: "unordered PSBT fragment: joinable before sorting",
+        }
+      : {
+          emoji: null,
+          text: summary.ordering ?? "ordering unknown",
+          tone: "neutral",
+          title: "ordering discipline",
+        },
+  );
+  if (summary.seedHex) {
+    badges.push({
+      emoji: "🌱",
+      text: "seeded",
+      tone: "neutral",
+      title: "global deterministic sort seed set",
+    });
+  }
+  if (summary.modifiableInputs === true || summary.modifiableOutputs === true) {
+    const which =
+      summary.modifiableInputs === true && summary.modifiableOutputs === true
+        ? "both"
+        : summary.modifiableInputs === true
+          ? "inputs"
+          : "outputs";
+    badges.push({
+      emoji: "✏️",
+      text: `modifiable ${which}`,
+      tone: "neutral",
+      title: `BIP 370 modifiable ${which}`,
+    });
+  }
+  if (uidTotal !== null) {
+    const complete = uidPresent !== null && uidPresent >= uidTotal;
+    badges.push({
+      emoji: null,
+      text: `ids ${uidPresent ?? "?"}/${uidTotal}`,
+      tone: complete ? "good" : "warn",
+      title: "outputs carrying PSBT_OUT_UNIQUE_ID",
+    });
+  }
+  return badges;
+}

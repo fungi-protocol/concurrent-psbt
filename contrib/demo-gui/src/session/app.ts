@@ -54,6 +54,7 @@ import {
   amountBits,
   amountSpanParts,
   elisionLabel,
+  fragmentBadges,
   fragmentCardModel,
   signedAmountSpanParts,
   type AmountSpanPart,
@@ -611,21 +612,8 @@ function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
     head.append(lifehashBadge(card.summary.uniqueIdHex, `unordered unique id of ${fragment.key}`));
   }
   head.append(span("item-title", fragment.key));
-  head.append(badge(card.summary.format ?? "not decoded", "session-badge"));
-  head.append(
-    badge(
-      card.summary.ordering ?? "ordering unknown",
-      card.summary.ordering === "unordered" ? "session-badge session-badge-good" : "session-badge",
-    ),
-  );
-  if (card.uidTotal !== null) {
-    const complete = card.uidPresent !== null && card.uidPresent >= card.uidTotal;
-    head.append(
-      badge(
-        `ids ${card.uidPresent ?? "?"}/${card.uidTotal}`,
-        complete ? "session-badge session-badge-good" : "session-badge session-badge-warn",
-      ),
-    );
+  for (const view of fragmentBadges(card)) {
+    head.append(badge(view.text, badgeToneClass(view.tone), view.emoji, view.title));
   }
   head.append(span("item-meta", fragment.origin));
   item.append(head);
@@ -725,8 +713,25 @@ function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
   return item;
 }
 
-function badge(text: string, className: string): HTMLElement {
-  return span(className, text);
+// Emoji + text pill (display.ts fragmentBadges): with an emoji the pill
+// collapses to emoji-only in narrow cards (container query; the title
+// carries the words); without one the text always shows.
+function badge(text: string, className: string, emoji: string | null = null, title = ""): HTMLElement {
+  const node = span(className, "");
+  if (title) node.title = title;
+  if (emoji) {
+    node.classList.add("session-badge-emoji");
+    node.append(span("session-badge-icon", emoji), span("session-badge-label", text));
+  } else {
+    node.textContent = text;
+  }
+  return node;
+}
+
+function badgeToneClass(tone: "neutral" | "good" | "warn"): string {
+  if (tone === "good") return "session-badge session-badge-good";
+  if (tone === "warn") return "session-badge session-badge-warn";
+  return "session-badge";
 }
 
 // --- balance report footer (display.ts balanceSheet) --------------------------

@@ -11,6 +11,7 @@ import {
   elisionLabel,
   feeLine,
   formatFeeRate,
+  fragmentBadges,
   fragmentCardModel,
   inputViews,
   outputViews,
@@ -217,6 +218,53 @@ test("fragmentCardModel assembles summary, groups, uid indicator, fee", () => {
   assert.deepEqual(empty.groups, []);
   assert.equal(empty.uidPresent, null);
   assert.equal(empty.uidTotal, null);
+});
+
+// --- status badges (Q10: emoji + text pills) --------------------------------
+
+test("fragmentBadges: the demo emoji ride the matching pills", () => {
+  const card = fragmentCardModel(INSPECT, "regtest");
+  const badges = fragmentBadges(card);
+  assert.deepEqual(
+    badges.map((badgeView) => `${badgeView.emoji ?? "-"} ${badgeView.text}`),
+    ["- bip370", "🔀 unordered", "✏️ modifiable both", "- ids 2/3"],
+  );
+  // Pills whose text IS the content carry no emoji (they never collapse).
+  assert.equal(badges[0].emoji, null);
+  assert.equal(badges[3].emoji, null);
+  assert.equal(badges[3].tone, "warn"); // one output id missing
+  assert.equal(badges[1].tone, "good");
+  for (const badgeView of badges) assert.ok(badgeView.title.length > 0);
+});
+
+test("fragmentBadges: seed, partial modifiability, complete ids", () => {
+  const inspect = {
+    ...INSPECT,
+    sort: { mode: "det", seed_hex: "aa".repeat(16) },
+    modifiability: { flags: 1, inputs: true, outputs: false },
+    outputs: INSPECT.outputs.map((output) => ({ ...output, unique_id_hex: "33".repeat(32) })),
+  };
+  const badges = fragmentBadges(fragmentCardModel(inspect, "regtest"));
+  const seeded = badges.find((badgeView) => badgeView.emoji === "🌱");
+  assert.ok(seeded, "seeded pill present");
+  assert.equal(seeded.text, "seeded");
+  assert.match(seeded.title, /sort seed/);
+  const modifiable = badges.find((badgeView) => badgeView.emoji === "✏️");
+  assert.equal(modifiable.text, "modifiable inputs");
+  const ids = badges.find((badgeView) => badgeView.text.startsWith("ids"));
+  assert.equal(ids.tone, "good");
+});
+
+test("fragmentBadges: undecoded fragments degrade honestly", () => {
+  const badges = fragmentBadges(fragmentCardModel(null, "regtest"));
+  assert.deepEqual(
+    badges.map((badgeView) => badgeView.text),
+    ["not decoded", "ordering unknown"],
+  );
+  assert.deepEqual(
+    badges.map((badgeView) => badgeView.emoji),
+    [null, null],
+  );
 });
 
 test("elisionLabel counts what the card hides", () => {
