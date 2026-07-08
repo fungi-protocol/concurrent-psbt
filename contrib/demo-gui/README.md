@@ -51,8 +51,13 @@ route, with marked placeholders until it lands. Surfaces:
   per-output; every field parses liberally). Save validates and DISPLAYS
   violations; fixable ones offer a fix with an informed warning (e.g.
   generating missing output unique ids may duplicate txouts if repeated).
-  The save-to-new-fragment path awaits the `applyPsbtEdits` backend seam;
-  raw keymap display awaits an inspect extension.
+  Saving drives the `applyPsbtEdits` Backend seam (`/api/edit`): changed
+  raw-keymap rows (unknown/proprietary entries from inspect's raw
+  projection) travel as edits, server violations feed the same
+  violation→fix→revalidate loop (fixes run server-side via `apply_fixes`,
+  overrides arm their named params), and success mints a new fragment.
+  Decoded convenience fields still validate locally only — their raw
+  re-encoding stays backend territory.
 - **Create**: outpoint input rows plus address+amount output rows — address
   and amount validity is the create route's real network validation — with
   ordering mode and seed.

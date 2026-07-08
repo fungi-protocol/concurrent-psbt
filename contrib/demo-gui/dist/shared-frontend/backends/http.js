@@ -19,6 +19,12 @@ function isErrorPayload(payload) {
         && "error" in payload
         && typeof payload.error === "string";
 }
+function isViolationPayload(payload) {
+    return typeof payload === "object"
+        && payload !== null
+        && "violations" in payload
+        && Array.isArray(payload.violations);
+}
 export class HttpBackend {
     fetchImpl;
     // Base path lets the PWA/tauri point at a same-origin dev server if desired;
@@ -86,6 +92,35 @@ export class HttpBackend {
             auto: options?.auto,
             overwrite: options?.overwrite,
         });
+    }
+    async applyPsbtEdits(psbt, edits, options) {
+        const body = {
+            psbt,
+            edits: edits.map((edit) => ({ map: edit.map, key: edit.key, value: edit.value })),
+        };
+        if (options?.applyFixes?.length) {
+            body.apply_fixes = options.applyFixes;
+        }
+        // Overrides are TOP-LEVEL named boolean params (the route's
+        // allow_short_seed convention): each violation names its own.
+        for (const param of options?.overrides ?? []) {
+            body[param] = true;
+        }
+        const response = await this.fetchImpl(`${this.base}/api/edit`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+            // A 400 carrying violations[] is the seam's structured validation
+            // outcome (violation -> fix -> revalidate), not a transport error.
+            if (isViolationPayload(payload)) {
+                return payload;
+            }
+            throw new PtjBackendError(response.status, errorMessage(response.status, payload));
+        }
+        return payload;
     }
     // Negotiation band: served by the webgui's /api/{pay,confirm,payments}
     // routes (crates/ptj/src/webgui.rs pay_response/confirm_response/

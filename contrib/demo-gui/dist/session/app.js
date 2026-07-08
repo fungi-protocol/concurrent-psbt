@@ -24,7 +24,7 @@ import { addFragment, asArray, asObject, asString, buildConfirmArgs, buildCreate
 import { elisionLabel, fragmentCardModel, } from "./display.js";
 import { classifyPaste, mintFromPaste } from "./ingest.js";
 import { actionState, addFragmentToSession, addPeerToSession, beginWire, completeWire, dropFragmentKey, emptyObjects, idleWire, mintSession, overviewFocus, peerByKey, sessionByKey, sessionFocus, validateFocus, wireVerdict, } from "./wiring.js";
-import { applyEdit, applyFix, editorModel, validateEditor, } from "./editor.js";
+import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, validateEditor, violationsFromServer, } from "./editor.js";
 const backend = new HttpBackend();
 // --- shell state ------------------------------------------------------------
 let session = emptySession();
@@ -32,6 +32,12 @@ let objects = emptyObjects();
 let focus = overviewFocus();
 let wire = idleWire();
 let editor = null;
+// Server-side fixes queued for the next editor save (violation fix_ids the
+// user accepted) and gate overrides armed for it (violation override_params).
+// Cleared whenever the editor opens on a fragment or closes: both are
+// explicit per-save decisions, never sticky defaults.
+const pendingEditorFixes = new Set();
+const editorOverrides = new Set();
 // The fragment the assign-ids panel is parameterizing (null = panel closed).
 let assignIdsTarget = null;
 // Armed correctness-gate overrides. Cleared whenever the selection changes:
@@ -482,8 +488,10 @@ function renderFragmentCard(fragment) {
             expanded.add(fragment.key);
         }
         render();
-    }), button("Edit", "Field-by-field editor (liberal parsing; save needs backend)", () => {
+    }), button("Edit", "Field-by-field editor (liberal parsing; saving mints a new fragment)", () => {
         editor = editorModel(fragment.key, fragment.inspect, displayNetwork());
+        pendingEditorFixes.clear();
+        editorOverrides.clear();
         renderEditor([]);
         el("editorPanel").hidden = false;
     }), button("Wire", "Connect this fragment to another object (join, session, payment)", () => startWire("fragment", fragment.key)), button("Remove", "Drop the fragment from the set", () => {
@@ -758,22 +766,113 @@ function renderEditor(violations) {
         row.append(span("session-status-error", violation.path ? `${violation.path}: ${violation.message}` : violation.message));
         const fix = violation.fix;
         if (fix) {
-            row.append(button(fix.label, fix.warning, () => {
-                if (!editor)
-                    return;
-                editor = applyFix(editor, fix.id, (length) => {
-                    const bytes = new Uint8Array(length);
-                    crypto.getRandomValues(bytes);
-                    return bytes;
-                });
-                logEvent(`editor fix applied (${fix.id}) — ${fix.warning}`);
-                renderEditor(validateEditor(editor));
-            }), span("session-gate-warning", ` ${fix.warning}`));
+            if (violation.source === "server") {
+                // Server fix offers run SERVER-side: queue the fix_id and re-save
+                // (apply_fixes on the request); the response echoes the applied
+                // fix's warning verbatim in applied_fixes[].warning_text.
+                row.append(button(fix.label, fix.warning, () => {
+                    pendingEditorFixes.add(fix.id);
+                    logEvent(`editor: server fix ${fix.id} requested for the next save — ${fix.warning}`);
+                    void saveEditor();
+                }), span("session-gate-warning", ` ${fix.warning}`));
+            }
+            else {
+                row.append(button(fix.label, fix.warning, () => {
+                    if (!editor)
+                        return;
+                    editor = applyFix(editor, fix.id, (length) => {
+                        const bytes = new Uint8Array(length);
+                        crypto.getRandomValues(bytes);
+                        return bytes;
+                    });
+                    logEvent(`editor fix applied (${fix.id}) — ${fix.warning}`);
+                    renderEditor(validateEditor(editor));
+                }), span("session-gate-warning", ` ${fix.warning}`));
+            }
+        }
+        if (violation.source === "server" && violation.overrideParam) {
+            const param = violation.overrideParam;
+            row.append(button(`Override (${param})`, "Waive this gate explicitly on the next save; the backend re-validates everything else.", () => {
+                editorOverrides.add(param);
+                logEvent(`editor: override ${param} armed for the next save`);
+                void saveEditor();
+            }));
         }
         violationsHost.append(row);
     }
     if (!violations.length) {
         violationsHost.append(span("item-meta", "no violations recorded on the last validation"));
+    }
+}
+// Save the editor through the applyPsbtEdits seam (/api/edit): raw-keymap
+// rows that changed travel as edits[]; accepted server fixes ride as
+// apply_fixes; armed overrides ride as their named boolean params. Success
+// mints a NEW fragment; a validation failure feeds the server's violations
+// back into the editor's violation -> fix -> revalidate loop.
+async function saveEditor() {
+    const model = editor;
+    if (!model)
+        return;
+    const fragment = fragmentByKey(model.fragmentKey);
+    if (!fragment) {
+        showStatus(`editor save: ${model.fragmentKey} is no longer loaded`, true);
+        return;
+    }
+    // Liberal-parse errors block the save: sending a row the parser rejected
+    // would silently drop the user's text.
+    const localErrors = validateEditor(model).filter((violation) => violation.path !== null);
+    if (localErrors.length) {
+        renderEditor(localErrors);
+        showStatus("editor save: fix the flagged fields first", true);
+        return;
+    }
+    const pristine = editorModel(model.fragmentKey, fragment.inspect, model.network);
+    const edits = rawEditsForSave(pristine, model);
+    const leftBehind = decodedEditsLeftBehind(pristine, model);
+    if (leftBehind.length) {
+        // Decoded-field edits have no wire shape on /api/edit (raw keymap only);
+        // never drop them silently.
+        logEvent(`editor save: decoded-field edits do not travel over /api/edit (raw keymap rows only)` +
+            ` — not sent: ${leftBehind.join(", ")}`);
+    }
+    try {
+        const response = await backend.applyPsbtEdits(fragment.psbt, edits, {
+            applyFixes: Array.from(pendingEditorFixes),
+            overrides: Array.from(editorOverrides),
+        });
+        if (response.psbt === undefined) {
+            // Save-time validation failed: the server's violations run the same
+            // loop as local ones (fix offers queue apply_fixes, overrides arm
+            // their named params).
+            renderEditor(violationsFromServer(response.violations));
+            showStatus(response.error ?? "editor save: save-time validation failed", true);
+            return;
+        }
+        // The applied-fix caveats surface VERBATIM (applied_fixes[].warning_text).
+        let lastWarning = null;
+        for (const applied of response.applied_fixes ?? []) {
+            if (applied.warning_text) {
+                lastWarning = applied.warning_text;
+                logEvent(`editor fix ${applied.fix_id} applied server-side — ${applied.warning_text}`);
+            }
+            else {
+                logEvent(`editor fix ${applied.fix_id} applied server-side`);
+            }
+        }
+        for (const waived of response.overridden ?? []) {
+            logEvent(`editor save: gate overridden (${waived.override_param}) — ${waived.message}`);
+        }
+        const added = await addResponse({ psbt: response.psbt, inspect: response.inspect }, "edit", `edit of ${fragment.key}` +
+            (edits.length ? ` (${edits.length} raw edit(s))` : " (validation/fixes only)"));
+        logEvent(`editor save minted ${added.key} from ${fragment.key}`);
+        pendingEditorFixes.clear();
+        editorOverrides.clear();
+        editor = null;
+        el("editorPanel").hidden = true;
+        showStatus(lastWarning ?? "", lastWarning !== null);
+    }
+    catch (error) {
+        reportError("editor save", error);
     }
 }
 // --- session screen: load + set operations -----------------------------------
@@ -1374,6 +1473,8 @@ function wireDom() {
     el("paymentsForm").addEventListener("submit", (event) => void listPayments(event));
     el("editorClose").addEventListener("click", () => {
         editor = null;
+        pendingEditorFixes.clear();
+        editorOverrides.clear();
         el("editorPanel").hidden = true;
     });
     el("editorValidate").addEventListener("click", () => {
@@ -1381,8 +1482,7 @@ function wireDom() {
             return;
         renderEditor(validateEditor(editor));
     });
-    // #editorSave stays disabled: needs backend applyPsbtEdits (see the TODO
-    // in session.html); the title names the seam.
+    el("editorSave").addEventListener("click", () => void saveEditor());
     el("outputClose").addEventListener("click", () => {
         el("outputPanel").hidden = true;
     });

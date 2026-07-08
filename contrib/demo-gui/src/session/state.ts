@@ -50,6 +50,7 @@ export type FragmentOrigin =
   | "atomize"
   | "concatenate"
   | "assign-ids"
+  | "edit"
   | "pay"
   | "confirm"
   | "sync";
