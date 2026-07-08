@@ -137,9 +137,12 @@ pub struct CreateConfig {
     /// Output in addr:amount_btc format (repeatable)
     #[arg(long = "output")]
     pub outputs: Vec<OutputArg>,
-    /// Sort seed as hex
+    /// Sort seed as hex (or base58/bech32, detected from the character set)
     #[arg(long)]
     pub seed: Option<HexSeed>,
+    /// Accept an ordering seed below the spec minimum of 128 bits (16 bytes)
+    #[arg(long = "allow-short-seed")]
+    pub allow_short_seed: bool,
     /// Ordering mode for the unordered PSBT
     #[arg(long = "ordering", value_enum, default_value_t = OrderingArg::Unset)]
     pub ordering: OrderingArg,
@@ -188,9 +191,12 @@ pub struct MakeUnorderedConfig {
 
 #[derive(Args, Debug, Clone)]
 pub struct SortConfig {
-    /// Sort seed as hex (overrides embedded seed)
+    /// Sort seed as hex (or base58/bech32; overrides embedded seed)
     #[arg(long)]
     pub seed: Option<HexSeed>,
+    /// Accept an ordering seed below the spec minimum of 128 bits (16 bytes)
+    #[arg(long = "allow-short-seed")]
+    pub allow_short_seed: bool,
     /// PSBT file to sort
     pub file: PathBuf,
 }
