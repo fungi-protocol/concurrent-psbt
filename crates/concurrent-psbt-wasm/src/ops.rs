@@ -341,10 +341,117 @@ pub fn export_bip174(psbt: &str) -> Result<Value, String> {
     Ok(json!({ "format": "bip174", "psbt": exported }))
 }
 
-pub fn import_bip174(psbt: &str) -> Result<Value, String> {
+pub fn import_bip174(psbt: &str, modifiable: bool) -> Result<Value, String> {
     let psbt = parse_bip174("request psbt", psbt.as_bytes())?;
-    let imported = bip174_convert::import_bip174_psbt(psbt)?;
+    let imported = bip174_convert::import_bip174_psbt(psbt, modifiable)?;
     Ok(psbt_response(&imported))
+}
+
+// --- assign-ids ------------------------------------------------------------
+
+/// Port of ptj commands/assign_ids.rs (+ webgui parse_id_assignments) — the
+/// same semantics and error text as `/api/assign-ids`.
+pub fn assign_ids(req: dto::AssignIdsRequest) -> Result<Value, String> {
+    use concurrent_psbt::output::{OutputUniqueIdExt as _, UniqueId};
+    use concurrent_psbt::removal::InputUniqueIdExt;
+
+    let mut psbt = parse_psbt_str("request psbt", &req.psbt)?;
+    let ids = req
+        .ids
+        .iter()
+        .enumerate()
+        .map(|(position, item)| {
+            let target = match item.target.as_str() {
+                "in" | "input" => IdTarget::Input,
+                "out" | "output" => IdTarget::Output,
+                other => {
+                    return Err(format!(
+                        "request JSON ids[{position}].target must be `in` or `out`, got {other}"
+                    ));
+                }
+            };
+            let id = crate::bytes_arg::parse_bytes_arg(&item.id)?;
+            Ok((target, item.index, id))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let auto = req.auto || ids.is_empty();
+
+    for (target, index, id) in &ids {
+        match target {
+            IdTarget::Input => {
+                let count = psbt.inputs.len();
+                let input = psbt.inputs.get_mut(*index).ok_or_else(|| {
+                    format!(
+                        "--id in:{index}: input index out of range ({count} input{})",
+                        if count == 1 { "" } else { "s" },
+                    )
+                })?;
+                match InputUniqueIdExt::unique_id(input) {
+                    Some(existing) if existing == *id => {}
+                    Some(_) if !req.overwrite => {
+                        return Err(format!(
+                            "--id in:{index}: input already has a different PSBT_IN_UNIQUE_ID; \
+                             pass --overwrite to replace it"
+                        ));
+                    }
+                    _ => input.set_unique_id(id.clone()),
+                }
+            }
+            IdTarget::Output => {
+                let count = psbt.outputs.len();
+                let output = psbt.outputs.get_mut(*index).ok_or_else(|| {
+                    format!(
+                        "--id out:{index}: output index out of range ({count} output{})",
+                        if count == 1 { "" } else { "s" },
+                    )
+                })?;
+                match output.unique_id() {
+                    Some(existing) if existing.as_bytes() == id => {}
+                    Some(_) if !req.overwrite => {
+                        return Err(format!(
+                            "--id out:{index}: output already has a different PSBT_OUT_UNIQUE_ID; \
+                             pass --overwrite to replace it"
+                        ));
+                    }
+                    _ => output.set_unique_id(UniqueId::new(id.clone())),
+                }
+            }
+        }
+    }
+
+    if auto {
+        for output in &mut psbt.outputs {
+            if !output.has_unique_id() {
+                output.set_unique_id(UniqueId::generate());
+            }
+        }
+    }
+
+    // Manual output ids colliding with any other output defeat uniqueness.
+    for (target, index, id) in &ids {
+        if *target != IdTarget::Output {
+            continue;
+        }
+        for (other, output) in psbt.outputs.iter().enumerate() {
+            if other == *index {
+                continue;
+            }
+            if output.unique_id().map(UniqueId::into_bytes).as_deref() == Some(id.as_slice()) {
+                return Err(format!(
+                    "--id out:{index}: the id is already used by output {other}; \
+                     PSBT_OUT_UNIQUE_ID must be unique"
+                ));
+            }
+        }
+    }
+
+    Ok(psbt_response(&psbt))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdTarget {
+    Input,
+    Output,
 }
 
 // --- sync (local branch) ---------------------------------------------------
@@ -690,11 +797,115 @@ mod tests {
         let exported = export_bip174(&ordered).expect("export ok");
         assert_eq!(exported["format"], "bip174");
 
-        let imported = import_bip174(exported["psbt"].as_str().unwrap()).expect("import ok");
+        let imported =
+            import_bip174(exported["psbt"].as_str().unwrap(), false).expect("import ok");
         assert_eq!(imported["inspect"]["format"], "bip370");
         assert_eq!(imported["inspect"]["ordering"], "ordered");
         assert_eq!(imported["inspect"]["input_count"], 1);
         assert_eq!(imported["inspect"]["output_count"], 1);
+        // Strict default: BIP 174 has no TX_MODIFIABLE, so nothing is modifiable.
+        assert_eq!(imported["inspect"]["modifiability"]["inputs"], false);
+        assert_eq!(imported["inspect"]["modifiability"]["outputs"], false);
+
+        let modifiable =
+            import_bip174(exported["psbt"].as_str().unwrap(), true).expect("import ok");
+        assert_eq!(modifiable["inspect"]["modifiability"]["inputs"], true);
+        assert_eq!(modifiable["inspect"]["modifiability"]["outputs"], true);
+    }
+
+    #[test]
+    fn assign_ids_completes_the_import_round_trip_like_the_cli() {
+        use concurrent_psbt::output::OutputUniqueIdExt as _;
+
+        // Strip the unique ids so the export looks like a foreign BIP 174.
+        let ordered = ordered_with_output(1);
+        let mut bare = parse_psbt_str("fixture", &ordered).unwrap();
+        for output in &mut bare.outputs {
+            output.proprietaries.clear();
+        }
+        let exported = export_bip174(&encode_psbt(&bare)).expect("export ok");
+        let imported =
+            import_bip174(exported["psbt"].as_str().unwrap(), true).expect("import ok");
+        let imported_psbt = imported["psbt"].as_str().unwrap();
+
+        // Previously failed here: no PSBT_OUT_UNIQUE_ID.
+        let err = make_unordered(imported_psbt).unwrap_err();
+        assert!(err.contains("PSBT_OUT_UNIQUE_ID"), "{err}");
+
+        let assigned = assign_ids(dto::AssignIdsRequest {
+            psbt: imported_psbt.to_string(),
+            ids: vec![],
+            auto: false,
+            overwrite: false,
+        })
+        .expect("assign ids");
+        let assigned_psbt = assigned["psbt"].as_str().unwrap();
+        let parsed = parse_psbt_str("assigned", assigned_psbt).unwrap();
+        assert!(parsed.outputs.iter().all(|output| output.has_unique_id()));
+
+        let unordered = make_unordered(assigned_psbt).expect("make unordered");
+        assert_eq!(unordered["inspect"]["ordering"], "unordered");
+
+        // Idempotent second pass returns the identical PSBT.
+        let again = assign_ids(dto::AssignIdsRequest {
+            psbt: assigned_psbt.to_string(),
+            ids: vec![],
+            auto: false,
+            overwrite: false,
+        })
+        .expect("assign ids again");
+        assert_eq!(again["psbt"], assigned["psbt"]);
+    }
+
+    #[test]
+    fn assign_ids_manual_directives_match_the_route_contract() {
+        use concurrent_psbt::output::OutputUniqueIdExt as _;
+
+        let ordered = ordered_with_output(2);
+        let mut bare = parse_psbt_str("fixture", &ordered).unwrap();
+        for output in &mut bare.outputs {
+            output.proprietaries.clear();
+        }
+        let assigned = assign_ids(dto::AssignIdsRequest {
+            psbt: encode_psbt(&bare),
+            ids: vec![
+                dto::IdAssignment {
+                    target: "out".to_string(),
+                    index: 0,
+                    id: "0102030405060708090a0b0c0d0e0f10".to_string(),
+                },
+                dto::IdAssignment {
+                    target: "in".to_string(),
+                    index: 0,
+                    id: "aa11".to_string(),
+                },
+            ],
+            auto: false,
+            overwrite: false,
+        })
+        .expect("assign ids");
+        let parsed = parse_psbt_str("assigned", assigned["psbt"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            parsed.outputs[0].unique_id().unwrap().into_bytes(),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+        );
+        assert_eq!(
+            concurrent_psbt::removal::InputUniqueIdExt::unique_id(&parsed.inputs[0]),
+            Some(vec![0xaa, 0x11]),
+        );
+
+        let err = assign_ids(dto::AssignIdsRequest {
+            psbt: assigned["psbt"].as_str().unwrap().to_string(),
+            ids: vec![dto::IdAssignment {
+                target: "out".to_string(),
+                index: 0,
+                id: "ffff".to_string(),
+            }],
+            auto: false,
+            overwrite: false,
+        })
+        .unwrap_err();
+        assert!(err.contains("--overwrite"), "{err}");
     }
 
     #[test]
