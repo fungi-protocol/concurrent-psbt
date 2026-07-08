@@ -584,7 +584,10 @@ function gateFor(action: SessionAction, selected: FragmentSummary[]): GateInfo |
 }
 
 export function actionState(action: SessionAction, ctx: EnablementContext): ActionState {
-  const needsBackend = action === "assign-ids" ? "assignIds" : null;
+  // No selection-scoped action is waiting on a missing seam today
+  // (Backend.assignIds landed with the /api/assign-ids route); the field
+  // stays so future actions can name theirs.
+  const needsBackend: string | null = null;
   const arity = arityReason(action, ctx.selected.length);
   if (arity) {
     return { enabled: false, reason: arity, gate: null, overridden: false, needsBackend };
@@ -605,14 +608,6 @@ export function actionState(action: SessionAction, ctx: EnablementContext): Acti
         needsBackend,
       };
     }
-    // The seam itself is pending: visible, disabled, precisely labeled.
-    return {
-      enabled: false,
-      reason: "waiting on the assignIds backend seam",
-      gate: null,
-      overridden: false,
-      needsBackend,
-    };
   }
 
   const gate = gateFor(action, ctx.selected);

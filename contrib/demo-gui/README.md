@@ -44,8 +44,9 @@ route, with marked placeholders until it lands. Surfaces:
   export are enabled contextually (selection arity + inspect-derived
   correctness gates); gates are overridable EXPLICITLY with the warning kept
   visible — interop with pre-BIP-370 producers needs escape hatches.
-  Assign-unique-ids is stitched in but disabled pending the `assignIds`
-  backend seam.
+  Assign-unique-ids drives the `assignIds` Backend seam (`/api/assign-ids`)
+  through a panel taking optional manual per-output ids (parsed liberally
+  by the backend), auto-fill for the rest, and an explicit overwrite choice.
 - **Editor**: field-by-field fragment editor (global / per-input /
   per-output; every field parses liberally). Save validates and DISPLAYS
   violations; fixable ones offer a fix with an informed warning (e.g.
