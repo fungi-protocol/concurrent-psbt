@@ -589,7 +589,8 @@ function wire(): void {
   el<HTMLButtonElement>("createAddInput").addEventListener("click", () => addCreateRow("input"));
   el<HTMLButtonElement>("createAddOutput").addEventListener("click", () => addCreateRow("output"));
   el<HTMLButtonElement>("createGenerateSeed").addEventListener("click", () => {
-    const bytes = new Uint8Array(8);
+    // Spec: PSBT_GLOBAL_SORT_SEED must carry at least 128 bits of randomness.
+    const bytes = new Uint8Array(16);
     crypto.getRandomValues(bytes);
     el<HTMLInputElement>("createSeed").value = seedFromRandomBytes(bytes);
   });
