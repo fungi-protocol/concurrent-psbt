@@ -334,15 +334,12 @@
           <h2 id="editorTitle">Field editor</h2>
           <button id="editorClose" type="button" aria-label="Close editor">×</button>
         </div>
-        <p class="item-meta">Every field parses liberally (hex, base64, addresses — whatever the context admits). Unknown/proprietary keymap entries are not shown yet: the inspect route does not expose raw key/value pairs.</p>
+        <p class="item-meta">Every field parses liberally (hex, base64, addresses — whatever the context admits). Unknown/proprietary raw keymap entries are editable hex rows (empty deletes the entry); decoded convenience fields validate locally but do not travel on save yet. Save runs the backend's save-time validation — violations come back with fix offers and explicit overrides — and mints a NEW fragment.</p>
         <div id="editorSections" class="session-editor-sections"></div>
         <div id="editorViolations" class="session-editor-violations"></div>
         <div class="session-load-actions">
           <button id="editorValidate" type="button" class="primary">Validate</button>
-          <!-- TODO(applyPsbtEdits): the save path needs a backend field-edit
-               route (Backend seam method `applyPsbtEdits`: psbt + edited
-               fields -> re-encoded psbt). Saving mints a NEW fragment. -->
-          <button id="editorSave" type="button" disabled title="needs backend: applyPsbtEdits (field-edit route)">Save as new fragment (needs backend)</button>
+          <button id="editorSave" type="button" title="Save through applyPsbtEdits (/api/edit): raw-row edits + accepted fixes + armed overrides; mints a new fragment">Save as new fragment</button>
         </div>
       </section>
 

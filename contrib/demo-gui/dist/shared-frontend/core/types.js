@@ -9,8 +9,9 @@
 //
 // Provenance: request/response DTOs match the ptj webgui *_response_result JSON
 // contract in crates/ptj/src/webgui.rs (POST /api/{inspect,create,join,sort,
-// make-unordered,atomize,concatenate,export-bip174,import-bip174,sync}) and the
-// concurrent-psbt command set in crates/ptj/src/commands/*.rs.
+// make-unordered,atomize,concatenate,export-bip174,import-bip174,assign-ids,
+// edit,sync}) and the concurrent-psbt command set in
+// crates/ptj/src/commands/*.rs.
 // The ONE error type every backend throws. HttpBackend maps HTTP status +
 // {error} body onto it; WasmBackend maps a caught JS/wasm error (status 0);
 // TauriBackend maps a rejected invoke() (status 0). Frontend `instanceof`

@@ -9,8 +9,9 @@
 //
 // Provenance: request/response DTOs match the ptj webgui *_response_result JSON
 // contract in crates/ptj/src/webgui.rs (POST /api/{inspect,create,join,sort,
-// make-unordered,atomize,concatenate,export-bip174,import-bip174,sync}) and the
-// concurrent-psbt command set in crates/ptj/src/commands/*.rs.
+// make-unordered,atomize,concatenate,export-bip174,import-bip174,assign-ids,
+// edit,sync}) and the concurrent-psbt command set in
+// crates/ptj/src/commands/*.rs.
 
 export type OrderingMode = "unset" | "deterministic" | "explicit";
 
@@ -71,6 +72,61 @@ export interface AssignIdsOptions {
   auto?: boolean;
   // Replace an existing unique id that differs from the requested one.
   overwrite?: boolean;
+}
+
+// One raw-keymap field edit for applyPsbtEdits (/api/edit). Edits address
+// entries by the same handle `inspect` exposes (raw.*[].key_hex — the full
+// raw key, compact-size keytype prefix included) and are GROW-ONLY: a save
+// mints a NEW fragment, the submitted PSBT is never mutated.
+export interface FieldEdit {
+  // Map selector: `global`, `input:<i>`, or `output:<i>`.
+  map: string;
+  // Full raw key bytes (hex/base58/bech32, detected by character set).
+  key: string;
+  // Bytes to set, or null to DELETE the entry.
+  value: string | null;
+}
+
+// One save-time validation violation. Every gate is strict by default and
+// individually waived by asserting its named `override_param` on the next
+// save; a violation MAY offer a server-side fix (`fix_id`) whose caveat
+// (`warning_text`) the shell must keep visible.
+export interface EditViolation {
+  id: string;
+  message: string;
+  override_param: string;
+  fix_id?: string;
+  fix_label?: string;
+  warning_text?: string;
+}
+
+// Echo of a fix the server ran before validating (`apply_fixes` request
+// array), with its informed warning repeated verbatim.
+export interface AppliedFix {
+  fix_id: string;
+  warning_text?: string;
+}
+
+export interface ApplyEditsOptions {
+  // Server-side fixes to run before validation (violation fix_ids).
+  applyFixes?: string[];
+  // Violation override_params to assert true on this save.
+  overrides?: string[];
+}
+
+// The /api/edit response. Success (HTTP 200) carries the NEW fragment
+// (`psbt` + `inspect`) with `violations: []`; a save-time validation failure
+// (HTTP 400) carries `error` + the remaining `violations` and NO psbt — it
+// is a structured seam response (the violation -> fix -> revalidate loop),
+// not a transport error, so adapters return it instead of throwing.
+export interface ApplyEditsResponse {
+  psbt?: string;
+  inspect?: InspectResponse;
+  violations: EditViolation[];
+  // Violations acknowledged away by named overrides on this save.
+  overridden?: EditViolation[];
+  applied_fixes?: AppliedFix[];
+  error?: string;
 }
 
 export interface SyncRequest {
