@@ -154,7 +154,7 @@ mod tests {
     use super::*;
 
     fn fixture_psbt() -> Psbt {
-        let created = crate::commands::create::create_psbt(crate::cli::CreateConfig {
+        crate::commands::create::create_psbt(crate::cli::CreateConfig {
             inputs: vec![crate::cli::OutPointArg {
                 txid: "0000000000000000000000000000000000000000000000000000000000000001"
                     .parse()
@@ -167,8 +167,7 @@ mod tests {
             ordering: crate::cli::OrderingArg::Unset,
             network: crate::cli::NetworkArg(bitcoin::Network::Regtest),
         })
-        .unwrap();
-        created
+        .unwrap()
     }
 
     #[test]
