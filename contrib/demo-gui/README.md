@@ -15,30 +15,53 @@ pages:
 
 ## Session UI (`/`)
 
-Strictly typed TypeScript (no `@ts-nocheck`): the pure presenter lives in
-`src/session/state.ts` (fragment-set bookkeeping, defensive `ptj inspect`
-projections, validated request builders — unit-tested by
-`test/session.test.mjs`) and the thin DOM shell in `src/session/app.ts`
-drives ONE `HttpBackend` instance. Screens:
+Strictly typed TypeScript (no `@ts-nocheck`): the pure presenters live in
+`src/session/` — `state.ts` (fragment-set bookkeeping, request builders),
+`encoding.ts` (liberal "bitvomit" parsing: hex/base58/bech32/base64 detected
+by charset + context, script↔address codecs), `display.ts` (fragment card
+projections: grouped inputs/outputs with subtotals and the fee-balance
+line), `wiring.ts` (object graph, join admissibility, contextual-enablement
+rules, single-session focus), `ingest.ts` (universal paste classification),
+and `editor.ts` (field-by-field editor with save-time violations + offered
+fixes) — all unit-tested by `test/session*.test.mjs`. The thin DOM shell in
+`src/session/app.ts` drives ONE `HttpBackend` instance. LifeHash
+fingerprints render as images from the (queued) `GET /api/lifehash/<hex>`
+route, with marked placeholders until it lands. Surfaces:
 
-- **Session**: paste or upload real PSBTs (v2 via `/api/inspect`, BIP 174 via
-  `/api/import-bip174`); the fragment list is exactly the loaded set, each
-  with its full inspect JSON on demand; join / concatenate / sort /
-  make-unordered / atomize over the selection; export v2 and BIP 174.
+- **Session**: paste ANYTHING — PSBT (base64 or hex), `bitcoin:` URI,
+  output descriptor, npub, iroh ticket, signed tx hex — and the right object
+  is minted (deep parsing of descriptors/URIs/transactions awaits the
+  `classifyPaste` backend seam). Fragments render as cards: LifeHash
+  fingerprints for digest-like values, inputs/outputs grouped by provenance
+  or script template with BTC subtotals, unique-id presence indicators,
+  ordering badges, a fee line, and the raw inspect JSON one click away.
+- **Wiring**: every card is a node; connecting two performs the join the
+  pair admits (fragment⋈fragment `/api/join`, fragment→session membership,
+  peer→session sync, payment→fragment `/api/pay`, signed-tx output→create
+  form). Pairs without a backend seam render visibly unwired ("needs
+  backend: …"). Tap-based (select source, tap target), so it works on touch.
+- **Operations**: join / concatenate / sort / make-unordered / atomize /
+  export are enabled contextually (selection arity + inspect-derived
+  correctness gates); gates are overridable EXPLICITLY with the warning kept
+  visible — interop with pre-BIP-370 producers needs escape hatches.
+  Assign-unique-ids is stitched in but disabled pending the `assignIds`
+  backend seam.
+- **Editor**: field-by-field fragment editor (global / per-input /
+  per-output; every field parses liberally). Save validates and DISPLAYS
+  violations; fixable ones offer a fix with an informed warning (e.g.
+  generating missing output unique ids may duplicate txouts if repeated).
+  The save-to-new-fragment path awaits the `applyPsbtEdits` backend seam;
+  raw keymap display awaits an inspect extension.
 - **Create**: outpoint input rows plus address+amount output rows — address
   and amount validity is the create route's real network validation — with
   ordering mode and seed.
-- **Sync**: transport picker driving `/api/sync`: local (server-side source
-  paths and a read-only state PSBT), iroh (paste a document ticket, or
-  request a fresh document and receive its ticket back), and the str0m /
-  webrtc-rs WebRTC transports with the manual signaling-file params.
-- **Negotiation**: pay (address+amount — the route builds the txout; the
-  payer id is an OPAQUE optional 32-byte hex field — or a raw record hex;
-  optional secret encrypts, dummy padding requires it), confirm
-  (derive-from-current via the route, or a raw record hex), and a payments
-  listing (optional secret decrypts) showing the raw payments/confirmations
-  lists plus the PSBT's unordered unique id. Deliberately no readiness/phase
-  logic: those semantics are being reworked; counts are the ceiling here.
+- **Sync**: transport picker driving `/api/sync` with a first-class
+  connection-state chip, result feed, and ticket display with copy (local
+  sources, iroh tickets in/out, str0m / webrtc-rs manual signaling).
+- **Negotiation**: pay / confirm / payments as before (opaque records,
+  optional secrets; no readiness/phase logic — counts are the ceiling).
+- **Focus mode**: a session card can fill the viewport (mobile-first single
+  -session view; the operations bar docks to the bottom on narrow screens).
 
 ## Run
 

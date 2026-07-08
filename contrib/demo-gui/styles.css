@@ -1817,3 +1817,397 @@ h2 {
 .session-panel[hidden] {
   display: none;
 }
+
+/* --- session UI rework: cards, wiring, gates, editor, focus ---------------- */
+
+.session-card-list {
+  display: grid;
+  gap: 10px;
+}
+
+.session-card {
+  position: relative;
+  display: grid;
+  gap: 6px;
+}
+
+.session-card-body {
+  display: grid;
+  gap: 6px;
+}
+
+.session-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.session-card-actions button {
+  min-height: 30px;
+  padding: 2px 10px;
+  font-size: 13px;
+}
+
+.session-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.session-badge-good {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.session-badge-warn {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+.session-lifehash {
+  width: 24px;
+  height: 24px;
+  image-rendering: pixelated;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  flex: none;
+  vertical-align: middle;
+}
+
+.session-lineage {
+  font-style: italic;
+}
+
+.session-group {
+  border-left: 3px solid var(--line);
+  padding: 4px 0 4px 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.session-group-provenance {
+  border-left-color: var(--accent);
+}
+
+.session-group-script-template {
+  border-left-color: var(--green);
+}
+
+.session-group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.session-coin-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.session-coin-side {
+  flex: none;
+  width: 26px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.session-address {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.session-identity {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.session-amount {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+.session-coin-row .session-amount {
+  margin-left: auto;
+}
+
+.session-amount-whole {
+  font-weight: 600;
+}
+
+.session-amount-muted {
+  color: var(--muted);
+}
+
+.session-amount-sats {
+  font-weight: 600;
+  color: var(--green);
+}
+
+.session-fee-line {
+  border-top: 1px dashed var(--line);
+  padding-top: 6px;
+}
+
+.session-elided {
+  font-size: 12px;
+}
+
+/* Wire mode: the armed source, admissible targets, blocked pairs. */
+
+.session-wire-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  font-size: 13px;
+}
+
+.session-wire-source {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+
+.session-wire-target {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+  cursor: pointer;
+}
+
+.session-wire-blocked {
+  opacity: 0.55;
+}
+
+.session-wire-target-chip,
+.session-wire-target {
+  scroll-margin: 60px;
+}
+
+#createWireTarget {
+  padding: 1px 8px;
+  border: 2px solid var(--green);
+  border-radius: 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* Overridable correctness gates. */
+
+.session-gate-overrides {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.session-gate-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+.session-gate-row input[type="checkbox"] {
+  width: auto;
+  min-height: 0;
+}
+
+.session-gate-warning {
+  color: var(--orange);
+  font-size: 12px;
+}
+
+button.session-overridden {
+  border-color: var(--orange);
+}
+
+/* Sync state chip + results. */
+
+.session-sync-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.session-sync-chip {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.session-sync-idle {
+  color: var(--muted);
+}
+
+.session-sync-syncing {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.session-sync-ok {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.session-sync-error {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.session-sync-results {
+  margin-top: 8px;
+}
+
+.session-ticket {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.session-ticket textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.session-new-object {
+  align-items: end;
+  margin-bottom: 10px;
+}
+
+/* Field editor. */
+
+.session-editor-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+}
+
+.session-editor-section {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.session-editor-field input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.session-editor-field .session-status-error,
+.session-editor-field .item-meta {
+  display: block;
+  font-size: 12px;
+}
+
+.session-editor-violations {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.session-editor-violation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+/* Single-session focus (the mobile-first view) + bottom action bar. */
+
+.session-focus-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+@media (max-width: 760px) {
+  .session-layout {
+    grid-template-columns: 1fr;
+    padding: 10px;
+  }
+
+  /* The selection-scoped operations become a bottom bar (thumb reach). */
+  .session-ops-panel {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    margin: 0;
+    border-radius: 12px 12px 0 0;
+    max-height: 40vh;
+    overflow: auto;
+  }
+
+  body {
+    padding-bottom: 220px;
+  }
+
+  .session-card-actions button,
+  .session-ops button {
+    min-height: 40px; /* touch targets */
+  }
+}
+
+/* Fingerprint placeholder until the /api/lifehash/<hex> PNG route lands. */
+.session-fingerprint-pending {
+  display: inline-block;
+  min-width: 24px;
+  padding: 3px 4px;
+  border: 1px dashed var(--line);
+  border-radius: 4px;
+  background: var(--surface-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: var(--muted);
+  flex: none;
+}
+
+img.session-lifehash {
+  object-fit: contain;
+  background: var(--surface-2);
+}
+
+/* Keep the hidden attribute authoritative for the new session components
+   whose classes set display (same fix the session panels needed). */
+.session-wire-status[hidden],
+.session-ticket[hidden],
+.session-focus-bar[hidden],
+#createWireTarget[hidden] {
+  display: none;
+}

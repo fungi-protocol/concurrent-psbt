@@ -15,6 +15,21 @@ const SESSION_HTML: &[u8] = include_bytes!("../../../contrib/demo-gui/session.ht
 const SESSION_APP_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/session/app.js");
 const SESSION_STATE_JS: &[u8] =
     include_bytes!("../../../contrib/demo-gui/dist/session/state.js");
+// The session presenter modules app.js imports at runtime: display/card
+// projections, wiring (object graph + join admissibility + enablement),
+// universal paste ingestion, the field editor, and liberal encoding
+// detection. (LifeHash fingerprints are NOT a TS module: they arrive with
+// the concurrent-psbt-wasm `lifehash` export, lazily loaded by the page.)
+const SESSION_DISPLAY_JS: &[u8] =
+    include_bytes!("../../../contrib/demo-gui/dist/session/display.js");
+const SESSION_WIRING_JS: &[u8] =
+    include_bytes!("../../../contrib/demo-gui/dist/session/wiring.js");
+const SESSION_INGEST_JS: &[u8] =
+    include_bytes!("../../../contrib/demo-gui/dist/session/ingest.js");
+const SESSION_EDITOR_JS: &[u8] =
+    include_bytes!("../../../contrib/demo-gui/dist/session/editor.js");
+const SESSION_ENCODING_JS: &[u8] =
+    include_bytes!("../../../contrib/demo-gui/dist/session/encoding.js");
 const INDEX_HTML: &[u8] = include_bytes!("../../../contrib/demo-gui/index.html");
 const STYLES_CSS: &[u8] = include_bytes!("../../../contrib/demo-gui/styles.css");
 const APP_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/app.js");
@@ -68,6 +83,26 @@ pub fn asset(path: &str) -> Option<Asset> {
         "/dist/session/state.js" => Some(Asset {
             content_type: "text/javascript; charset=utf-8",
             body: SESSION_STATE_JS,
+        }),
+        "/dist/session/display.js" => Some(Asset {
+            content_type: "text/javascript; charset=utf-8",
+            body: SESSION_DISPLAY_JS,
+        }),
+        "/dist/session/wiring.js" => Some(Asset {
+            content_type: "text/javascript; charset=utf-8",
+            body: SESSION_WIRING_JS,
+        }),
+        "/dist/session/ingest.js" => Some(Asset {
+            content_type: "text/javascript; charset=utf-8",
+            body: SESSION_INGEST_JS,
+        }),
+        "/dist/session/editor.js" => Some(Asset {
+            content_type: "text/javascript; charset=utf-8",
+            body: SESSION_EDITOR_JS,
+        }),
+        "/dist/session/encoding.js" => Some(Asset {
+            content_type: "text/javascript; charset=utf-8",
+            body: SESSION_ENCODING_JS,
         }),
         "/styles.css" => Some(Asset {
             content_type: "text/css; charset=utf-8",

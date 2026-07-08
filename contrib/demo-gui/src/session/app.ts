@@ -1,17 +1,21 @@
 // contrib/demo-gui/src/session/app.ts
 //
 // Session UI shell — the REAL webgui page (served at "/"). A thin, strictly
-// typed DOM layer: every decision lives in ./state.js (pure, node --test
-// covered) and every operation drives the ONE Backend seam (HttpBackend
-// against this server's own /api/* routes). No fixtures, no fake chain data:
-// the fragment list is exactly the set of real PSBTs pasted, uploaded,
-// imported, created, or produced by backend operations.
+// typed DOM layer: every decision lives in the pure presenter modules
+// (./state.js fragment set + form builders, ./display.js card projections,
+// ./wiring.js object graph + join admissibility + contextual enablement,
+// ./ingest.js universal paste classification, ./editor.js field editor,
+// ./encoding.js liberal parsing, ./lifehash.js fingerprints) and every
+// operation drives the ONE Backend seam (HttpBackend against this server's
+// own /api/* routes). No fixtures: the fragment list is exactly the set of
+// real PSBTs pasted, uploaded, imported, created, or produced by backend
+// operations.
 //
 // No query strings on the seam imports: http.js itself imports
-// ../core/types.js without one, and both URLs must resolve to the SAME module
-// instance for `instanceof PtjBackendError` to work (responses are served
-// Cache-Control: no-store; cache busting rides the ?v on dist/session/app.js
-// in session.html alone).
+// ../core/types.js without one, and both URLs must resolve to the SAME
+// module instance for `instanceof PtjBackendError` to work (responses are
+// served Cache-Control: no-store; cache busting rides the ?v on
+// dist/session/app.js in session.html alone).
 
 import { HttpBackend } from "../shared-frontend/backends/http.js";
 import { PtjBackendError } from "../shared-frontend/core/types.js";
@@ -20,7 +24,7 @@ import type {
   InspectResponse,
   PsbtResponse,
 } from "../shared-frontend/core/backend.js";
-import { seedFromRandomBytes } from "../model.js";
+import { amountParts, seedFromRandomBytes } from "../model.js";
 import {
   addFragment,
   buildConfirmArgs,
@@ -29,7 +33,6 @@ import {
   buildSyncRequest,
   bytesToBase64,
   emptySession,
-  fragmentLabel,
   fragmentSummary,
   negotiationView,
   pastedPsbt,
@@ -43,11 +46,61 @@ import {
   type SessionState,
   type SyncTransport,
 } from "./state.js";
+import {
+  elisionLabel,
+  fragmentCardModel,
+  type InputView,
+  type OutputView,
+} from "./display.js";
+import type { Network } from "./encoding.js";
+import { classifyPaste, mintFromPaste } from "./ingest.js";
+import {
+  actionState,
+  addFragmentToSession,
+  addPeerToSession,
+  beginWire,
+  completeWire,
+  dropFragmentKey,
+  emptyObjects,
+  idleWire,
+  mintSession,
+  overviewFocus,
+  peerByKey,
+  sessionByKey,
+  sessionFocus,
+  validateFocus,
+  wireVerdict,
+  type FocusState,
+  type NodeRef,
+  type ObjectsState,
+  type SessionAction,
+  type WireGesture,
+  type WireVerdict,
+} from "./wiring.js";
+import {
+  applyEdit,
+  applyFix,
+  editorModel,
+  validateEditor,
+  type EditorModel,
+} from "./editor.js";
 
 const backend: Backend = new HttpBackend();
 
+// --- shell state ------------------------------------------------------------
+
 let session: SessionState = emptySession();
+let objects: ObjectsState = emptyObjects();
+let focus: FocusState = overviewFocus();
+let wire: WireGesture = idleWire();
+let editor: EditorModel | null = null;
+// Armed correctness-gate overrides. Cleared whenever the selection changes:
+// an override is an explicit, per-situation decision, never a sticky default.
+const overrides = new Set<string>();
 const expanded = new Set<string>();
+// Lineage notes for operation results ("join of psbt-1, psbt-2") — the
+// lattice provenance the card shows under the title.
+const lineage = new Map<string, string>();
 
 // --- tiny DOM helpers -------------------------------------------------------
 
@@ -67,6 +120,22 @@ function textareaValue(id: string): string {
 
 function selectValue(id: string): string {
   return el<HTMLSelectElement>(id).value;
+}
+
+function button(label: string, title: string, onClick: () => void): HTMLButtonElement {
+  const node = document.createElement("button");
+  node.type = "button";
+  node.textContent = label;
+  if (title) node.title = title;
+  node.addEventListener("click", onClick);
+  return node;
+}
+
+function span(className: string, text: string): HTMLSpanElement {
+  const node = document.createElement("span");
+  node.className = className;
+  node.textContent = text;
+  return node;
 }
 
 function logEvent(message: string): void {
@@ -102,50 +171,348 @@ function showOutput(title: string, body: string): void {
   el<HTMLElement>("outputPanel").hidden = false;
 }
 
-// --- fragment list rendering -------------------------------------------------
-
-function shortHex(value: string | null): string {
-  if (!value) return "";
-  return value.length > 16 ? `${value.slice(0, 16)}…` : value;
+function copyText(text: string, what: string): void {
+  navigator.clipboard.writeText(text).then(
+    () => showStatus(`${what} copied to the clipboard`, false),
+    (error: unknown) => reportError(`copy ${what}`, error),
+  );
 }
 
-function addAndRender(psbt: string, inspect: InspectResponse | null, origin: FragmentOrigin): void {
+function displayNetwork(): Network {
+  return selectValue("displayNetwork") as Network;
+}
+
+// --- LifeHash fingerprints ---------------------------------------------------
+//
+// Digest-like values (txids, unique ids, scripts) render as LifeHash visual
+// fingerprints so humans compare at a glance; the full bitvomit stays one
+// click away (hover title, raw view, field editor).
+//
+// TODO(lifehash-route): fingerprints come from a SERVER route —
+// GET /api/lifehash/<hex-digest> -> PNG, cacheable (queued backend-side on
+// the `lifehash` Rust crate; a concurrent-psbt-wasm export follows later for
+// the PWA). The frontend stays trivial: an <img> per fingerprint. Until the
+// route exists the image errors and swaps to a clearly marked placeholder
+// chip carrying the truncated hex — graceful, never blocking.
+
+const LIFEHASH_ROUTE = "/api/lifehash/";
+// Hexes whose fetch already failed: skip re-requesting on every render until
+// the route lands (a reload retries).
+const lifehashFailed = new Set<string>();
+
+function lifehashPlaceholder(hex: string, title: string): HTMLElement {
+  const chip = span("session-fingerprint-pending", hex.slice(0, 8));
+  chip.title = `${title}\n${hex}\n(LifeHash pending — needs backend: GET /api/lifehash/<hex> PNG route)`;
+  return chip;
+}
+
+function lifehashBadge(hex: string, title: string): HTMLElement {
+  if (lifehashFailed.has(hex)) {
+    return lifehashPlaceholder(hex, title);
+  }
+  const img = document.createElement("img");
+  img.className = "session-lifehash";
+  img.alt = `fingerprint ${hex.slice(0, 8)}`;
+  img.title = `${title}\n${hex}`;
+  img.src = `${LIFEHASH_ROUTE}${hex}`;
+  img.addEventListener(
+    "error",
+    () => {
+      lifehashFailed.add(hex);
+      img.replaceWith(lifehashPlaceholder(hex, title));
+    },
+    { once: true },
+  );
+  return img;
+}
+
+function amountSpan(sats: number): HTMLElement {
+  const parts = amountParts(sats);
+  const node = span("session-amount", "");
+  if (parts.prefix) node.append(span("session-amount-whole", parts.prefix));
+  node.append(span("session-amount-muted", parts.muted));
+  if (parts.sats) node.append(span("session-amount-sats", parts.sats));
+  return node;
+}
+
+// --- fragment set plumbing ----------------------------------------------------
+
+function addAndRender(
+  psbt: string,
+  inspect: InspectResponse | null,
+  origin: FragmentOrigin,
+  note?: string,
+): SessionFragment {
   const added = addFragment(session, psbt, inspect, origin);
   session = added.state;
   if (added.duplicate) {
     logEvent(`${added.fragment.key} already loaded; selected it (${origin})`);
   } else {
     logEvent(`added ${added.fragment.key} (${origin})`);
+    if (note) lineage.set(added.fragment.key, note);
   }
   render();
+  return added.fragment;
 }
 
-async function addResponse(response: PsbtResponse, origin: FragmentOrigin): Promise<void> {
+async function addResponse(
+  response: PsbtResponse,
+  origin: FragmentOrigin,
+  note?: string,
+): Promise<SessionFragment> {
   // Every mutating route returns {psbt, inspect}; fall back to /api/inspect
   // if a backend ever omits the inspection.
   const inspect = response.inspect ?? (await backend.inspectPsbt(response.psbt));
-  addAndRender(response.psbt, inspect, origin);
+  return addAndRender(response.psbt, inspect, origin, note);
 }
 
-function render(): void {
-  const list = el<HTMLUListElement>("fragmentList");
-  list.textContent = "";
-  for (const fragment of session.fragments) {
-    list.append(renderFragment(fragment));
+function fragmentByKey(key: string): SessionFragment | null {
+  return session.fragments.find((fragment) => fragment.key === key) ?? null;
+}
+
+// --- contextual enablement -----------------------------------------------------
+
+const ACTION_BUTTONS: [string, SessionAction][] = [
+  ["opJoin", "join"],
+  ["opConcatenate", "concatenate"],
+  ["opSort", "sort"],
+  ["opMakeUnordered", "make-unordered"],
+  ["opAtomize", "atomize"],
+  ["opAssignIds", "assign-ids"],
+  ["opExportV2", "export-v2"],
+  ["opExportBip174", "export-bip174"],
+  ["payRun", "pay"],
+  ["confirmRun", "confirm"],
+  ["paymentsRun", "payments"],
+  ["syncRun", "sync"],
+];
+
+const BASE_TITLE = new Map<string, string>();
+
+function enablementContext() {
+  return {
+    selected: selectedFragments(session).map((fragment) => fragmentSummary(fragment.inspect)),
+    overrides,
+  };
+}
+
+function renderOps(): void {
+  const ctx = enablementContext();
+  const gates: { action: SessionAction; id: string; label: string; warning: string }[] = [];
+  for (const [id, action] of ACTION_BUTTONS) {
+    const node = el<HTMLButtonElement>(id);
+    const state = actionState(action, ctx);
+    node.disabled = !state.enabled;
+    const base = BASE_TITLE.get(id) ?? "";
+    if (state.enabled && state.overridden && state.gate) {
+      node.title = `${base}\nOVERRIDDEN: ${state.gate.label} — ${state.gate.warning}`.trim();
+      node.classList.add("session-overridden");
+    } else {
+      node.classList.remove("session-overridden");
+      const why = state.reason
+        ? state.needsBackend
+          ? `${state.reason} (needs backend: ${state.needsBackend})`
+          : state.reason
+        : "";
+      node.title = why ? `${base}\ndisabled: ${why}`.trim() : base;
+    }
+    if (state.gate) {
+      gates.push({ action, ...state.gate });
+    }
   }
-  el<HTMLElement>("fragmentEmpty").hidden = session.fragments.length > 0;
+
+  // Overridable correctness gates: explicit, visible, warning attached.
+  const host = el<HTMLElement>("gateOverrides");
+  host.textContent = "";
+  for (const gate of gates) {
+    const row = document.createElement("label");
+    row.className = "session-gate-row";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = overrides.has(gate.id);
+    box.addEventListener("change", () => {
+      if (box.checked) {
+        overrides.add(gate.id);
+        logEvent(`override armed for ${gate.action}: ${gate.label}`);
+      } else {
+        overrides.delete(gate.id);
+      }
+      render();
+    });
+    row.append(box, span("", ` override for ${gate.action}: ${gate.label}`));
+    if (overrides.has(gate.id)) {
+      row.append(span("session-gate-warning", ` — ${gate.warning}`));
+    }
+    host.append(row);
+  }
+
   const selected = selectedFragments(session);
   el<HTMLElement>("selectionCount").textContent = selected.length
     ? `${selected.length} selected`
     : "none selected";
+  el<HTMLElement>("negotiationTargetLine").textContent =
+    selected.length === 1
+      ? `Target: ${selected[0].key}. Records are grow-only; results are added as new fragments.`
+      : "Targets the one selected fragment (select exactly one). Records are grow-only; results are added as new fragments.";
 }
 
-function renderFragment(fragment: SessionFragment): HTMLLIElement {
-  const item = document.createElement("li");
-  item.className = "list-item session-fragment";
+// --- wire gesture ---------------------------------------------------------------
 
-  const row = document.createElement("div");
-  row.className = "session-fragment-row";
+function nodeName(ref: NodeRef): string {
+  return `${ref.kind} ${ref.key}`;
+}
+
+function startWire(kind: NodeRef["kind"], key: string): void {
+  wire = beginWire(kind, key);
+  showStatus("", false);
+  render();
+}
+
+function cancelWire(): void {
+  wire = idleWire();
+  render();
+}
+
+function wireTo(target: NodeRef): void {
+  const done = completeWire(wire, target, objects);
+  wire = done.gesture;
+  if (!done.verdict) {
+    render();
+    return;
+  }
+  void performWire(done.verdict, target);
+}
+
+async function performWire(v: WireVerdict, target: NodeRef): Promise<void> {
+  const source = wireSource;
+  wireSource = null;
+  if (!source) {
+    render();
+    return;
+  }
+  if (!v.allowed) {
+    const text = v.backed
+      ? `cannot wire ${nodeName(source)} → ${nodeName(target)}: ${v.reason}`
+      : `${nodeName(source)} → ${nodeName(target)} is not wired yet — needs backend: ${v.needs}`;
+    showStatus(text, true);
+    logEvent(text);
+    render();
+    return;
+  }
+  try {
+    switch (v.kind) {
+      case "fragment-join": {
+        const left = fragmentByKey(source.key);
+        const right = fragmentByKey(target.key);
+        if (!left || !right) break;
+        const joined = await addResponse(
+          await backend.joinPsbts([left.psbt, right.psbt]),
+          "join",
+          `⊔ join of ${left.key}, ${right.key}`,
+        );
+        logEvent(`wired ${left.key} ⋈ ${right.key} → ${joined.key} (lattice join)`);
+        break;
+      }
+      case "fragment-into-session": {
+        const sessionKey = source.kind === "session" ? source.key : target.key;
+        const fragmentKey = source.kind === "fragment" ? source.key : target.key;
+        objects = addFragmentToSession(objects, sessionKey, fragmentKey);
+        logEvent(`wired ${fragmentKey} into ${sessionKey}`);
+        break;
+      }
+      case "peer-into-session": {
+        const sessionKey = source.kind === "session" ? source.key : target.key;
+        const peerKey = source.kind === "peer" ? source.key : target.key;
+        objects = addPeerToSession(objects, sessionKey, peerKey);
+        logEvent(`wired ${peerKey} into ${sessionKey}; syncing`);
+        await syncSessionOverPeer(sessionKey, peerKey);
+        break;
+      }
+      case "attach-payment": {
+        const paymentKey = source.kind === "payment" ? source.key : target.key;
+        const fragmentKey = source.kind === "fragment" ? source.key : target.key;
+        const payment = objects.payments.find((candidate) => candidate.key === paymentKey);
+        const fragment = fragmentByKey(fragmentKey);
+        if (!payment || !fragment) break;
+        const paid = await addResponse(
+          await backend.pay(fragment.psbt, {
+            address: payment.address,
+            amountBtc: (payment.amountSats / 100_000_000).toFixed(8),
+            network: displayNetwork(),
+            label: payment.label || undefined,
+            payerHex: undefined,
+          }),
+          "pay",
+          `payment ${payment.key} attached to ${fragment.key}`,
+        );
+        logEvent(`wired ${payment.key} → ${fragment.key}: payment attached, result ${paid.key}`);
+        break;
+      }
+      case "add-create-input": {
+        const utxo = objects.utxos.find((candidate) => candidate.key === source.key);
+        addCreateRow("input");
+        if (utxo?.txid && utxo.vout !== null) {
+          const rows = el<HTMLElement>("createInputs");
+          const txids = rows.querySelectorAll<HTMLInputElement>("input[data-role=txid]");
+          const vouts = rows.querySelectorAll<HTMLInputElement>("input[data-role=vout]");
+          txids[txids.length - 1].value = utxo.txid;
+          vouts[vouts.length - 1].value = String(utxo.vout);
+          logEvent(`wired ${source.key} → create: input row prefilled`);
+        } else {
+          logEvent(
+            `wired ${source.key} → create: added an input row, but the transaction is not decoded yet ` +
+              "(needs backend: classifyPaste tx decode) — enter txid:vout manually",
+          );
+        }
+        break;
+      }
+      default:
+        break;
+    }
+    showStatus("", false);
+  } catch (error) {
+    reportError(`wire ${v.kind}`, error);
+  }
+  render();
+}
+
+// completeWire consumes the gesture before performWire runs, so the source
+// ref is stashed here for the async continuation.
+let wireSource: NodeRef | null = null;
+
+function wireTargetRef(target: NodeRef): void {
+  wireSource = wire.source;
+  wireTo(target);
+}
+
+// --- fragment cards --------------------------------------------------------------
+
+const INPUT_ROWS_SHOWN = 3;
+const OUTPUT_ROWS_SHOWN = 3;
+
+function renderFragments(): void {
+  const list = el<HTMLUListElement>("fragmentList");
+  list.textContent = "";
+  const focused = focus.mode === "session" && focus.sessionKey ? sessionByKey(objects, focus.sessionKey) : null;
+  const visible = focused
+    ? session.fragments.filter((fragment) => focused.fragmentKeys.includes(fragment.key))
+    : session.fragments;
+  for (const fragment of visible) {
+    list.append(renderFragmentCard(fragment));
+  }
+  el<HTMLElement>("fragmentEmpty").hidden = visible.length > 0;
+}
+
+function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
+  const card = fragmentCardModel(fragment.inspect, displayNetwork());
+  const item = document.createElement("li");
+  item.className = "list-item session-fragment session-card";
+  const ref: NodeRef = { kind: "fragment", key: fragment.key };
+  decorateWireTarget(item, ref);
+
+  // Header: select, identity fingerprint, key, badges, fee.
+  const head = document.createElement("div");
+  head.className = "session-fragment-row";
 
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
@@ -153,46 +520,103 @@ function renderFragment(fragment: SessionFragment): HTMLLIElement {
   checkbox.setAttribute("aria-label", `select ${fragment.key}`);
   checkbox.addEventListener("change", () => {
     session = setSelected(session, fragment.key, checkbox.checked);
+    overrides.clear();
     render();
   });
-  row.append(checkbox);
+  head.append(checkbox);
 
-  const title = document.createElement("span");
-  title.className = "item-title";
-  title.textContent = fragmentLabel(fragment);
-  row.append(title);
+  if (card.summary.uniqueIdHex) {
+    head.append(lifehashBadge(card.summary.uniqueIdHex, `unordered unique id of ${fragment.key}`));
+  }
+  head.append(span("item-title", fragment.key));
+  head.append(badge(card.summary.format ?? "not decoded", "session-badge"));
+  head.append(
+    badge(
+      card.summary.ordering ?? "ordering unknown",
+      card.summary.ordering === "unordered" ? "session-badge session-badge-good" : "session-badge",
+    ),
+  );
+  if (card.uidTotal !== null) {
+    const complete = card.uidPresent !== null && card.uidPresent >= card.uidTotal;
+    head.append(
+      badge(
+        `ids ${card.uidPresent ?? "?"}/${card.uidTotal}`,
+        complete ? "session-badge session-badge-good" : "session-badge session-badge-warn",
+      ),
+    );
+  }
+  head.append(span("item-meta", fragment.origin));
+  item.append(head);
 
-  const summary = fragmentSummary(fragment.inspect);
-  const meta = document.createElement("span");
-  meta.className = "item-meta";
-  meta.textContent = summary.uniqueIdHex ? `id ${shortHex(summary.uniqueIdHex)}` : "";
-  row.append(meta);
+  const note = lineage.get(fragment.key);
+  if (note) item.append(span("item-meta session-lineage", note));
 
-  const details = document.createElement("button");
-  details.type = "button";
-  details.textContent = expanded.has(fragment.key) ? "Hide" : "Details";
-  details.addEventListener("click", () => {
-    if (expanded.has(fragment.key)) {
-      expanded.delete(fragment.key);
-    } else {
-      expanded.add(fragment.key);
+  // Body: groups with subtotals; details elided, structure shown.
+  const body = document.createElement("div");
+  body.className = "session-card-body";
+  for (const group of card.groups) {
+    const groupNode = document.createElement("div");
+    groupNode.className = `session-group session-group-${group.kind}`;
+    const title = document.createElement("div");
+    title.className = "session-group-title";
+    title.append(span("", group.label));
+    if (group.inputSubtotalSats !== null) {
+      title.append(span("item-meta", " in "), amountSpan(group.inputSubtotalSats));
     }
-    render();
-  });
-  row.append(details);
+    if (group.outputSubtotalSats !== null) {
+      title.append(span("item-meta", " out "), amountSpan(group.outputSubtotalSats));
+    }
+    groupNode.append(title);
 
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.textContent = "Remove";
-  remove.addEventListener("click", () => {
-    session = removeFragment(session, fragment.key);
-    expanded.delete(fragment.key);
-    logEvent(`removed ${fragment.key}`);
-    render();
-  });
-  row.append(remove);
+    for (const input of group.inputs.slice(0, INPUT_ROWS_SHOWN)) {
+      groupNode.append(inputRow(input));
+    }
+    const inputsHidden = elisionLabel(INPUT_ROWS_SHOWN, group.inputs.length);
+    if (inputsHidden) groupNode.append(span("item-meta session-elided", `inputs ${inputsHidden}`));
 
-  item.append(row);
+    for (const output of group.outputs.slice(0, OUTPUT_ROWS_SHOWN)) {
+      groupNode.append(outputRow(output));
+    }
+    const outputsHidden = elisionLabel(OUTPUT_ROWS_SHOWN, group.outputs.length);
+    if (outputsHidden) groupNode.append(span("item-meta session-elided", `outputs ${outputsHidden}`));
+
+    body.append(groupNode);
+  }
+  if (card.groups.length) {
+    body.append(span("item-meta session-fee-line", card.fee.text));
+  }
+  item.append(body);
+
+  // Footer: per-card actions.
+  const foot = document.createElement("div");
+  foot.className = "session-card-actions";
+  foot.append(
+    button(expanded.has(fragment.key) ? "Hide raw" : "Raw", "Full inspect JSON (bitvomit view)", () => {
+      if (expanded.has(fragment.key)) {
+        expanded.delete(fragment.key);
+      } else {
+        expanded.add(fragment.key);
+      }
+      render();
+    }),
+    button("Edit", "Field-by-field editor (liberal parsing; save needs backend)", () => {
+      editor = editorModel(fragment.key, fragment.inspect, displayNetwork());
+      renderEditor([]);
+      el<HTMLElement>("editorPanel").hidden = false;
+    }),
+    button("Wire", "Connect this fragment to another object (join, session, payment)", () =>
+      startWire("fragment", fragment.key),
+    ),
+    button("Remove", "Drop the fragment from the set", () => {
+      session = removeFragment(session, fragment.key);
+      objects = dropFragmentKey(objects, fragment.key);
+      expanded.delete(fragment.key);
+      lineage.delete(fragment.key);
+      logEvent(`removed ${fragment.key}`);
+      render();
+    }),
+  );
+  item.append(foot);
 
   if (expanded.has(fragment.key)) {
     const detail = document.createElement("pre");
@@ -205,42 +629,395 @@ function renderFragment(fragment: SessionFragment): HTMLLIElement {
   return item;
 }
 
-function requireSelection(exactly?: number): SessionFragment[] | null {
-  const selected = selectedFragments(session);
-  if (exactly !== undefined && selected.length !== exactly) {
-    showStatus(
-      `this action needs exactly ${exactly} selected fragment${exactly === 1 ? "" : "s"}`,
-      true,
+function badge(text: string, className: string): HTMLElement {
+  return span(className, text);
+}
+
+function inputRow(input: InputView): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "session-coin-row";
+  row.append(span("session-coin-side", "in"));
+  if (input.outpointTxid) {
+    row.append(lifehashBadge(input.outpointTxid, `outpoint txid (input ${input.index})`));
+    row.append(span("item-meta", `:${input.outpointVout ?? "?"}`));
+  } else {
+    row.append(span("item-meta", "outpoint unknown"));
+  }
+  if (input.knownUtxoSats !== null) {
+    row.append(amountSpan(input.knownUtxoSats));
+  } else {
+    row.append(span("item-meta", "amount unknown"));
+  }
+  if (!input.hasWitnessUtxo && !input.hasNonWitnessUtxo) {
+    row.append(span("session-badge session-badge-warn", "no utxo data"));
+  }
+  return row;
+}
+
+function outputRow(output: OutputView): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "session-coin-row";
+  row.append(span("session-coin-side", "out"));
+  if (output.uniqueIdHex) {
+    row.append(lifehashBadge(output.uniqueIdHex, `output unique id (output ${output.index})`));
+  } else {
+    row.append(span("session-badge session-badge-warn", "no id"));
+  }
+  if (output.address) {
+    const address = span("session-address", output.address);
+    address.title = output.scriptHex ? `${output.scriptLabel}\n${output.scriptHex}` : output.scriptLabel;
+    row.append(address);
+  } else if (output.scriptHex) {
+    const script = document.createElement("span");
+    script.className = "item-meta";
+    script.title = output.scriptHex;
+    script.textContent = output.scriptLabel;
+    row.append(script, lifehashBadge(output.scriptHex, `scriptPubKey (output ${output.index})`));
+  } else {
+    row.append(span("item-meta", "script unknown"));
+  }
+  if (output.amountSats !== null) row.append(amountSpan(output.amountSats));
+  return row;
+}
+
+// Highlight and arm wire targets while a wire is pending.
+function decorateWireTarget(node: HTMLElement, ref: NodeRef): void {
+  if (!wire.source) return;
+  if (wire.source.kind === ref.kind && wire.source.key === ref.key) {
+    node.classList.add("session-wire-source");
+    return;
+  }
+  const v = wireVerdict(wire.source, ref, objects);
+  if (v.allowed && v.backed) {
+    node.classList.add("session-wire-target");
+    node.title = `wire here: ${v.kind}`;
+  } else {
+    node.classList.add("session-wire-blocked");
+    node.title = v.backed ? `not wireable: ${v.reason ?? ""}` : `needs backend: ${v.needs ?? ""}`;
+  }
+  node.addEventListener("click", (event) => {
+    // The explicit per-card buttons keep working; a plain click on the card
+    // body completes (or explains) the pending wire.
+    if ((event.target as HTMLElement).closest("button, input, textarea, select, a")) return;
+    event.preventDefault();
+    wireTargetRef(ref);
+  });
+}
+
+// --- objects rail ------------------------------------------------------------------
+
+function renderObjects(): void {
+  const list = el<HTMLUListElement>("objectList");
+  list.textContent = "";
+
+  for (const sessionObject of objects.sessions) {
+    const item = document.createElement("li");
+    item.className = "list-item session-card";
+    const ref: NodeRef = { kind: "session", key: sessionObject.key };
+    decorateWireTarget(item, ref);
+    const head = document.createElement("div");
+    head.className = "session-fragment-row";
+    head.append(
+      span("item-title", `${sessionObject.name}`),
+      badge("session", "session-badge"),
+      span("item-meta", `${sessionObject.transport} · ${sessionObject.fragmentKeys.length} fragment(s) · ${sessionObject.peerKeys.length} peer(s)`),
     );
-    return null;
+    item.append(head);
+    if (sessionObject.fragmentKeys.length) {
+      item.append(span("item-meta", sessionObject.fragmentKeys.join(", ")));
+    }
+    const actions = document.createElement("div");
+    actions.className = "session-card-actions";
+    actions.append(
+      button("Focus", "Fill the viewport with this session (mobile view)", () => {
+        focus = sessionFocus(sessionObject.key);
+        render();
+      }),
+      button("Wire", "Connect fragments or peers to this session", () =>
+        startWire("session", sessionObject.key),
+      ),
+      button("Sync now", "Sync this session's fragments over its transport", () => {
+        void syncSessionOverPeer(sessionObject.key, null);
+      }),
+    );
+    item.append(actions);
+    list.append(item);
   }
-  if (exactly === undefined && selected.length < 2) {
-    showStatus("this action needs at least 2 selected fragments", true);
-    return null;
+
+  for (const peer of objects.peers) {
+    const item = document.createElement("li");
+    item.className = "list-item session-card";
+    decorateWireTarget(item, { kind: "peer", key: peer.key });
+    const head = document.createElement("div");
+    head.className = "session-fragment-row";
+    head.append(
+      span("item-title", peer.name),
+      badge(`peer · ${peer.transport}`, "session-badge"),
+    );
+    const identity = span("item-meta session-identity", peer.identity.slice(0, 24) + (peer.identity.length > 24 ? "…" : ""));
+    identity.title = peer.identity;
+    head.append(identity);
+    item.append(head);
+    const actions = document.createElement("div");
+    actions.className = "session-card-actions";
+    actions.append(
+      button("Copy id", "Copy the full transport identity", () => copyText(peer.identity, `${peer.key} identity`)),
+      button("Wire", "Connect this peer to a session", () => startWire("peer", peer.key)),
+    );
+    item.append(actions);
+    list.append(item);
   }
-  return selected;
+
+  for (const payment of objects.payments) {
+    const item = document.createElement("li");
+    item.className = "list-item session-card";
+    decorateWireTarget(item, { kind: "payment", key: payment.key });
+    const head = document.createElement("div");
+    head.className = "session-fragment-row";
+    head.append(
+      span("item-title", payment.label || payment.key),
+      badge("payment", "session-badge"),
+      span("session-address", payment.address),
+      amountSpan(payment.amountSats),
+    );
+    item.append(head);
+    const actions = document.createElement("div");
+    actions.className = "session-card-actions";
+    actions.append(
+      button("Prefill Pay", "Copy this instruction into the Pay form", () => {
+        el<HTMLInputElement>("payAddress").value = payment.address;
+        el<HTMLInputElement>("payAmount").value = (payment.amountSats / 100_000_000).toFixed(8);
+        el<HTMLInputElement>("payLabel").value = payment.label;
+        logEvent(`prefilled the Pay form from ${payment.key}`);
+      }),
+      button("Wire", "Attach this payment to a fragment", () => startWire("payment", payment.key)),
+    );
+    item.append(actions);
+    list.append(item);
+  }
+
+  for (const utxo of objects.utxos) {
+    const item = document.createElement("li");
+    item.className = "list-item session-card";
+    decorateWireTarget(item, { kind: "utxo", key: utxo.key });
+    const head = document.createElement("div");
+    head.className = "session-fragment-row";
+    head.append(
+      span("item-title", utxo.key),
+      badge("signed tx", "session-badge"),
+      span(
+        "item-meta",
+        utxo.txid
+          ? `${utxo.txid.slice(0, 16)}…:${utxo.vout ?? "?"}`
+          : "outputs pending backend decode (classifyPaste)",
+      ),
+    );
+    item.append(head);
+    const actions = document.createElement("div");
+    actions.className = "session-card-actions";
+    actions.append(
+      button("Wire", "Use as a create-form input", () => startWire("utxo", utxo.key)),
+      button("Copy hex", "Copy the raw transaction hex", () => copyText(utxo.rawTxHex, `${utxo.key} hex`)),
+    );
+    item.append(actions);
+    list.append(item);
+  }
+
+  for (const descriptor of objects.descriptors) {
+    const item = document.createElement("li");
+    item.className = "list-item session-card";
+    decorateWireTarget(item, { kind: "descriptor", key: descriptor.key });
+    const head = document.createElement("div");
+    head.className = "session-fragment-row";
+    const text = span("item-meta session-identity", descriptor.descriptor.slice(0, 40) + (descriptor.descriptor.length > 40 ? "…" : ""));
+    text.title = descriptor.descriptor;
+    head.append(
+      span("item-title", descriptor.key),
+      badge(descriptor.isPrivate ? "descriptor · PRIVATE" : "descriptor", descriptor.isPrivate ? "session-badge session-badge-warn" : "session-badge"),
+      text,
+    );
+    item.append(head);
+    item.append(
+      span(
+        "item-meta",
+        "attribution/grouping by this descriptor needs backend: classifyPaste (miniscript derivation)",
+      ),
+    );
+    list.append(item);
+  }
+}
+
+// --- wire status + focus bar ---------------------------------------------------------
+
+function renderWireStatus(): void {
+  const host = el<HTMLElement>("wireStatus");
+  if (!wire.source) {
+    host.hidden = true;
+    return;
+  }
+  host.hidden = false;
+  el<HTMLElement>("wireStatusText").textContent =
+    `wiring from ${nodeName(wire.source)} — tap a highlighted card to join (dimmed cards explain why not)`;
+}
+
+function renderFocus(): void {
+  focus = validateFocus(
+    focus,
+    objects.sessions.map((sessionObject) => sessionObject.key),
+  );
+  const focusBar = el<HTMLElement>("focusBar");
+  const inFocus = focus.mode === "session" && focus.sessionKey !== null;
+  focusBar.hidden = !inFocus;
+  document.body.classList.toggle("session-focused", inFocus);
+  if (inFocus && focus.sessionKey) {
+    const focused = sessionByKey(objects, focus.sessionKey);
+    if (focused) {
+      const peers = focused.peerKeys
+        .map((key) => peerByKey(objects, key)?.name ?? key)
+        .join(", ");
+      el<HTMLElement>("focusTitle").textContent =
+        `${focused.name} · ${focused.transport} · ${focused.fragmentKeys.length} fragment(s)` +
+        (peers ? ` · peers: ${peers}` : "");
+    }
+  }
+  for (const panel of Array.from(document.querySelectorAll<HTMLElement>("[data-focus-hide]"))) {
+    // The fragments panel stays: in focus mode it shows the session subset.
+    const keep = panel.querySelector("#fragmentList") !== null;
+    panel.hidden = inFocus && !keep;
+  }
+}
+
+// --- editor panel -----------------------------------------------------------------
+
+function renderEditor(violations: ReturnType<typeof validateEditor>): void {
+  const model = editor;
+  const host = el<HTMLElement>("editorSections");
+  host.textContent = "";
+  if (!model) return;
+  el<HTMLElement>("editorTitle").textContent = `Field editor — ${model.fragmentKey}`;
+
+  for (const section of model.sections) {
+    const box = document.createElement("fieldset");
+    box.className = "session-editor-section";
+    const legend = document.createElement("legend");
+    legend.textContent = section.title;
+    box.append(legend);
+    for (const field of section.fields) {
+      const row = document.createElement("label");
+      row.className = "field-label session-editor-field";
+      row.append(span("", field.label));
+      const input = document.createElement("input");
+      input.value = field.value;
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      input.addEventListener("change", () => {
+        if (!editor) return;
+        editor = applyEdit(editor, field.path, input.value);
+        renderEditor([]);
+      });
+      row.append(input);
+      if (field.error) row.append(span("session-status-error", field.error));
+      if (field.note) row.append(span("item-meta", field.note));
+      box.append(row);
+    }
+    host.append(box);
+  }
+
+  const violationsHost = el<HTMLElement>("editorViolations");
+  violationsHost.textContent = "";
+  for (const violation of violations) {
+    const row = document.createElement("div");
+    row.className = "session-editor-violation";
+    row.append(span("session-status-error", violation.path ? `${violation.path}: ${violation.message}` : violation.message));
+    const fix = violation.fix;
+    if (fix) {
+      row.append(
+        button(fix.label, fix.warning, () => {
+          if (!editor) return;
+          editor = applyFix(editor, fix.id, (length) => {
+            const bytes = new Uint8Array(length);
+            crypto.getRandomValues(bytes);
+            return bytes;
+          });
+          logEvent(`editor fix applied (${fix.id}) — ${fix.warning}`);
+          renderEditor(validateEditor(editor));
+        }),
+        span("session-gate-warning", ` ${fix.warning}`),
+      );
+    }
+    violationsHost.append(row);
+  }
+  if (!violations.length) {
+    violationsHost.append(span("item-meta", "no violations recorded on the last validation"));
+  }
 }
 
 // --- session screen: load + set operations -----------------------------------
 
-async function addPasted(kind: "v2" | "bip174"): Promise<void> {
-  const raw = textareaValue("pasteInput");
-  const psbt = pastedPsbt(raw);
+async function addPsbtText(raw: string, kind: "v2" | "bip174" | "auto"): Promise<boolean> {
+  const psbt = pastedPsbt(raw) ?? classifyPasteToPsbt(raw);
   if (!psbt) {
-    showStatus("paste a base64 PSBT first (v2 or BIP 174)", true);
-    return;
+    if (kind !== "auto") showStatus("paste a base64 PSBT first (v2 or BIP 174)", true);
+    return false;
   }
   try {
-    if (kind === "v2") {
+    if (kind === "bip174") {
+      await addResponse(await backend.importBip174(psbt), "import-bip174");
+    } else if (kind === "v2") {
       const inspect = await backend.inspectPsbt(psbt);
       addAndRender(psbt, inspect, "paste");
     } else {
-      await addResponse(await backend.importBip174(psbt), "import-bip174");
+      // Auto: try v2 first, fall back to a BIP 174 upgrade (mirrors the demo
+      // sandbox's hydratePastedPsbtFragment).
+      try {
+        const inspect = await backend.inspectPsbt(psbt);
+        addAndRender(psbt, inspect, "paste");
+      } catch (error) {
+        if (!(error instanceof PtjBackendError)) throw error;
+        await addResponse(await backend.importBip174(psbt), "import-bip174");
+        logEvent("paste decoded as BIP 174 and upgraded to v2");
+      }
     }
-    el<HTMLTextAreaElement>("pasteInput").value = "";
     showStatus("", false);
+    return true;
   } catch (error) {
-    reportError(kind === "v2" ? "inspect" : "import BIP 174", error);
+    reportError(kind === "bip174" ? "import BIP 174" : "inspect", error);
+    return true; // it WAS a PSBT; the error is already reported
+  }
+}
+
+function classifyPasteToPsbt(raw: string): string | null {
+  const pasted = classifyPaste(raw);
+  return pasted.kind === "psbt" ? pasted.payload : null;
+}
+
+async function addObject(): Promise<void> {
+  const raw = textareaValue("pasteInput");
+  const pasted = classifyPaste(raw);
+  if (pasted.kind === "psbt") {
+    if (await addPsbtText(raw, "auto")) {
+      el<HTMLTextAreaElement>("pasteInput").value = "";
+    }
+    return;
+  }
+  const minted = mintFromPaste(objects, pasted);
+  objects = minted.state;
+  logEvent(minted.log);
+  if (minted.minted) {
+    el<HTMLTextAreaElement>("pasteInput").value = "";
+    if (pasted.needsBackend) {
+      logEvent(`${minted.minted.key}: deep parsing pending — needs backend: ${pasted.needsBackend}`);
+    }
+    showStatus("", false);
+  } else {
+    showStatus(pasted.detail, true);
+  }
+  render();
+}
+
+async function addPasted(kind: "v2" | "bip174"): Promise<void> {
+  if (await addPsbtText(textareaValue("pasteInput"), kind)) {
+    el<HTMLTextAreaElement>("pasteInput").value = "";
   }
 }
 
@@ -258,11 +1035,24 @@ async function loadUpload(): Promise<void> {
   input.value = "";
 }
 
+function requireEnabled(action: SessionAction): SessionFragment[] | null {
+  const state = actionState(action, enablementContext());
+  if (!state.enabled) {
+    showStatus(`${action}: ${state.reason ?? "not available"}`, true);
+    return null;
+  }
+  return selectedFragments(session);
+}
+
 async function joinSelected(): Promise<void> {
-  const selected = requireSelection();
+  const selected = requireEnabled("join");
   if (!selected) return;
   try {
-    await addResponse(await backend.joinPsbts(selected.map((f) => f.psbt)), "join");
+    await addResponse(
+      await backend.joinPsbts(selected.map((f) => f.psbt)),
+      "join",
+      `⊔ join of ${selected.map((f) => f.key).join(", ")}`,
+    );
     showStatus("", false);
   } catch (error) {
     reportError("join", error);
@@ -270,12 +1060,13 @@ async function joinSelected(): Promise<void> {
 }
 
 async function concatenateSelected(): Promise<void> {
-  const selected = requireSelection();
+  const selected = requireEnabled("concatenate");
   if (!selected) return;
   try {
     await addResponse(
       await backend.concatenatePsbts(selected.map((f) => f.psbt)),
       "concatenate",
+      `concatenation of ${selected.map((f) => f.key).join(", ")}`,
     );
     showStatus("", false);
   } catch (error) {
@@ -284,11 +1075,15 @@ async function concatenateSelected(): Promise<void> {
 }
 
 async function sortSelected(): Promise<void> {
-  const selected = requireSelection(1);
+  const selected = requireEnabled("sort");
   if (!selected) return;
   const seed = inputValue("sortSeed").trim();
   try {
-    await addResponse(await backend.sortPsbt(selected[0].psbt, seed || undefined), "sort");
+    await addResponse(
+      await backend.sortPsbt(selected[0].psbt, seed || undefined),
+      "sort",
+      `sort of ${selected[0].key}`,
+    );
     showStatus("", false);
   } catch (error) {
     reportError("sort", error);
@@ -296,10 +1091,14 @@ async function sortSelected(): Promise<void> {
 }
 
 async function makeUnorderedSelected(): Promise<void> {
-  const selected = requireSelection(1);
+  const selected = requireEnabled("make-unordered");
   if (!selected) return;
   try {
-    await addResponse(await backend.makeUnordered(selected[0].psbt), "make-unordered");
+    await addResponse(
+      await backend.makeUnordered(selected[0].psbt),
+      "make-unordered",
+      `make-unordered of ${selected[0].key}`,
+    );
     showStatus("", false);
   } catch (error) {
     reportError("make unordered", error);
@@ -307,12 +1106,14 @@ async function makeUnorderedSelected(): Promise<void> {
 }
 
 async function atomizeSelected(): Promise<void> {
-  const selected = requireSelection(1);
+  const selected = requireEnabled("atomize");
   if (!selected) return;
   try {
     const response = await backend.atomizePsbt(selected[0].psbt);
+    let index = 0;
     for (const piece of response.fragments) {
-      await addResponse(piece, "atomize");
+      index += 1;
+      await addResponse(piece, "atomize", `atom ${index}/${response.fragments.length} of ${selected[0].key}`);
     }
     logEvent(`atomize produced ${response.fragments.length} fragments`);
     showStatus("", false);
@@ -322,13 +1123,13 @@ async function atomizeSelected(): Promise<void> {
 }
 
 function exportSelectedV2(): void {
-  const selected = requireSelection(1);
+  const selected = requireEnabled("export-v2");
   if (!selected) return;
   showOutput(`${selected[0].key} — PSBT v2 (BIP 370) base64`, selected[0].psbt);
 }
 
 async function exportSelectedBip174(): Promise<void> {
-  const selected = requireSelection(1);
+  const selected = requireEnabled("export-bip174");
   if (!selected) return;
   try {
     const exported = await backend.exportBip174(selected[0].psbt);
@@ -404,71 +1205,131 @@ async function createPsbt(event: Event): Promise<void> {
 
 // --- sync panel ----------------------------------------------------------------
 
-function syncTransport(): SyncTransport {
+function syncTransportValue(): SyncTransport {
   return selectValue("syncTransport") as SyncTransport;
 }
 
 function renderSyncFields(): void {
-  const transport = syncTransport();
+  const transport = syncTransportValue();
   for (const section of Array.from(document.querySelectorAll<HTMLElement>("[data-transport]"))) {
     const kinds = (section.dataset.transport ?? "").split(" ");
     section.hidden = !kinds.includes(transport);
   }
 }
 
-async function runSync(event: Event): Promise<void> {
-  event.preventDefault();
-  const psbts = selectedFragments(session).map((fragment) => fragment.psbt);
-  const built = buildSyncRequest(
-    {
-      transport: syncTransport(),
-      sources: textareaValue("syncSources"),
-      state: inputValue("syncState"),
-      irohTicket: textareaValue("syncIrohTicket"),
-      irohTicketOut: el<HTMLInputElement>("syncIrohTicketOut").checked,
-      irohWaitMs: inputValue("syncIrohWaitMs"),
-      webrtcRole: selectValue("syncWebrtcRole") as "" | "offer" | "answer",
-      signalOut: inputValue("syncSignalOut"),
-      signalIn: inputValue("syncSignalIn"),
-      webrtcBind: inputValue("syncWebrtcBind"),
-      iceServers: textareaValue("syncIceServers"),
-      signalTimeoutMs: inputValue("syncSignalTimeoutMs"),
-    },
-    psbts,
-  );
+function setSyncState(state: "idle" | "syncing" | "ok" | "error", detail: string): void {
+  const chip = el<HTMLElement>("syncStateChip");
+  chip.textContent = state === "ok" ? "converged" : state;
+  chip.className = `session-sync-chip session-sync-${state}`;
+  el<HTMLElement>("syncStateDetail").textContent = detail;
+}
+
+function pushSyncResult(text: string): void {
+  const results = el<HTMLOListElement>("syncResults");
+  const item = document.createElement("li");
+  item.textContent = text;
+  results.prepend(item);
+  while (results.children.length > 8) {
+    results.lastElementChild?.remove();
+  }
+}
+
+function syncFormSnapshot() {
+  return {
+    transport: syncTransportValue(),
+    sources: textareaValue("syncSources"),
+    state: inputValue("syncState"),
+    irohTicket: textareaValue("syncIrohTicket"),
+    irohTicketOut: el<HTMLInputElement>("syncIrohTicketOut").checked,
+    irohWaitMs: inputValue("syncIrohWaitMs"),
+    webrtcRole: selectValue("syncWebrtcRole") as "" | "offer" | "answer",
+    signalOut: inputValue("syncSignalOut"),
+    signalIn: inputValue("syncSignalIn"),
+    webrtcBind: inputValue("syncWebrtcBind"),
+    iceServers: textareaValue("syncIceServers"),
+    signalTimeoutMs: inputValue("syncSignalTimeoutMs"),
+  };
+}
+
+async function runSyncRequest(psbts: string[], sourceLabel: string): Promise<void> {
+  const built = buildSyncRequest(syncFormSnapshot(), psbts);
   if (built.ok === false) {
     showStatus(built.error, true);
+    setSyncState("error", built.error);
     return;
   }
-  const button = el<HTMLButtonElement>("syncRun");
-  button.disabled = true;
+  const runButton = el<HTMLButtonElement>("syncRun");
+  runButton.disabled = true;
+  setSyncState("syncing", `${sourceLabel} over ${built.value.transport}…`);
   showStatus("syncing…", false);
   try {
     const response = await backend.syncPsbts(built.value);
-    await addResponse(response, "sync");
+    const converged = await addResponse(response, "sync", `sync convergence (${sourceLabel})`);
     const view = negotiationView(response);
-    let summary =
-      `sync converged: ${view.paymentCount} payment record(s), ` +
-      `${view.confirmationCount} confirmation record(s) out of band`;
+    const summary =
+      `${sourceLabel}: converged into ${converged.key}; ` +
+      `${view.paymentCount} payment record(s), ${view.confirmationCount} confirmation record(s) out of band`;
+    setSyncState("ok", summary);
+    pushSyncResult(summary);
     if (response.irohTicketOut) {
-      showOutput("iroh document ticket (share with peers)", response.irohTicketOut);
-      summary += "; created a new iroh document";
+      el<HTMLTextAreaElement>("syncTicketBody").value = response.irohTicketOut;
+      el<HTMLElement>("syncTicketPanel").hidden = false;
+      pushSyncResult("created a new iroh document — ticket ready to share (Copy above)");
     }
     logEvent(summary);
     showStatus("", false);
   } catch (error) {
+    setSyncState("error", error instanceof Error ? error.message : String(error));
+    pushSyncResult(`sync failed: ${error instanceof Error ? error.message : String(error)}`);
     reportError("sync", error);
   } finally {
-    button.disabled = false;
+    runButton.disabled = false;
+    render();
   }
 }
 
-// --- negotiation panel -----------------------------------------------------------
-
-function negotiationTarget(): SessionFragment | null {
-  const selected = requireSelection(1);
-  return selected ? selected[0] : null;
+async function runSync(event: Event): Promise<void> {
+  event.preventDefault();
+  const state = actionState("sync", enablementContext());
+  if (!state.enabled && syncTransportValue() !== "local") {
+    // Local sync legitimately runs from server-side sources with nothing
+    // selected; every other transport syncs the selection.
+    showStatus(`sync: ${state.reason ?? "not available"}`, true);
+    return;
+  }
+  const psbts = selectedFragments(session).map((fragment) => fragment.psbt);
+  await runSyncRequest(psbts, `sync of ${psbts.length} selected fragment(s)`);
 }
+
+// Peer→session wiring: sync the session's member fragments over the peer's
+// transport (or the session's own transport when no peer is given). The
+// transport parameters ride the sync form so the manual-signaling transports
+// stay configurable; iroh peers bring their ticket along.
+async function syncSessionOverPeer(sessionKey: string, peerKey: string | null): Promise<void> {
+  const sessionObject = sessionByKey(objects, sessionKey);
+  if (!sessionObject) return;
+  const peer = peerKey ? peerByKey(objects, peerKey) : null;
+  const transport = peer && peer.transport !== "nostr" && peer.transport !== "unknown"
+    ? peer.transport
+    : sessionObject.transport;
+  el<HTMLSelectElement>("syncTransport").value = transport;
+  renderSyncFields();
+  if (peer && peer.transport === "iroh" && peer.identity) {
+    el<HTMLTextAreaElement>("syncIrohTicket").value = peer.identity;
+    el<HTMLInputElement>("syncIrohTicketOut").checked = false;
+  }
+  const members = sessionObject.fragmentKeys
+    .map((key) => fragmentByKey(key))
+    .filter((fragment): fragment is SessionFragment => fragment !== null)
+    .map((fragment) => fragment.psbt);
+  if (!members.length && transport !== "local") {
+    showStatus(`${sessionObject.name}: wire fragments into the session before syncing`, true);
+    return;
+  }
+  await runSyncRequest(members, `session ${sessionObject.name} (${members.length} fragment(s))`);
+}
+
+// --- negotiation panel -----------------------------------------------------------
 
 function payMode(): "address" | "hex" {
   return el<HTMLInputElement>("payModeHex").checked ? "hex" : "address";
@@ -489,8 +1350,9 @@ function renderNegotiationModes(): void {
 
 async function runPay(event: Event): Promise<void> {
   event.preventDefault();
-  const target = negotiationTarget();
-  if (!target) return;
+  const selected = requireEnabled("pay");
+  if (!selected) return;
+  const target = selected[0];
   const built = buildPayArgs({
     mode: payMode(),
     address: inputValue("payAddress"),
@@ -507,7 +1369,11 @@ async function runPay(event: Event): Promise<void> {
     return;
   }
   try {
-    await addResponse(await backend.pay(target.psbt, built.value.payment, built.value.options), "pay");
+    await addResponse(
+      await backend.pay(target.psbt, built.value.payment, built.value.options),
+      "pay",
+      `payment record attached to ${target.key}`,
+    );
     logEvent(`payment record attached to ${target.key} (result added)`);
     showStatus("", false);
   } catch (error) {
@@ -517,8 +1383,9 @@ async function runPay(event: Event): Promise<void> {
 
 async function runConfirm(event: Event): Promise<void> {
   event.preventDefault();
-  const target = negotiationTarget();
-  if (!target) return;
+  const selected = requireEnabled("confirm");
+  if (!selected) return;
+  const target = selected[0];
   const built = buildConfirmArgs({
     mode: confirmMode(),
     confirmationHex: textareaValue("confirmHex"),
@@ -533,6 +1400,7 @@ async function runConfirm(event: Event): Promise<void> {
     await addResponse(
       await backend.confirm(target.psbt, built.value.confirmation, built.value.options),
       "confirm",
+      `confirmation attached to ${target.key}`,
     );
     logEvent(`confirmation attached to ${target.key} (result added)`);
     showStatus("", false);
@@ -543,8 +1411,9 @@ async function runConfirm(event: Event): Promise<void> {
 
 async function listPayments(event: Event): Promise<void> {
   event.preventDefault();
-  const target = negotiationTarget();
-  if (!target) return;
+  const selected = requireEnabled("payments");
+  if (!selected) return;
+  const target = selected[0];
   const secret = inputValue("paymentsSecretHex").trim();
   try {
     const response = await backend.payments(
@@ -570,9 +1439,25 @@ async function listPayments(event: Event): Promise<void> {
   }
 }
 
-// --- wiring -------------------------------------------------------------------
+// --- render root -----------------------------------------------------------------
 
-function wire(): void {
+function render(): void {
+  renderFocus();
+  renderWireStatus();
+  renderFragments();
+  renderObjects();
+  renderOps();
+  el<HTMLElement>("createWireTarget").hidden = !(wire.source && wire.source.kind === "utxo");
+}
+
+// --- wiring (DOM event hookup) -----------------------------------------------------
+
+function wireDom(): void {
+  for (const [id] of ACTION_BUTTONS) {
+    BASE_TITLE.set(id, el<HTMLButtonElement>(id).title);
+  }
+
+  el<HTMLButtonElement>("addObject").addEventListener("click", () => void addObject());
   el<HTMLButtonElement>("addV2").addEventListener("click", () => void addPasted("v2"));
   el<HTMLButtonElement>("addBip174").addEventListener("click", () => void addPasted("bip174"));
   el<HTMLInputElement>("uploadInput").addEventListener("change", () => void loadUpload());
@@ -584,6 +1469,35 @@ function wire(): void {
   el<HTMLButtonElement>("opAtomize").addEventListener("click", () => void atomizeSelected());
   el<HTMLButtonElement>("opExportV2").addEventListener("click", exportSelectedV2);
   el<HTMLButtonElement>("opExportBip174").addEventListener("click", () => void exportSelectedBip174());
+  // TODO(assign-ids): when the Backend seam method `assignIds(psbt)` lands,
+  // remove the pending-seam branch in wiring.js actionState("assign-ids")
+  // and call it here (result added as a new fragment). Manual per-output id
+  // entry already works through the field editor (Edit → unique id fields →
+  // the assign-uids fix or hand-typed ids), pending applyPsbtEdits.
+  el<HTMLButtonElement>("opAssignIds").addEventListener("click", () => {
+    const state = actionState("assign-ids", enablementContext());
+    showStatus(`assign ids: ${state.reason ?? "unavailable"} (needs backend: ${state.needsBackend ?? "assignIds"})`, true);
+  });
+
+  el<HTMLSelectElement>("displayNetwork").addEventListener("change", render);
+  el<HTMLButtonElement>("wireCancel").addEventListener("click", cancelWire);
+  el<HTMLButtonElement>("focusBack").addEventListener("click", () => {
+    focus = overviewFocus();
+    render();
+  });
+
+  el<HTMLFormElement>("newSessionForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const minted = mintSession(
+      objects,
+      inputValue("newSessionName"),
+      selectValue("newSessionTransport") as SyncTransport,
+    );
+    objects = minted.state;
+    el<HTMLInputElement>("newSessionName").value = "";
+    logEvent(`created ${minted.session.key} (${minted.session.name}, ${minted.session.transport})`);
+    render();
+  });
 
   el<HTMLFormElement>("createForm").addEventListener("submit", (event) => void createPsbt(event));
   el<HTMLButtonElement>("createAddInput").addEventListener("click", () => addCreateRow("input"));
@@ -594,9 +1508,17 @@ function wire(): void {
     crypto.getRandomValues(bytes);
     el<HTMLInputElement>("createSeed").value = seedFromRandomBytes(bytes);
   });
+  el<HTMLElement>("createWireTarget").addEventListener("click", () => {
+    if (wire.source?.kind === "utxo") {
+      wireTargetRef({ kind: "create", key: "create" });
+    }
+  });
 
   el<HTMLSelectElement>("syncTransport").addEventListener("change", renderSyncFields);
   el<HTMLFormElement>("syncForm").addEventListener("submit", (event) => void runSync(event));
+  el<HTMLButtonElement>("syncTicketCopy").addEventListener("click", () => {
+    copyText(el<HTMLTextAreaElement>("syncTicketBody").value, "iroh ticket");
+  });
 
   for (const id of ["payModeAddress", "payModeHex", "confirmModeDerive", "confirmModeHex"]) {
     el<HTMLInputElement>(id).addEventListener("change", renderNegotiationModes);
@@ -605,15 +1527,30 @@ function wire(): void {
   el<HTMLFormElement>("confirmForm").addEventListener("submit", (event) => void runConfirm(event));
   el<HTMLFormElement>("paymentsForm").addEventListener("submit", (event) => void listPayments(event));
 
+  el<HTMLButtonElement>("editorClose").addEventListener("click", () => {
+    editor = null;
+    el<HTMLElement>("editorPanel").hidden = true;
+  });
+  el<HTMLButtonElement>("editorValidate").addEventListener("click", () => {
+    if (!editor) return;
+    renderEditor(validateEditor(editor));
+  });
+  // #editorSave stays disabled: needs backend applyPsbtEdits (see the TODO
+  // in session.html); the title names the seam.
+
   el<HTMLButtonElement>("outputClose").addEventListener("click", () => {
     el<HTMLElement>("outputPanel").hidden = true;
+  });
+  el<HTMLButtonElement>("outputCopy").addEventListener("click", () => {
+    copyText(el<HTMLTextAreaElement>("outputBody").value, "output");
   });
 
   addCreateRow("input");
   addCreateRow("output");
   renderSyncFields();
   renderNegotiationModes();
+  setSyncState("idle", "");
   render();
 }
 
-wire();
+wireDom();
