@@ -41,10 +41,12 @@ pub(crate) fn create_psbt(config: CreateConfig) -> Result<Psbt> {
     psbt.global.set_unordered();
     match (config.ordering, config.seed) {
         (OrderingArg::Unset, Some(seed)) => {
+            super::require_spec_minimum_seed(seed.as_bytes(), config.allow_short_seed)?;
             psbt.global.set_sort_seed(seed.into_bytes());
         }
         (OrderingArg::Unset, None) => {}
         (OrderingArg::Deterministic, Some(seed)) => {
+            super::require_spec_minimum_seed(seed.as_bytes(), config.allow_short_seed)?;
             psbt.global.set_sort_seed(seed.into_bytes());
             psbt.global.set_sort_deterministic(0x01);
         }

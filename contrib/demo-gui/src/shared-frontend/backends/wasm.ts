@@ -20,6 +20,7 @@
 
 import type { Backend } from "../core/backend.js";
 import {
+  type AssignIdsOptions,
   type AtomizeResponse,
   type ConfirmationRecord,
   type ConfirmOptions,
@@ -51,12 +52,14 @@ export interface PtjWasmModule {
   // `request` is the snake_case JSON object (same shape ptj /api/create parses).
   create(request: unknown): PsbtResponse;
   join(psbts: string[]): PsbtResponse;
-  sort(psbt: string, seedHex?: string): PsbtResponse;
+  sort(psbt: string, seedHex?: string, allowShortSeed?: boolean): PsbtResponse;
   makeUnordered(psbt: string): PsbtResponse;
   atomize(psbt: string): AtomizeResponse;
   concatenate(psbts: string[]): PsbtResponse;
   exportBip174(psbt: string): ExportBip174Response;
-  importBip174(psbt: string): PsbtResponse;
+  importBip174(psbt: string, modifiable?: boolean): PsbtResponse;
+  // `request` is the snake_case JSON object (same shape ptj /api/assign-ids parses).
+  assignIds(request: unknown): PsbtResponse;
   // Negotiation band (opaque hex records; snake_case request objects).
   pay(request: unknown): PsbtResponse;
   confirm(request: unknown): PsbtResponse;
@@ -122,6 +125,7 @@ export class WasmBackend implements Backend {
         network: request.network,
         ordering: request.ordering,
         seed_hex: request.seedHex,
+        allow_short_seed: request.allowShortSeed,
         inputs: request.inputs,
         outputs: request.outputs.map((output) => ({
           address: output.address,
@@ -135,8 +139,8 @@ export class WasmBackend implements Backend {
     return wrap(() => this.m.join(psbts));
   }
 
-  async sortPsbt(psbt: string, seedHex?: string): Promise<PsbtResponse> {
-    return wrap(() => this.m.sort(psbt, seedHex));
+  async sortPsbt(psbt: string, seedHex?: string, allowShortSeed?: boolean): Promise<PsbtResponse> {
+    return wrap(() => this.m.sort(psbt, seedHex, allowShortSeed));
   }
 
   async makeUnordered(psbt: string): Promise<PsbtResponse> {
@@ -155,8 +159,19 @@ export class WasmBackend implements Backend {
     return wrap(() => this.m.exportBip174(psbt));
   }
 
-  async importBip174(psbt: string): Promise<PsbtResponse> {
-    return wrap(() => this.m.importBip174(psbt));
+  async importBip174(psbt: string, modifiable?: boolean): Promise<PsbtResponse> {
+    return wrap(() => this.m.importBip174(psbt, modifiable));
+  }
+
+  async assignIds(psbt: string, options?: AssignIdsOptions): Promise<PsbtResponse> {
+    return wrap(() =>
+      this.m.assignIds({
+        psbt,
+        ids: options?.ids,
+        auto: options?.auto,
+        overwrite: options?.overwrite,
+      })
+    );
   }
 
   // --- negotiation band (opaque hex records; snake_case wire fields) ---

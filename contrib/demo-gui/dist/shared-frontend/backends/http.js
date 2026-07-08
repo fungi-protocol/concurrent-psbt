@@ -50,6 +50,7 @@ export class HttpBackend {
             network: request.network,
             ordering: request.ordering,
             seed_hex: request.seedHex,
+            allow_short_seed: request.allowShortSeed,
             inputs: request.inputs,
             outputs: request.outputs.map((output) => ({
                 address: output.address,
@@ -60,8 +61,8 @@ export class HttpBackend {
     joinPsbts(psbts) {
         return this.postJson("/api/join", { psbts });
     }
-    sortPsbt(psbt, seedHex) {
-        return this.postJson("/api/sort", { psbt, seed_hex: seedHex });
+    sortPsbt(psbt, seedHex, allowShortSeed) {
+        return this.postJson("/api/sort", { psbt, seed_hex: seedHex, allow_short_seed: allowShortSeed });
     }
     makeUnordered(psbt) {
         return this.postJson("/api/make-unordered", { psbt });
@@ -75,8 +76,16 @@ export class HttpBackend {
     exportBip174(psbt) {
         return this.postJson("/api/export-bip174", { psbt });
     }
-    importBip174(psbt) {
-        return this.postJson("/api/import-bip174", { psbt });
+    importBip174(psbt, modifiable) {
+        return this.postJson("/api/import-bip174", { psbt, modifiable });
+    }
+    assignIds(psbt, options) {
+        return this.postJson("/api/assign-ids", {
+            psbt,
+            ids: options?.ids,
+            auto: options?.auto,
+            overwrite: options?.overwrite,
+        });
     }
     // Negotiation band: served by the webgui's /api/{pay,confirm,payments}
     // routes (crates/ptj/src/webgui.rs pay_response/confirm_response/

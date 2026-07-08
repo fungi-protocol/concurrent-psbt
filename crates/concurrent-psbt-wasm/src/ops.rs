@@ -26,7 +26,7 @@ use concurrent_psbt::Join as _;
 use concurrent_psbt::global::GlobalSortExt as _;
 use concurrent_psbt::roles::Creator;
 use concurrent_psbt::roles::constructor::dynamic;
-use concurrent_psbt::sorter::{Deterministic, ExplicitSortKeys, Sorter, Unset};
+use concurrent_psbt::sorter::{Deterministic, ExplicitSortKeys, SeedPolicy, Sorter, Unset};
 use psbt_v2::v2::{Global, Input, Output, Psbt};
 use serde_json::{Value, json};
 
@@ -63,7 +63,11 @@ pub fn inspect(psbt: &str) -> Result<Value, String> {
 pub fn create(req: dto::CreateRequest) -> Result<Value, String> {
     let network = parse_network(req.network.as_deref())?;
     let ordering = parse_ordering(req.ordering.as_deref())?;
-    let seed = req.seed_hex.as_deref().map(decode_hex).transpose()?;
+    let seed = req
+        .seed_hex
+        .as_deref()
+        .map(crate::bytes_arg::parse_bytes_arg)
+        .transpose()?;
     let has_items = !req.inputs.is_empty() || !req.outputs.is_empty();
 
     let mut constructor = Creator::new().build();
@@ -97,9 +101,13 @@ pub fn create(req: dto::CreateRequest) -> Result<Value, String> {
     psbt.global.set_unordered();
     // Mirror commands/create.rs ordering/seed matrix exactly.
     match (ordering, seed) {
-        (Ordering::Unset, Some(seed)) => psbt.global.set_sort_seed(seed),
+        (Ordering::Unset, Some(seed)) => {
+            require_spec_minimum_seed(&seed, req.allow_short_seed)?;
+            psbt.global.set_sort_seed(seed);
+        }
         (Ordering::Unset, None) => {}
         (Ordering::Deterministic, Some(seed)) => {
+            require_spec_minimum_seed(&seed, req.allow_short_seed)?;
             psbt.global.set_sort_seed(seed);
             psbt.global.set_sort_deterministic(0x01);
         }
@@ -163,24 +171,50 @@ fn join_psbts(psbts: Vec<Psbt>) -> Result<Psbt, String> {
 
 // --- sort ----------------------------------------------------------------
 
-/// Canonical arity: `(psbt, seed_hex?)` — mirrors `Backend.sortPsbt(psbt, seedHex?)`.
-pub fn sort(psbt: &str, seed_hex: Option<&str>) -> Result<Value, String> {
-    let seed = seed_hex.map(decode_hex).transpose()?;
+/// Canonical arity: `(psbt, seed_hex?, allow_short_seed?)` — mirrors
+/// `Backend.sortPsbt(psbt, seedHex?, allowShortSeed?)`.
+pub fn sort(psbt: &str, seed_hex: Option<&str>, allow_short_seed: bool) -> Result<Value, String> {
+    let seed = seed_hex
+        .map(crate::bytes_arg::parse_bytes_arg)
+        .transpose()?;
     let psbt = parse_psbt_str("request psbt", psbt)?;
     let constructor = dynamic::Constructor::try_from_psbt(psbt)
         .map_err(|e| format!("request psbt: {e}"))?;
     let mut unordered = constructor.into_inner();
     if let Some(seed) = seed {
+        require_spec_minimum_seed(&seed, allow_short_seed)?;
         unordered.global.set_sort_seed(seed);
     }
-    // Port of commands/sort.rs::sort_psbt.
+    let policy = if allow_short_seed {
+        SeedPolicy::AllowBelowSpecMinimum
+    } else {
+        SeedPolicy::RequireSpecMinimum
+    };
+    // Port of commands/sort.rs::sort_psbt (embedded deterministic-mode seeds
+    // are gated by the library under the same override).
     let sorted = match unordered.global.sort_deterministic() {
-        Some(0x01) => Sorter::<Deterministic>::from_unordered_psbt(unordered).into_ordered_psbt(),
+        Some(0x01) => {
+            Sorter::<Deterministic>::from_unordered_psbt(unordered).into_ordered_psbt_with(policy)
+        }
         Some(0x00) => Sorter::<ExplicitSortKeys>::from_unordered_psbt(unordered).into_ordered_psbt(),
         _ => Sorter::<Unset>::from_unordered_psbt(unordered).into_ordered_psbt(),
     }
     .map_err(|e| e.to_string())?;
     Ok(psbt_response(&sorted))
+}
+
+/// Port of ptj commands::require_spec_minimum_seed — identical error text so
+/// the two backends stay indistinguishable through the seam.
+fn require_spec_minimum_seed(seed: &[u8], allow_short_seed: bool) -> Result<(), String> {
+    let len = seed.len();
+    if allow_short_seed || len >= concurrent_psbt::sorter::SPEC_MIN_SEED_BYTES {
+        return Ok(());
+    }
+    Err(format!(
+        "ordering seed is {len} byte{}; the spec requires at least 128 bits (16 bytes) of \
+         randomness; pass --allow-short-seed (allow_short_seed on the web API) to accept it anyway",
+        if len == 1 { "" } else { "s" },
+    ))
 }
 
 // --- make-unordered ------------------------------------------------------
@@ -307,10 +341,117 @@ pub fn export_bip174(psbt: &str) -> Result<Value, String> {
     Ok(json!({ "format": "bip174", "psbt": exported }))
 }
 
-pub fn import_bip174(psbt: &str) -> Result<Value, String> {
+pub fn import_bip174(psbt: &str, modifiable: bool) -> Result<Value, String> {
     let psbt = parse_bip174("request psbt", psbt.as_bytes())?;
-    let imported = bip174_convert::import_bip174_psbt(psbt)?;
+    let imported = bip174_convert::import_bip174_psbt(psbt, modifiable)?;
     Ok(psbt_response(&imported))
+}
+
+// --- assign-ids ------------------------------------------------------------
+
+/// Port of ptj commands/assign_ids.rs (+ webgui parse_id_assignments) — the
+/// same semantics and error text as `/api/assign-ids`.
+pub fn assign_ids(req: dto::AssignIdsRequest) -> Result<Value, String> {
+    use concurrent_psbt::output::{OutputUniqueIdExt as _, UniqueId};
+    use concurrent_psbt::removal::InputUniqueIdExt;
+
+    let mut psbt = parse_psbt_str("request psbt", &req.psbt)?;
+    let ids = req
+        .ids
+        .iter()
+        .enumerate()
+        .map(|(position, item)| {
+            let target = match item.target.as_str() {
+                "in" | "input" => IdTarget::Input,
+                "out" | "output" => IdTarget::Output,
+                other => {
+                    return Err(format!(
+                        "request JSON ids[{position}].target must be `in` or `out`, got {other}"
+                    ));
+                }
+            };
+            let id = crate::bytes_arg::parse_bytes_arg(&item.id)?;
+            Ok((target, item.index, id))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let auto = req.auto || ids.is_empty();
+
+    for (target, index, id) in &ids {
+        match target {
+            IdTarget::Input => {
+                let count = psbt.inputs.len();
+                let input = psbt.inputs.get_mut(*index).ok_or_else(|| {
+                    format!(
+                        "--id in:{index}: input index out of range ({count} input{})",
+                        if count == 1 { "" } else { "s" },
+                    )
+                })?;
+                match InputUniqueIdExt::unique_id(input) {
+                    Some(existing) if existing == *id => {}
+                    Some(_) if !req.overwrite => {
+                        return Err(format!(
+                            "--id in:{index}: input already has a different PSBT_IN_UNIQUE_ID; \
+                             pass --overwrite to replace it"
+                        ));
+                    }
+                    _ => input.set_unique_id(id.clone()),
+                }
+            }
+            IdTarget::Output => {
+                let count = psbt.outputs.len();
+                let output = psbt.outputs.get_mut(*index).ok_or_else(|| {
+                    format!(
+                        "--id out:{index}: output index out of range ({count} output{})",
+                        if count == 1 { "" } else { "s" },
+                    )
+                })?;
+                match output.unique_id() {
+                    Some(existing) if existing.as_bytes() == id => {}
+                    Some(_) if !req.overwrite => {
+                        return Err(format!(
+                            "--id out:{index}: output already has a different PSBT_OUT_UNIQUE_ID; \
+                             pass --overwrite to replace it"
+                        ));
+                    }
+                    _ => output.set_unique_id(UniqueId::new(id.clone())),
+                }
+            }
+        }
+    }
+
+    if auto {
+        for output in &mut psbt.outputs {
+            if !output.has_unique_id() {
+                output.set_unique_id(UniqueId::generate());
+            }
+        }
+    }
+
+    // Manual output ids colliding with any other output defeat uniqueness.
+    for (target, index, id) in &ids {
+        if *target != IdTarget::Output {
+            continue;
+        }
+        for (other, output) in psbt.outputs.iter().enumerate() {
+            if other == *index {
+                continue;
+            }
+            if output.unique_id().map(UniqueId::into_bytes).as_deref() == Some(id.as_slice()) {
+                return Err(format!(
+                    "--id out:{index}: the id is already used by output {other}; \
+                     PSBT_OUT_UNIQUE_ID must be unique"
+                ));
+            }
+        }
+    }
+
+    Ok(psbt_response(&psbt))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdTarget {
+    Input,
+    Output,
 }
 
 // --- sync (local branch) ---------------------------------------------------
@@ -354,8 +495,12 @@ pub fn local_sync(psbts: Vec<String>) -> Result<Value, String> {
 
 pub fn pay(req: dto::PayRequest) -> Result<Value, String> {
     let mut psbt = parse_psbt_str("request psbt", &req.psbt)?;
-    let record = decode_hex(&req.payment_hex)?;
-    let secret = req.secret_hex.as_deref().map(decode_hex).transpose()?;
+    let record = crate::bytes_arg::parse_bytes_arg(&req.payment_hex)?;
+    let secret = req
+        .secret_hex
+        .as_deref()
+        .map(crate::bytes_arg::parse_bytes_arg)
+        .transpose()?;
     if req.dummy > 0 && secret.is_none() {
         return Err(
             "dummy padding requires secret_hex; plaintext dummies are trivially distinguishable"
@@ -372,15 +517,23 @@ pub fn pay(req: dto::PayRequest) -> Result<Value, String> {
 
 pub fn confirm(req: dto::ConfirmRequest) -> Result<Value, String> {
     let mut psbt = parse_psbt_str("request psbt", &req.psbt)?;
-    let record = decode_hex(&req.confirmation_hex)?;
-    let secret = req.secret_hex.as_deref().map(decode_hex).transpose()?;
+    let record = crate::bytes_arg::parse_bytes_arg(&req.confirmation_hex)?;
+    let secret = req
+        .secret_hex
+        .as_deref()
+        .map(crate::bytes_arg::parse_bytes_arg)
+        .transpose()?;
     crate::negotiation::add_confirmation(&mut psbt, &record, secret.as_deref())?;
     Ok(psbt_response(&psbt))
 }
 
 pub fn payments(req: dto::PaymentsRequest) -> Result<Value, String> {
     let psbt = parse_psbt_str("request psbt", &req.psbt)?;
-    let secret = req.secret_hex.as_deref().map(decode_hex).transpose()?;
+    let secret = req
+        .secret_hex
+        .as_deref()
+        .map(crate::bytes_arg::parse_bytes_arg)
+        .transpose()?;
     let (payments, confirmations) = crate::negotiation::decode_band(&psbt, secret.as_deref())?;
     Ok(json!({ "payments": payments, "confirmations": confirmations }))
 }
@@ -419,32 +572,6 @@ fn parse_network(value: Option<&str>) -> Result<Network, String> {
     }
 }
 
-/// Port of cli.rs decode_hex (used by HexSeed/Hex32). Error text matches the
-/// CLI/webgui exactly ("hex string has odd length: {value}" / "invalid hex:
-/// {value}") so seed_hex/secret_hex validation is indistinguishable.
-pub(crate) fn decode_hex(value: &str) -> Result<Vec<u8>, String> {
-    if !value.len().is_multiple_of(2) {
-        return Err(format!("hex string has odd length: {value}"));
-    }
-    value
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| {
-            let high = hex_nibble(pair[0]).ok_or_else(|| format!("invalid hex: {value}"))?;
-            let low = hex_nibble(pair[1]).ok_or_else(|| format!("invalid hex: {value}"))?;
-            Ok((high << 4) | low)
-        })
-        .collect()
-}
-
-fn hex_nibble(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -456,6 +583,9 @@ mod tests {
 
     use super::*;
 
+    /// A 16-byte (spec-minimum) ordering seed, matching the webgui tests.
+    const SEED: &str = "abcdabcdabcdabcdabcdabcdabcdabcd";
+
     // A minimal empty regtest PSBT (base64), built the same way create() does,
     // to round-trip through the ops without needing ptj fixtures.
     fn empty_regtest_psbt() -> String {
@@ -463,6 +593,7 @@ mod tests {
             network: Some("regtest".to_string()),
             ordering: None,
             seed_hex: None,
+            allow_short_seed: false,
             inputs: vec![],
             outputs: vec![],
         })
@@ -475,7 +606,8 @@ mod tests {
         let v = create(dto::CreateRequest {
             network: Some("regtest".to_string()),
             ordering: Some("deterministic".to_string()),
-            seed_hex: Some("abcd".to_string()),
+            seed_hex: Some(SEED.to_string()),
+            allow_short_seed: false,
             inputs: vec![dto::CreateInput {
                 txid: "0000000000000000000000000000000000000000000000000000000000000001"
                     .to_string(),
@@ -488,7 +620,7 @@ mod tests {
         assert_eq!(v["inspect"]["ordering"], "unordered");
         assert_eq!(v["inspect"]["input_count"], 1);
         assert_eq!(v["inspect"]["sort"]["mode"], "deterministic");
-        assert_eq!(v["inspect"]["sort"]["seed_hex"], "abcd");
+        assert_eq!(v["inspect"]["sort"]["seed_hex"], SEED);
     }
 
     #[test]
@@ -497,11 +629,52 @@ mod tests {
             network: Some("regtest".to_string()),
             ordering: Some("deterministic".to_string()),
             seed_hex: None,
+            allow_short_seed: false,
             inputs: vec![],
             outputs: vec![],
         })
         .unwrap_err();
         assert!(err.contains("deterministic ordering requires seed_hex"), "{err}");
+    }
+
+    #[test]
+    fn create_rejects_short_seed_unless_overridden() {
+        let request = |allow: bool| dto::CreateRequest {
+            network: Some("regtest".to_string()),
+            ordering: Some("deterministic".to_string()),
+            seed_hex: Some("abcd".to_string()),
+            allow_short_seed: allow,
+            inputs: vec![],
+            outputs: vec![],
+        };
+        let err = create(request(false)).unwrap_err();
+        assert!(err.contains("128 bits"), "{err}");
+        assert!(err.contains("allow_short_seed"), "{err}");
+
+        let v = create(request(true)).expect("override accepts the short seed");
+        assert_eq!(v["inspect"]["sort"]["seed_hex"], "abcd");
+    }
+
+    #[test]
+    fn sort_rejects_short_seed_unless_overridden() {
+        let created = created_with_output(3);
+        let err = sort(&created, Some("deadbeef"), false).unwrap_err();
+        assert!(err.contains("128 bits"), "{err}");
+
+        let sorted = sort(&created, Some("deadbeef"), true).expect("override sorts");
+        assert_eq!(sorted["inspect"]["ordering"], "ordered");
+    }
+
+    #[test]
+    fn seed_accepts_base58_and_bech32_like_the_cli() {
+        // Liberal parsing parity: a bech32 seed decodes to its 16-byte data
+        // part and satisfies the spec minimum.
+        use bitcoin::bech32::{self, Hrp};
+        let seed = bech32::encode::<bech32::Bech32m>(Hrp::parse("seed").unwrap(), &[0xab; 16])
+            .unwrap();
+        let created = created_with_output(4);
+        let sorted = sort(&created, Some(&seed), false).expect("bech32 seed sorts");
+        assert_eq!(sorted["inspect"]["sort"]["seed_hex"], "ab".repeat(16));
     }
 
     #[test]
@@ -532,10 +705,9 @@ mod tests {
 
     #[test]
     fn decode_hex_odd_length_matches_cli() {
-        assert_eq!(
-            decode_hex("abc").unwrap_err(),
-            "hex string has odd length: abc"
-        );
+        // Via the liberal parser (hex charset -> hex), same "odd length" text.
+        let err = crate::bytes_arg::parse_bytes_arg("abc").unwrap_err();
+        assert!(err.contains("hex string has odd length: abc"), "{err}");
     }
 
     // --- ports of the richer op tests from the merged ptj-wasm duplicate ---
@@ -552,7 +724,8 @@ mod tests {
         let v = create(dto::CreateRequest {
             network: Some("regtest".to_string()),
             ordering: None,
-            seed_hex: Some("abcd".to_string()),
+            seed_hex: Some(SEED.to_string()),
+            allow_short_seed: false,
             inputs: vec![dto::CreateInput { txid: format!("{seed_byte:064x}"), vout }],
             outputs: vec![],
         })
@@ -564,7 +737,8 @@ mod tests {
         let v = create(dto::CreateRequest {
             network: Some("regtest".to_string()),
             ordering: None,
-            seed_hex: Some("abcd".to_string()),
+            seed_hex: Some(SEED.to_string()),
+            allow_short_seed: false,
             inputs: vec![dto::CreateInput { txid: format!("{seed_byte:064x}"), vout: 7 }],
             outputs: vec![dto::CreateOutput {
                 address: regtest_address(seed_byte),
@@ -577,14 +751,14 @@ mod tests {
 
     fn ordered_with_output(seed_byte: u8) -> String {
         let unordered = created_with_output(seed_byte);
-        let sorted = sort(&unordered, Some("abcd")).expect("sort");
+        let sorted = sort(&unordered, Some(SEED), false).expect("sort");
         sorted["psbt"].as_str().unwrap().to_string()
     }
 
     #[test]
     fn sort_then_make_unordered_toggles_ordering() {
         let created = created_with_output(5);
-        let sorted = sort(&created, Some("deadbeef")).expect("sort ok");
+        let sorted = sort(&created, Some("deadbeefdeadbeefdeadbeefdeadbeef"), false).expect("sort ok");
         assert_eq!(sorted["inspect"]["ordering"], "ordered");
 
         let unordered =
@@ -596,7 +770,7 @@ mod tests {
     fn sort_without_seed_uses_unset_mode() {
         // Canonical two-arg sort: the seed is optional (Backend.sortPsbt(psbt)).
         let created = created_with_output(9);
-        let sorted = sort(&created, None).expect("sort ok");
+        let sorted = sort(&created, None, false).expect("sort ok");
         assert_eq!(sorted["inspect"]["ordering"], "ordered");
     }
 
@@ -623,11 +797,115 @@ mod tests {
         let exported = export_bip174(&ordered).expect("export ok");
         assert_eq!(exported["format"], "bip174");
 
-        let imported = import_bip174(exported["psbt"].as_str().unwrap()).expect("import ok");
+        let imported =
+            import_bip174(exported["psbt"].as_str().unwrap(), false).expect("import ok");
         assert_eq!(imported["inspect"]["format"], "bip370");
         assert_eq!(imported["inspect"]["ordering"], "ordered");
         assert_eq!(imported["inspect"]["input_count"], 1);
         assert_eq!(imported["inspect"]["output_count"], 1);
+        // Strict default: BIP 174 has no TX_MODIFIABLE, so nothing is modifiable.
+        assert_eq!(imported["inspect"]["modifiability"]["inputs"], false);
+        assert_eq!(imported["inspect"]["modifiability"]["outputs"], false);
+
+        let modifiable =
+            import_bip174(exported["psbt"].as_str().unwrap(), true).expect("import ok");
+        assert_eq!(modifiable["inspect"]["modifiability"]["inputs"], true);
+        assert_eq!(modifiable["inspect"]["modifiability"]["outputs"], true);
+    }
+
+    #[test]
+    fn assign_ids_completes_the_import_round_trip_like_the_cli() {
+        use concurrent_psbt::output::OutputUniqueIdExt as _;
+
+        // Strip the unique ids so the export looks like a foreign BIP 174.
+        let ordered = ordered_with_output(1);
+        let mut bare = parse_psbt_str("fixture", &ordered).unwrap();
+        for output in &mut bare.outputs {
+            output.proprietaries.clear();
+        }
+        let exported = export_bip174(&encode_psbt(&bare)).expect("export ok");
+        let imported =
+            import_bip174(exported["psbt"].as_str().unwrap(), true).expect("import ok");
+        let imported_psbt = imported["psbt"].as_str().unwrap();
+
+        // Previously failed here: no PSBT_OUT_UNIQUE_ID.
+        let err = make_unordered(imported_psbt).unwrap_err();
+        assert!(err.contains("PSBT_OUT_UNIQUE_ID"), "{err}");
+
+        let assigned = assign_ids(dto::AssignIdsRequest {
+            psbt: imported_psbt.to_string(),
+            ids: vec![],
+            auto: false,
+            overwrite: false,
+        })
+        .expect("assign ids");
+        let assigned_psbt = assigned["psbt"].as_str().unwrap();
+        let parsed = parse_psbt_str("assigned", assigned_psbt).unwrap();
+        assert!(parsed.outputs.iter().all(|output| output.has_unique_id()));
+
+        let unordered = make_unordered(assigned_psbt).expect("make unordered");
+        assert_eq!(unordered["inspect"]["ordering"], "unordered");
+
+        // Idempotent second pass returns the identical PSBT.
+        let again = assign_ids(dto::AssignIdsRequest {
+            psbt: assigned_psbt.to_string(),
+            ids: vec![],
+            auto: false,
+            overwrite: false,
+        })
+        .expect("assign ids again");
+        assert_eq!(again["psbt"], assigned["psbt"]);
+    }
+
+    #[test]
+    fn assign_ids_manual_directives_match_the_route_contract() {
+        use concurrent_psbt::output::OutputUniqueIdExt as _;
+
+        let ordered = ordered_with_output(2);
+        let mut bare = parse_psbt_str("fixture", &ordered).unwrap();
+        for output in &mut bare.outputs {
+            output.proprietaries.clear();
+        }
+        let assigned = assign_ids(dto::AssignIdsRequest {
+            psbt: encode_psbt(&bare),
+            ids: vec![
+                dto::IdAssignment {
+                    target: "out".to_string(),
+                    index: 0,
+                    id: "0102030405060708090a0b0c0d0e0f10".to_string(),
+                },
+                dto::IdAssignment {
+                    target: "in".to_string(),
+                    index: 0,
+                    id: "aa11".to_string(),
+                },
+            ],
+            auto: false,
+            overwrite: false,
+        })
+        .expect("assign ids");
+        let parsed = parse_psbt_str("assigned", assigned["psbt"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            parsed.outputs[0].unique_id().unwrap().into_bytes(),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+        );
+        assert_eq!(
+            concurrent_psbt::removal::InputUniqueIdExt::unique_id(&parsed.inputs[0]),
+            Some(vec![0xaa, 0x11]),
+        );
+
+        let err = assign_ids(dto::AssignIdsRequest {
+            psbt: assigned["psbt"].as_str().unwrap().to_string(),
+            ids: vec![dto::IdAssignment {
+                target: "out".to_string(),
+                index: 0,
+                id: "ffff".to_string(),
+            }],
+            auto: false,
+            overwrite: false,
+        })
+        .unwrap_err();
+        assert!(err.contains("--overwrite"), "{err}");
     }
 
     #[test]

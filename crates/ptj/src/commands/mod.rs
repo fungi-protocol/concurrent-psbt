@@ -1,10 +1,17 @@
+pub(crate) mod assign_ids;
 pub(crate) mod atomize;
+#[cfg(feature = "webgui")]
+pub(crate) mod classify;
 pub(crate) mod concatenate;
 pub(crate) mod create;
 pub(crate) mod export_bip174;
+#[cfg(feature = "webgui")]
+pub(crate) mod field_edit;
 pub(crate) mod import_bip174;
 pub(crate) mod inspect;
 pub(crate) mod join;
+#[cfg(feature = "webgui")]
+pub(crate) mod lifehash;
 pub(crate) mod make_unordered;
 pub(crate) mod negotiation;
 pub(crate) mod sort;
@@ -20,6 +27,9 @@ pub(crate) fn run(command: Command) -> Result<String> {
 pub(crate) fn run_with_stdin(command: Command, stdin: Option<&[u8]>) -> Result<String> {
     validate_stdin_shape(&command, stdin)?;
     match command {
+        Command::AssignIds(config) => {
+            assign_ids::run(config, stdin).map(|psbt| crate::io::encode_psbt(&psbt))
+        }
         Command::Atomize(config) => atomize::run(config, stdin),
         Command::Concatenate(config) => {
             concatenate::run(config, stdin).map(|psbt| crate::io::encode_psbt(&psbt))
@@ -79,6 +89,25 @@ pub(crate) fn validate_ongoing_sync(
 
 pub(crate) fn sync_poll_interval(config: &crate::cli::SyncConfig) -> std::time::Duration {
     sync::poll_interval(config)
+}
+
+/// Boundary gate for user-supplied ordering seeds, in every ordering mode.
+///
+/// The spec states the 128-bit minimum as a MUST for deterministic ordering
+/// (`PSBT_GLOBAL_SORT_DETERMINISTIC = 0x01`); a seed supplied without the flag
+/// feeds the identical derivation (`H(seed || id)`), so the same minimum is
+/// applied at the acceptance boundary. Strict by default, overridable always:
+/// `--allow-short-seed` / `allow_short_seed` accepts a short seed explicitly.
+pub(crate) fn require_spec_minimum_seed(seed: &[u8], allow_short_seed: bool) -> Result<()> {
+    let len = seed.len();
+    if allow_short_seed || len >= concurrent_psbt::sorter::SPEC_MIN_SEED_BYTES {
+        return Ok(());
+    }
+    Err(Error::new(format!(
+        "ordering seed is {len} byte{}; the spec requires at least 128 bits (16 bytes) of \
+         randomness; pass --allow-short-seed (allow_short_seed on the web API) to accept it anyway",
+        if len == 1 { "" } else { "s" },
+    )))
 }
 
 fn validate_stdin_shape(command: &Command, stdin: Option<&[u8]>) -> Result<()> {
