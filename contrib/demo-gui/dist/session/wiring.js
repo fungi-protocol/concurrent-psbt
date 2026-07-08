@@ -16,8 +16,18 @@
 //                          transport                     (/api/sync, backed)
 //   payment  → fragment  = attach the payment record    (/api/pay, backed)
 //   utxo     → create    = use the outpoint as a create-form input (backed)
-//   session  ⋈ session   = merge converging states      (needs backend)
-//   peer     ⋈ peer      = standalone channel           (needs backend)
+//   session  ⋈ session   = MERGE: sessions are fragment-state carriers, so
+//                          the merge joins their fragment states (via the
+//                          join route) and UNIONS their peer connections —
+//                          peers of both see the combined session. Client-
+//                          orchestrated over the UI model + /api/join; a
+//                          future backend session-state seam would own the
+//                          server-side converging state.
+//   peer     ⋈ peer      = BRIDGE: the group renders as one peer and every
+//                          member receives every broadcast — equivalent to
+//                          wiring the session to each member. UI grouping;
+//                          broadcasts go through the existing per-member
+//                          sync where a transport is configured.
 //   descriptor → fragment = attribute matching scripts  (needs backend)
 //
 // Pairs with no backend seam yet stay VISIBLE but explicitly unwired
@@ -31,7 +41,15 @@
 // authority. Nothing is bypassed silently.
 import { asArray, asNumber, asObject, asString } from "./state.js";
 export function emptyObjects() {
-    return { sessions: [], peers: [], payments: [], utxos: [], descriptors: [], counter: 0 };
+    return {
+        sessions: [],
+        peers: [],
+        payments: [],
+        utxos: [],
+        descriptors: [],
+        bridges: [],
+        counter: 0,
+    };
 }
 function nextKey(state, prefix) {
     const counter = state.counter + 1;
@@ -245,6 +263,130 @@ export function dropFragmentKey(state, fragmentKey) {
             : session),
     };
 }
+export function mergeSessions(state, leftKey, rightKey) {
+    const left = sessionByKey(state, leftKey);
+    const right = sessionByKey(state, rightKey);
+    if (!left || !right || left.key === right.key) {
+        return { state, merged: null, notes: [] };
+    }
+    const notes = [];
+    if (right.transport !== left.transport) {
+        notes.push(`transport conflict: ${left.name} uses ${left.transport}, ${right.name} uses ` +
+            `${right.transport}; the merged session keeps ${left.transport}`);
+    }
+    if (left.irohTicket && right.irohTicket && left.irohTicket !== right.irohTicket) {
+        notes.push(`both sessions carry an iroh ticket; the merged session keeps ${left.name}'s ` +
+            "(the other document is no longer addressed)");
+    }
+    notes.push("server-side session state (if any) is NOT merged — the UI-model merge joins " +
+        "fragment states via /api/join and unions peer connections; a backend " +
+        "session-state merge seam would own the converging state itself");
+    const next = nextKey(state, "session");
+    const merged = {
+        key: next.key,
+        name: `${left.name}+${right.name}`,
+        fragmentKeys: [
+            ...left.fragmentKeys,
+            ...right.fragmentKeys.filter((key) => !left.fragmentKeys.includes(key)),
+        ],
+        transport: left.transport,
+        irohTicket: left.irohTicket || right.irohTicket,
+        stateFile: left.stateFile || right.stateFile,
+        peerKeys: [...left.peerKeys, ...right.peerKeys.filter((key) => !left.peerKeys.includes(key))],
+    };
+    return {
+        state: {
+            ...next.state,
+            sessions: [
+                ...next.state.sessions.filter((session) => session.key !== left.key && session.key !== right.key),
+                merged,
+            ],
+        },
+        merged,
+        notes,
+    };
+}
+// ---------------------------------------------------------------------------
+// Peer bridges (peer ⋈ peer, per Q3): a bridge renders the group as ONE
+// peer where every member receives every broadcast — equivalent to wiring
+// the session to each member. Pure UI grouping over grow-only bridge edges;
+// the shell broadcasts through the existing per-member sync where a member
+// has a configured transport.
+// ---------------------------------------------------------------------------
+function bridgePairKey(a, b) {
+    return [a, b].sort().join("::");
+}
+export function addBridge(state, aKey, bKey) {
+    if (aKey === bKey)
+        return state;
+    const key = bridgePairKey(aKey, bKey);
+    if (state.bridges.some((bridge) => bridgePairKey(bridge.a, bridge.b) === key)) {
+        return state;
+    }
+    return { ...state, bridges: [...state.bridges, { a: aKey, b: bKey }] };
+}
+// Connected components over the bridge edges, in peer-list order (the
+// demo's peerBridgeComponents). Singleton groups are included: every peer
+// belongs to exactly one group.
+export function peerBridgeGroups(state) {
+    const peerKeys = state.peers.map((peer) => peer.key);
+    const order = new Map(peerKeys.map((key, index) => [key, index]));
+    const adjacency = new Map(peerKeys.map((key) => [key, new Set()]));
+    for (const bridge of state.bridges) {
+        if (!adjacency.has(bridge.a) || !adjacency.has(bridge.b))
+            continue;
+        adjacency.get(bridge.a).add(bridge.b);
+        adjacency.get(bridge.b).add(bridge.a);
+    }
+    const groups = [];
+    const seen = new Set();
+    for (const peerKey of peerKeys) {
+        if (seen.has(peerKey))
+            continue;
+        const stack = [peerKey];
+        const group = [];
+        while (stack.length) {
+            const current = stack.pop();
+            if (seen.has(current))
+                continue;
+            seen.add(current);
+            group.push(current);
+            for (const next of adjacency.get(current))
+                stack.push(next);
+        }
+        groups.push(group.sort((a, b) => Number(order.get(a)) - Number(order.get(b))));
+    }
+    return groups;
+}
+export function bridgeGroupContaining(state, peerKey) {
+    return peerBridgeGroups(state).find((group) => group.includes(peerKey)) ?? [peerKey];
+}
+// After a bridge lands, every session already wired to ANY member of the
+// group is wired to EVERY member (the Q3 equivalence: bridging = wiring the
+// session to each member). Idempotent.
+export function unionBridgedPeersIntoSessions(state) {
+    const groups = peerBridgeGroups(state).filter((group) => group.length > 1);
+    if (!groups.length)
+        return state;
+    return {
+        ...state,
+        sessions: state.sessions.map((session) => {
+            let peerKeys = session.peerKeys;
+            for (const group of groups) {
+                if (group.some((peerKey) => peerKeys.includes(peerKey))) {
+                    peerKeys = [...peerKeys, ...group.filter((peerKey) => !peerKeys.includes(peerKey))];
+                }
+            }
+            return peerKeys === session.peerKeys ? session : { ...session, peerKeys };
+        }),
+    };
+}
+// A member with a transport /api/sync can drive today. Members without one
+// (nostr, unconfigured) stay visible in the group; broadcasts to them are
+// reported pending-backend by the shell.
+export function peerUsableForSync(peer) {
+    return peer.transport !== "nostr" && peer.transport !== "unknown" && peer.identity !== "";
+}
 function verdict(kind, allowed, backed, reason = null, needs = null, label = null) {
     return { kind, allowed, backed, reason, needs, label };
 }
@@ -302,7 +444,24 @@ export function wireVerdict(source, target, state) {
         const peer = peerByKey(state, peerKey);
         const sessionName = a === "session" ? sourceName : targetName;
         const peerName = a === "peer" ? sourceName : targetName;
-        const label = `Sync session ${sessionName} over peer ${peerName}`;
+        // A bridged peer stands for its whole group: the session is wired to
+        // each member, so the wire is admissible when ANY member can sync.
+        const group = bridgeGroupContaining(state, peerKey)
+            .map((memberKey) => peerByKey(state, memberKey))
+            .filter((member) => member !== null);
+        const groupLabel = group.length > 1
+            ? `bridge ${group.map((member) => member.name).join("+")}`
+            : `peer ${peerName}`;
+        const label = `Sync session ${sessionName} over ${groupLabel}`;
+        if (group.length > 1) {
+            if (group.some(peerUsableForSync)) {
+                return verdict("peer-into-session", true, true, null, null, label);
+            }
+            if (group.every((member) => member.transport === "nostr")) {
+                return verdict("peer-into-session", false, false, null, "a nostr transport behind /api/sync (npub peers cannot sync yet)", label);
+            }
+            return verdict("peer-into-session", false, true, "no bridged peer has a usable transport identity (configure a ticket or signaling files)", null, label);
+        }
         if (peer && peer.transport === "nostr") {
             // The nostr transport is not served by /api/sync yet; keep the pair
             // visible but honestly unwired.
@@ -326,10 +485,21 @@ export function wireVerdict(source, target, state) {
         return verdict("none", false, false, "spendable outputs feed the create form (chain sources stay manual for now)");
     }
     if (a === "session" && b === "session") {
-        return verdict("session-merge", false, false, null, "a session-state merge seam (lattice join of two converging session states)", `Merge sessions ${sourceName} and ${targetName}`);
+        // Client-orchestrated merge: joins the sessions' fragment states over
+        // the existing join route and unions their peer connections in the UI
+        // model. The server-side converging state (once it exists) stays with a
+        // future backend session-state seam — the shell logs that honestly.
+        const label = `Merge sessions ${sourceName} and ${targetName}`;
+        if (!sessionByKey(state, source.key) || !sessionByKey(state, target.key)) {
+            return verdict("session-merge", false, true, "session no longer exists (it may have been merged already)", null, label);
+        }
+        return verdict("session-merge", true, true, null, null, label);
     }
     if (a === "peer" && b === "peer") {
-        return verdict("peer-channel", false, false, null, "a standalone peer-to-peer channel establishment seam", `Bridge peers ${sourceName}, ${targetName}`);
+        if (bridgeGroupContaining(state, source.key).includes(target.key)) {
+            return verdict("peer-bridge", false, true, "peers are already bridged", null, `Bridge peers ${sourceName}, ${targetName}`);
+        }
+        return verdict("peer-bridge", true, true, null, null, `Bridge peers ${sourceName}, ${targetName}`);
     }
     if (a === "descriptor" && (b === "fragment" || b === "session")) {
         return verdict("attribute-scripts", false, false, null, "descriptor derivation (Backend.classifyPaste) to match fragment scripts to the descriptor", `Attribute ${sourceName} scripts to ${targetName}`);
@@ -455,13 +625,14 @@ export function componentPlan(component) {
         rest: component.wires.filter((wire) => !(wire.source.kind === "fragment" && wire.target.kind === "fragment")),
     };
 }
-// Follow a consumed fragment endpoint to its join result (the session-side
-// analog of the demo's remapNodeId).
-export function remapFragmentRef(ref, remap) {
-    if (ref.kind !== "fragment")
-        return ref;
-    const mapped = remap.get(ref.key);
-    return mapped === undefined ? ref : { kind: "fragment", key: mapped };
+// Follow a consumed endpoint to its result (the session-side analog of the
+// demo's remapNodeId): fragment clusters remap their members to the n-ary
+// join result, merged sessions remap both sources to the merged session.
+// Keys are kind-qualified ("fragment:psbt-1", "session:session-2") so the
+// two namespaces cannot collide.
+export function remapWireRef(ref, remap) {
+    const mapped = remap.get(`${ref.kind}:${ref.key}`);
+    return mapped === undefined ? ref : { kind: ref.kind, key: mapped };
 }
 export function wireQueueSummary(wires) {
     const wireCount = wires.length;
