@@ -515,7 +515,8 @@ function wire() {
     el("createAddInput").addEventListener("click", () => addCreateRow("input"));
     el("createAddOutput").addEventListener("click", () => addCreateRow("output"));
     el("createGenerateSeed").addEventListener("click", () => {
-        const bytes = new Uint8Array(8);
+        // Spec: PSBT_GLOBAL_SORT_SEED must carry at least 128 bits of randomness.
+        const bytes = new Uint8Array(16);
         crypto.getRandomValues(bytes);
         el("createSeed").value = seedFromRandomBytes(bytes);
     });
