@@ -15,7 +15,9 @@ import {
   enrichDescriptor,
   enrichPayment,
   idleWire,
+  fragmentSessionKeys,
   mergeSessions,
+  mineFragmentKeys,
   mintDescriptor,
   mintPayment,
   mintPeer,
@@ -527,6 +529,51 @@ test("wireQueueSummary counts wires and components", () => {
   assert.equal(two.wireCount, 2);
   assert.equal(two.componentCount, 2);
   assert.equal(two.text, "2 pending wires in 2 components");
+});
+
+// --- MINE, the pseudo-peer (Q6: sessionless local fragments) ---------------------
+
+test("mine membership is derived: loaded fragments default there, publishing moves them out", () => {
+  let state = emptyObjects();
+  const fragments = ["psbt-1", "psbt-2", "psbt-3"];
+
+  // No sessions: everything is Mine (loaded/created default there).
+  assert.deepEqual(mineFragmentKeys(fragments, state), fragments);
+
+  state = mintSession(state, "s", "iroh").state; // session-1
+  assert.deepEqual(mineFragmentKeys(fragments, state), fragments);
+
+  // Publishing (fragment → session wiring) moves the fragment out of Mine.
+  state = addFragmentToSession(state, "session-1", "psbt-2");
+  assert.deepEqual(mineFragmentKeys(fragments, state), ["psbt-1", "psbt-3"]);
+  assert.deepEqual(fragmentSessionKeys(state, "psbt-2"), ["session-1"]);
+  assert.deepEqual(fragmentSessionKeys(state, "psbt-1"), []);
+
+  // Membership in ANY session keeps it published; multi-session membership
+  // lists every carrier.
+  state = mintSession(state, "t", "local").state; // session-2
+  state = addFragmentToSession(state, "session-2", "psbt-2");
+  assert.deepEqual(fragmentSessionKeys(state, "psbt-2"), ["session-1", "session-2"]);
+  assert.deepEqual(mineFragmentKeys(fragments, state), ["psbt-1", "psbt-3"]);
+
+  // Leaving every session returns the fragment to Mine.
+  state = dropFragmentKey(state, "psbt-2");
+  assert.deepEqual(mineFragmentKeys(fragments, state), fragments);
+});
+
+test("mine tracks session merges: members follow the merged session, not Mine", () => {
+  let state = emptyObjects();
+  state = mintSession(state, "a", "iroh").state; // session-1
+  state = mintSession(state, "b", "iroh").state; // session-2
+  state = addFragmentToSession(state, "session-1", "psbt-1");
+  state = addFragmentToSession(state, "session-2", "psbt-2");
+
+  const merge = mergeSessions(state, "session-1", "session-2");
+  state = merge.state;
+  // The sources are retired but the members ride the merged session — a
+  // merge never dumps published fragments back into Mine.
+  assert.deepEqual(mineFragmentKeys(["psbt-1", "psbt-2", "psbt-3"], state), ["psbt-3"]);
+  assert.deepEqual(fragmentSessionKeys(state, "psbt-1"), [merge.merged.key]);
 });
 
 // --- session merge (Q3: join contents + union peer connections) -----------------
