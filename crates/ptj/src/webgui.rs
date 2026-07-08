@@ -106,6 +106,7 @@ pub(crate) fn response_for(method: &str, path: &str, body: &[u8]) -> Response {
             "/api/concatenate" => return concatenate_response(body),
             "/api/confirm" => return confirm_response(body),
             "/api/create" => return create_response(body),
+            "/api/edit" => return edit_response(body),
             "/api/export-bip174" => return export_bip174_response(body),
             "/api/import-bip174" => return import_bip174_response(body),
             "/api/inspect" => return inspect_response(body),
@@ -762,6 +763,165 @@ fn parse_id_assignments(request: &serde_json::Value) -> Result<Vec<crate::cli::I
             Ok(crate::cli::IdAssignment { target, index, id })
         })
         .collect()
+}
+
+fn edit_response(body: &[u8]) -> Response {
+    match edit_response_result(body) {
+        Ok(response) => response,
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+/// `/api/edit`: field-level raw-keymap editing with save-time validation and
+/// structured fix offers (`crate::commands::field_edit`). Grow-only: edits
+/// mint a NEW fragment; the submitted PSBT is never mutated in place.
+///
+/// Request: `{psbt, edits: [{map, key, value|null}], apply_fixes?: [fix_id],
+/// <override_param>?: bool}` — `map` selects `global` / `input:<i>` /
+/// `output:<i>`, `key` is the full raw key (`inspect`'s `raw.*[].key_hex`;
+/// hex/base58/bech32 accepted), `value` sets bytes or deletes on `null`, and
+/// `edits: []` is a pure validation pass. Violations return 400 with
+/// `violations[]` (each `{id, message, override_param}` plus flat `fix_id` /
+/// `fix_label` / `warning_text` when a server-side fix is offered); every
+/// gate is waived by its named `override_param` boolean, and requested
+/// `apply_fixes` run before validation with their caveats echoed in
+/// `applied_fixes[].warning_text`.
+fn edit_response_result(body: &[u8]) -> Result<Response> {
+    let request: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
+    let psbt = request_string(&request, "psbt")?;
+    let psbt = crate::io::parse_psbt_bytes("request psbt", psbt.as_bytes())?;
+    let edits = parse_field_edits(&request)?;
+
+    let mut edited = crate::commands::field_edit::apply_edits(&psbt, &edits)?;
+
+    let mut applied_fixes = Vec::new();
+    if let Some(fixes) = request.get("apply_fixes") {
+        let fixes = fixes
+            .as_array()
+            .ok_or_else(|| Error::new("request JSON field `apply_fixes` must be an array"))?;
+        for (position, fix) in fixes.iter().enumerate() {
+            let fix_id = fix.as_str().ok_or_else(|| {
+                Error::new(format!("request apply_fixes[{position}] must be a string"))
+            })?;
+            edited = crate::commands::field_edit::apply_fix(edited, fix_id)?;
+            let mut applied = serde_json::json!({ "fix_id": fix_id });
+            if let Some(warning) = crate::commands::field_edit::fix_warning(fix_id) {
+                applied["warning_text"] = serde_json::Value::String(warning.to_owned());
+            }
+            applied_fixes.push(applied);
+        }
+    }
+
+    let mut remaining = Vec::new();
+    let mut overridden = Vec::new();
+    for violation in crate::commands::field_edit::validate(&edited) {
+        if optional_bool(&request, violation.override_param)? {
+            overridden.push(violation_json(&violation));
+        } else {
+            remaining.push(violation_json(&violation));
+        }
+    }
+
+    if !remaining.is_empty() {
+        let count = remaining.len();
+        return Ok(Response {
+            status: 400,
+            reason: "Bad Request",
+            content_type: "application/json; charset=utf-8",
+            body: serde_json::json!({
+                "error": format!(
+                    "save-time validation failed ({count} violation{}); apply an offered \
+                     fix, set the named override, or amend the edits",
+                    if count == 1 { "" } else { "s" },
+                ),
+                "violations": remaining,
+            })
+            .to_string()
+            .into_bytes(),
+        });
+    }
+
+    Ok(Response {
+        status: 200,
+        reason: "OK",
+        content_type: "application/json; charset=utf-8",
+        body: serde_json::json!({
+            "psbt": crate::io::encode_psbt(&edited),
+            "inspect": crate::commands::inspect::inspect_psbt(&edited),
+            "violations": [],
+            "overridden": overridden,
+            "applied_fixes": applied_fixes,
+        })
+        .to_string()
+        .into_bytes(),
+    })
+}
+
+/// Parse the required `edits` array:
+/// `[{"map": "global"|"input:<i>"|"output:<i>", "key": "<bytes>",
+/// "value": "<bytes>"|null}]` (key/value bytes accept hex/base58/bech32,
+/// like the CLI's byte arguments).
+fn parse_field_edits(
+    request: &serde_json::Value,
+) -> Result<Vec<crate::commands::field_edit::FieldEdit>> {
+    let edits = request
+        .get("edits")
+        .ok_or_else(|| Error::new("request JSON must contain array field `edits`"))?
+        .as_array()
+        .ok_or_else(|| Error::new("request JSON field `edits` must be an array"))?;
+    edits
+        .iter()
+        .enumerate()
+        .map(|(position, item)| {
+            let object = item.as_object().ok_or_else(|| {
+                Error::new(format!("request JSON edits[{position}] must be an object"))
+            })?;
+            let map = object_string(object, "map", &format!("edits[{position}]"))?;
+            let map = crate::commands::field_edit::MapTarget::parse(map)
+                .map_err(|error| Error::new(format!("request edits[{position}]: {error}")))?;
+            let key = object_string(object, "key", &format!("edits[{position}]"))?;
+            let key = crate::bytes_arg::parse_bytes_arg(key)
+                .map_err(|error| Error::new(format!("request edits[{position}].key: {error}")))?;
+            let value = match object.get("value") {
+                None => {
+                    return Err(Error::new(format!(
+                        "request edits[{position}] must contain `value` (bytes to set) or \
+                         `value: null` (delete the entry)"
+                    )));
+                }
+                Some(serde_json::Value::Null) => None,
+                Some(value) => {
+                    let value = value.as_str().ok_or_else(|| {
+                        Error::new(format!(
+                            "request edits[{position}].value must be a string or null"
+                        ))
+                    })?;
+                    Some(crate::bytes_arg::parse_bytes_arg(value).map_err(|error| {
+                        Error::new(format!("request edits[{position}].value: {error}"))
+                    })?)
+                }
+            };
+            Ok(crate::commands::field_edit::FieldEdit { map, key, value })
+        })
+        .collect()
+}
+
+/// Serialize a save-time violation, flattening the fix offer per the seam
+/// contract: `{id, message, override_param}` plus `fix_id` / `fix_label` /
+/// `warning_text` when a fix is offered.
+fn violation_json(violation: &crate::commands::field_edit::Violation) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "id": violation.id,
+        "message": violation.message,
+        "override_param": violation.override_param,
+    });
+    if let Some(fix) = &violation.fix {
+        value["fix_id"] = serde_json::Value::String(fix.fix_id.to_owned());
+        value["fix_label"] = serde_json::Value::String(fix.fix_label.to_owned());
+        value["warning_text"] = serde_json::Value::String(fix.warning_text.to_owned());
+    }
+    value
 }
 
 fn create_response(body: &[u8]) -> Response {
@@ -1685,6 +1845,255 @@ mod tests {
         let response = response_for("POST", "/api/assign-ids", bad_target.as_bytes());
         assert_eq!(response.status, 400);
         assert!(String::from_utf8(response.body).unwrap().contains("target"));
+    }
+
+    #[test]
+    fn edit_endpoint_sets_and_deletes_raw_entries() {
+        // Set an unknown global key: the edit mints a NEW fragment whose
+        // inspect raw view classifies the entry as `unknown`.
+        let original = encoded_psbt();
+        let request = serde_json::json!({
+            "psbt": original,
+            "edits": [{ "map": "global", "key": "ef01", "value": "aabb" }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", request.as_bytes());
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let edited = body["psbt"].as_str().unwrap();
+        assert_ne!(edited, original, "edits must mint a new fragment");
+        assert_eq!(body["violations"], serde_json::json!([]));
+        assert_eq!(body["applied_fixes"], serde_json::json!([]));
+        let unknown = body["inspect"]["raw"]["global"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["key_hex"] == "ef01")
+            .expect("the new entry must appear in the raw view");
+        assert_eq!(unknown["kind"], "unknown");
+        assert_eq!(unknown["value_hex"], "aabb");
+
+        // Deleting the entry again round-trips back to the original bytes.
+        let request = serde_json::json!({
+            "psbt": edited,
+            "edits": [{ "map": "global", "key": "ef01", "value": null }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", request.as_bytes());
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["psbt"].as_str().unwrap(), original);
+    }
+
+    #[test]
+    fn edit_endpoint_edits_known_fields() {
+        // PSBT_OUT_AMOUNT (keytype 0x03) is a typed field; raw edits reach it
+        // like any other entry, and the typed inspect view reflects the edit.
+        let request = serde_json::json!({
+            "psbt": encoded_psbt(),
+            // 2_000_000 sats as the 8-byte little-endian PSBT_OUT_AMOUNT.
+            "edits": [{ "map": "out:0", "key": "03", "value": "80841e0000000000" }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", request.as_bytes());
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["inspect"]["outputs"][0]["amount_sats"], 2_000_000);
+    }
+
+    #[test]
+    fn edit_endpoint_reports_structured_violations_with_fix_offers() {
+        // The canonical save-time case: an unordered PSBT whose outputs lack
+        // unique ids. `edits: []` is a pure validation pass.
+        let request = serde_json::json!({
+            "psbt": encoded_psbt_without_uids(),
+            "edits": [],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("save-time validation failed")
+        );
+        let violations = body["violations"].as_array().unwrap();
+        assert_eq!(violations.len(), 1);
+        let violation = &violations[0];
+        assert_eq!(violation["id"], "unordered-missing-output-ids");
+        assert_eq!(violation["override_param"], "allow_missing_output_ids");
+        assert!(
+            violation["message"]
+                .as_str()
+                .unwrap()
+                .contains("PSBT_OUT_UNIQUE_ID")
+        );
+        // The structured fix offer wires the assign-ids machinery, warning
+        // text included (it is part of the contract).
+        assert_eq!(violation["fix_id"], "assign-ids");
+        assert!(violation["fix_label"].is_string());
+        assert!(
+            violation["warning_text"]
+                .as_str()
+                .unwrap()
+                .contains("duplicate txouts if done more than once")
+        );
+    }
+
+    #[test]
+    fn edit_endpoint_applies_offered_fixes() {
+        use concurrent_psbt::output::OutputUniqueIdExt as _;
+
+        let request = serde_json::json!({
+            "psbt": encoded_psbt_without_uids(),
+            "edits": [],
+            "apply_fixes": ["assign-ids"],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", request.as_bytes());
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let fixed = crate::io::parse_psbt_bytes(
+            "fixed response psbt",
+            body["psbt"].as_str().unwrap().as_bytes(),
+        )
+        .unwrap();
+        assert!(fixed.outputs.iter().all(|output| output.has_unique_id()));
+        assert_eq!(body["violations"], serde_json::json!([]));
+        let applied = body["applied_fixes"].as_array().unwrap();
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0]["fix_id"], "assign-ids");
+        // Applying the fix re-informs about the duplicate-txout caveat.
+        assert!(
+            applied[0]["warning_text"]
+                .as_str()
+                .unwrap()
+                .contains("duplicate txouts")
+        );
+    }
+
+    #[test]
+    fn edit_endpoint_honors_explicit_overrides() {
+        use concurrent_psbt::output::OutputUniqueIdExt as _;
+
+        let request = serde_json::json!({
+            "psbt": encoded_psbt_without_uids(),
+            "edits": [],
+            "allow_missing_output_ids": true,
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", request.as_bytes());
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        // The gate is waived, not fixed: the fragment still lacks the ids and
+        // the response says which gates were overridden.
+        let saved = crate::io::parse_psbt_bytes(
+            "overridden response psbt",
+            body["psbt"].as_str().unwrap().as_bytes(),
+        )
+        .unwrap();
+        assert!(saved.outputs.iter().all(|output| !output.has_unique_id()));
+        let overridden = body["overridden"].as_array().unwrap();
+        assert_eq!(overridden.len(), 1);
+        assert_eq!(overridden[0]["id"], "unordered-missing-output-ids");
+    }
+
+    #[test]
+    fn edit_endpoint_reports_json_errors() {
+        let missing = response_for("POST", "/api/edit", b"{}");
+        assert_eq!(missing.status, 400);
+        assert!(String::from_utf8(missing.body).unwrap().contains("`psbt`"));
+
+        let no_edits = serde_json::json!({ "psbt": encoded_psbt() }).to_string();
+        let response = response_for("POST", "/api/edit", no_edits.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(String::from_utf8(response.body).unwrap().contains("`edits`"));
+
+        let bad_map = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "edits": [{ "map": "sideways", "key": "ef", "value": "01" }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", bad_map.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(String::from_utf8(response.body).unwrap().contains("sideways"));
+
+        let bad_key = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "edits": [{ "map": "global", "key": "0!z", "value": "01" }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", bad_key.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("could not decode byte string")
+        );
+
+        let missing_value = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "edits": [{ "map": "global", "key": "ef" }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", missing_value.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("`value: null`")
+        );
+
+        let delete_absent = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "edits": [{ "map": "in:0", "key": "ef", "value": null }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", delete_absent.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("nothing to delete")
+        );
+
+        let unknown_fix = serde_json::json!({
+            "psbt": encoded_psbt(),
+            "edits": [],
+            "apply_fixes": ["reticulate-splines"],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/edit", unknown_fix.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("unknown fix id")
+        );
     }
 
     #[test]

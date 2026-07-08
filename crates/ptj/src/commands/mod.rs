@@ -3,6 +3,8 @@ pub(crate) mod atomize;
 pub(crate) mod concatenate;
 pub(crate) mod create;
 pub(crate) mod export_bip174;
+#[cfg(feature = "webgui")]
+pub(crate) mod field_edit;
 pub(crate) mod import_bip174;
 pub(crate) mod inspect;
 pub(crate) mod join;

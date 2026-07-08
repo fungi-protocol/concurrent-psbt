@@ -67,6 +67,22 @@ pub(crate) fn raw_maps(psbt: &Psbt) -> Result<RawMaps> {
     })
 }
 
+/// Reassemble serialized PSBT bytes from raw maps (the write half of
+/// [`raw_maps`]; `/api/edit` re-parses the result, so a malformed edit can
+/// never mint an unparseable fragment). Only the webgui edit route writes.
+#[cfg(feature = "webgui")]
+pub(crate) fn serialize_maps(maps: &RawMaps) -> Vec<u8> {
+    let mut bytes = MAGIC.to_vec();
+    write_map(&mut bytes, &maps.global);
+    for map in &maps.inputs {
+        write_map(&mut bytes, map);
+    }
+    for map in &maps.outputs {
+        write_map(&mut bytes, map);
+    }
+    bytes
+}
+
 /// Split a raw key into its compact-size `keytype` and the trailing
 /// `keydata`. Errors on an empty or truncated key.
 pub(crate) fn split_key_type(key: &[u8]) -> Result<(u64, &[u8])> {
@@ -128,6 +144,25 @@ fn read_compact_size(cursor: &mut Cursor) -> Result<u64> {
     })
 }
 
+#[cfg(feature = "webgui")]
+fn write_compact_size(bytes: &mut Vec<u8>, value: u64) {
+    match value {
+        0..=0xFC => bytes.push(value as u8),
+        0xFD..=0xFFFF => {
+            bytes.push(0xFD);
+            bytes.extend_from_slice(&(value as u16).to_le_bytes());
+        }
+        0x1_0000..=0xFFFF_FFFF => {
+            bytes.push(0xFE);
+            bytes.extend_from_slice(&(value as u32).to_le_bytes());
+        }
+        _ => {
+            bytes.push(0xFF);
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+}
+
 fn read_map(cursor: &mut Cursor) -> Result<Vec<RawPair>> {
     let mut pairs = Vec::new();
     loop {
@@ -146,6 +181,17 @@ fn read_map(cursor: &mut Cursor) -> Result<Vec<RawPair>> {
 
 fn length_error<E>(_: E) -> Error {
     Error::new("PSBT map length exceeds usize")
+}
+
+#[cfg(feature = "webgui")]
+fn write_map(bytes: &mut Vec<u8>, pairs: &[RawPair]) {
+    for pair in pairs {
+        write_compact_size(bytes, pair.key.len() as u64);
+        bytes.extend_from_slice(&pair.key);
+        write_compact_size(bytes, pair.value.len() as u64);
+        bytes.extend_from_slice(&pair.value);
+    }
+    bytes.push(0x00);
 }
 
 #[cfg(test)]
@@ -178,6 +224,37 @@ mod tests {
         assert_eq!(maps.inputs.len(), 1);
         assert!(maps.outputs.is_empty());
         assert!(!maps.global.is_empty());
+    }
+
+    #[cfg(feature = "webgui")]
+    #[test]
+    fn raw_maps_round_trip_byte_identically() {
+        let psbt = fixture_psbt();
+        let maps = raw_maps(&psbt).unwrap();
+        assert_eq!(serialize_maps(&maps), Psbt::serialize(&psbt));
+    }
+
+    #[cfg(feature = "webgui")]
+    #[test]
+    fn compact_size_round_trips_at_the_boundaries() {
+        for value in [
+            0u64,
+            0xFC,
+            0xFD,
+            0xFFFF,
+            0x1_0000,
+            0xFFFF_FFFF,
+            0x1_0000_0000,
+        ] {
+            let mut bytes = Vec::new();
+            write_compact_size(&mut bytes, value);
+            let mut cursor = Cursor {
+                bytes: &bytes,
+                position: 0,
+            };
+            assert_eq!(read_compact_size(&mut cursor).unwrap(), value);
+            assert_eq!(cursor.position, bytes.len());
+        }
     }
 
     #[test]
