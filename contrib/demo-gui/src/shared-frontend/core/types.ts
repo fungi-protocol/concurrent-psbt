@@ -46,8 +46,31 @@ export interface CreatePsbtRequest {
   network: string;
   ordering: OrderingMode;
   seedHex?: string;
+  // Explicit override for ordering seeds below the spec minimum of 128 bits
+  // (16 bytes); maps to the wire field `allow_short_seed`. Never silent: the
+  // backend rejects short seeds unless this is set.
+  allowShortSeed?: boolean;
   inputs: CreateInput[];
   outputs: CreateOutput[];
+}
+
+// One manual unique-id directive for assignIds: `out` sets
+// PSBT_OUT_UNIQUE_ID, `in` sets the optional PSBT_IN_UNIQUE_ID outpoint
+// suffix. `id` bytes accept hex/base58/bech32, detected by character set.
+export interface IdAssignment {
+  target: "in" | "out";
+  index: number;
+  id: string;
+}
+
+export interface AssignIdsOptions {
+  // Manual directives; without any, the backend auto-assigns fresh random
+  // 16-byte ids to every output missing one (idempotent).
+  ids?: IdAssignment[];
+  // Combine manual directives with auto-fill of the remaining outputs.
+  auto?: boolean;
+  // Replace an existing unique id that differs from the requested one.
+  overwrite?: boolean;
 }
 
 export interface SyncRequest {
