@@ -173,6 +173,10 @@ pub struct ExportBip174Config {
 
 #[derive(Args, Debug, Clone)]
 pub struct ImportBip174Config {
+    /// Mark the imported PSBT's inputs and outputs modifiable (BIP 174 has no
+    /// TX_MODIFIABLE field; this is an explicit assertion, off by default)
+    #[arg(long)]
+    pub modifiable: bool,
     /// BIP 174 PSBT file to import
     pub file: PathBuf,
 }
