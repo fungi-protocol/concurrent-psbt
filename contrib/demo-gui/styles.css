@@ -1938,13 +1938,46 @@ h2 {
 }
 
 .session-amount {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   margin-left: auto;
+  font-weight: 600;
 }
 
 .session-coin-row .session-amount {
   margin-left: auto;
+}
+
+.session-amount-text {
+  white-space: nowrap;
+}
+
+/* Binary fingerprint: the sat value in base 2 as a thin barcode directly
+   under the decimal amount — LSB right-aligned under the last digit,
+   natural bit length (the row length is a log2 magnitude cue). 1-bits are
+   crisp marks, 0-bits nearly invisible slots, so low-Hamming-weight values
+   pop without reading the decimal digits. currentColor: the fingerprint
+   inherits the surrounding color like every other amount part, and stays
+   very subtle via opacity. */
+.session-amount-bits {
+  display: flex;
+  gap: 1px;
+  height: 3px;
+  margin-top: 1px;
+}
+
+.session-amount-bit {
+  width: 2px;
+  height: 3px;
+  background: currentColor;
+  opacity: 0.07;
+}
+
+.session-amount-bit-1 {
+  opacity: 0.34;
 }
 
 /* BIP 177 sat-first emphasis: the amount parts vary ONLY in opacity and
@@ -1955,10 +1988,6 @@ h2 {
    significant digits read as sats; the ₿ symbol is less transparent than
    the scaffold. `.session-amount-digits` deliberately has no rule: the
    significant digits fully inherit color, opacity, and weight. */
-.session-amount {
-  font-weight: 600;
-}
-
 .session-amount-symbol {
   opacity: 0.68;
   font-weight: 700;
