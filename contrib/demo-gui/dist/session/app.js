@@ -25,6 +25,7 @@ import { amountBits, amountSpanParts, elisionLabel, fragmentCardModel, signedAmo
 import { classifyPaste, mintFromPaste } from "./ingest.js";
 import { actionState, addFragmentToSession, addPeerToSession, applyTxOutputs, beginWire, completeWire, dropFragmentKey, emptyObjects, enrichDescriptor, enrichPayment, idleWire, mintSession, overviewFocus, peerByKey, sessionByKey, sessionFocus, validateFocus, wireVerdict, } from "./wiring.js";
 import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, validateEditor, violationsFromServer, } from "./editor.js";
+import { descriptorColorKey, groupColorKey, paletteColor, paletteRegistry, peerColorKey, } from "./palette.js";
 const backend = new HttpBackend();
 // --- shell state ------------------------------------------------------------
 let session = emptySession();
@@ -47,6 +48,18 @@ const expanded = new Set();
 // Lineage notes for operation results ("join of psbt-1, psbt-2") — the
 // lattice provenance the card shows under the title.
 const lineage = new Map();
+// Tableau 10 color identities (palette.js): first-seen stable for the page
+// session — descriptors and pseudo-descriptors keep their color across
+// re-renders and later arrivals.
+const identityColors = paletteRegistry();
+// Paint a node with its identity color: the CSS custom property drives the
+// group/card delineation (border, stripe, chip) in the descriptor's color.
+function colorizeIdentity(node, colorKey) {
+    if (!colorKey)
+        return;
+    node.classList.add("session-colorized");
+    node.style.setProperty("--identity-color", paletteColor(identityColors, colorKey));
+}
 // --- tiny DOM helpers -------------------------------------------------------
 function el(id) {
     const node = document.getElementById(id);
@@ -467,6 +480,8 @@ function renderFragmentCard(fragment) {
     for (const group of card.groups) {
         const groupNode = document.createElement("div");
         groupNode.className = `session-group session-group-${group.kind}`;
+        // Group delineation in the descriptor's (or pseudo-descriptor's) color.
+        colorizeIdentity(groupNode, groupColorKey(group));
         const title = document.createElement("div");
         title.className = "session-group-title";
         // The header wears the group's script fingerprint when every output
@@ -738,10 +753,13 @@ function renderObjects() {
     for (const peer of objects.peers) {
         const item = document.createElement("li");
         item.className = "list-item session-card";
+        // Peers are pseudo-descriptor identities: same key space as the
+        // provenance groups, so a peer and its contributed rows share a color.
+        colorizeIdentity(item, peerColorKey(peer));
         decorateWireTarget(item, { kind: "peer", key: peer.key });
         const head = document.createElement("div");
         head.className = "session-fragment-row";
-        head.append(span("item-title", peer.name), badge(`peer · ${peer.transport}`, "session-badge"));
+        head.append(span("session-color-chip", ""), span("item-title", peer.name), badge(`peer · ${peer.transport}`, "session-badge"));
         const identity = span("item-meta session-identity", peer.identity.slice(0, 24) + (peer.identity.length > 24 ? "…" : ""));
         identity.title = peer.identity;
         head.append(identity);
@@ -807,12 +825,14 @@ function renderObjects() {
     for (const descriptor of objects.descriptors) {
         const item = document.createElement("li");
         item.className = "list-item session-card";
+        // Unique palette color per descriptor, keyed by textual identity.
+        colorizeIdentity(item, descriptorColorKey(descriptor));
         decorateWireTarget(item, { kind: "descriptor", key: descriptor.key });
         const head = document.createElement("div");
         head.className = "session-fragment-row";
         const text = span("item-meta session-identity", descriptor.descriptor.slice(0, 40) + (descriptor.descriptor.length > 40 ? "…" : ""));
         text.title = descriptor.descriptor;
-        head.append(span("item-title", descriptor.key), badge(descriptor.isPrivate ? "descriptor · PRIVATE" : "descriptor", descriptor.isPrivate ? "session-badge session-badge-warn" : "session-badge"), text);
+        head.append(span("session-color-chip", ""), span("item-title", descriptor.key), badge(descriptor.isPrivate ? "descriptor · PRIVATE" : "descriptor", descriptor.isPrivate ? "session-badge session-badge-warn" : "session-badge"), text);
         if (descriptor.descriptorType) {
             head.append(badge(descriptor.descriptorType, "session-badge"));
         }

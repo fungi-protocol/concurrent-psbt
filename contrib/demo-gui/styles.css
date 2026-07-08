@@ -1890,12 +1890,27 @@ h2 {
   gap: 4px;
 }
 
-.session-group-provenance {
-  border-left-color: var(--accent);
+/* Tableau 10 categorical identity: a unique color per descriptor and
+   pseudo-descriptor (palette.ts). Colorized groups and cards are
+   delineated in their descriptor's color — border stripe plus chip, the
+   demo's colored-rectangle convention. This REPLACES the old
+   group-KIND colors (provenance=accent, template=green): color now means
+   identity, not category. Unattributed groups keep the neutral line. */
+.session-group.session-colorized {
+  border-left-color: var(--identity-color);
 }
 
-.session-group-script-template {
-  border-left-color: var(--green);
+.list-item.session-colorized {
+  border-left: 4px solid var(--identity-color);
+}
+
+.session-color-chip {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--identity-color, var(--line));
+  border: 1px solid rgba(29, 35, 41, 0.18);
 }
 
 .session-group-title {
