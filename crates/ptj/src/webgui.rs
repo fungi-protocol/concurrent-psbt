@@ -30,6 +30,8 @@ const SESSION_EDITOR_JS: &[u8] =
     include_bytes!("../../../contrib/demo-gui/dist/session/editor.js");
 const SESSION_ENCODING_JS: &[u8] =
     include_bytes!("../../../contrib/demo-gui/dist/session/encoding.js");
+const SESSION_PALETTE_JS: &[u8] =
+    include_bytes!("../../../contrib/demo-gui/dist/session/palette.js");
 const INDEX_HTML: &[u8] = include_bytes!("../../../contrib/demo-gui/index.html");
 const STYLES_CSS: &[u8] = include_bytes!("../../../contrib/demo-gui/styles.css");
 const APP_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/app.js");
@@ -117,6 +119,10 @@ pub fn asset(path: &str) -> Option<Asset> {
         "/dist/session/encoding.js" => Some(Asset {
             content_type: "text/javascript; charset=utf-8",
             body: SESSION_ENCODING_JS,
+        }),
+        "/dist/session/palette.js" => Some(Asset {
+            content_type: "text/javascript; charset=utf-8",
+            body: SESSION_PALETTE_JS,
         }),
         "/styles.css" => Some(Asset {
             content_type: "text/css; charset=utf-8",
