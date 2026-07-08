@@ -6,6 +6,8 @@ pub(crate) mod export_bip174;
 pub(crate) mod import_bip174;
 pub(crate) mod inspect;
 pub(crate) mod join;
+#[cfg(feature = "webgui")]
+pub(crate) mod lifehash;
 pub(crate) mod make_unordered;
 pub(crate) mod negotiation;
 pub(crate) mod sort;
