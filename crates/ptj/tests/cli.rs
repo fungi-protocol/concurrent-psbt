@@ -1223,6 +1223,164 @@ fn make_unordered_rejects_psbts_without_constructor_metadata() {
     assert!(error.to_string().contains("not modifiable"));
 }
 
+
+#[test]
+fn assign_ids_completes_the_bip174_import_round_trip() {
+    let temp = tempfile::tempdir().unwrap();
+    // A foreign BIP 174 fixture: strip the concurrent-psbt proprietaries so it
+    // looks like a PSBT authored by older Bitcoin Core (no unique ids).
+    let mut ordered = sorted_psbt(TXID, 0, 1, 50_000);
+    ordered.outputs[0].proprietaries.clear();
+    let ordered = write_psbt(temp.path(), "ordered.psbt", ordered);
+    let core_psbt =
+        ptj::run(Cli::try_parse_from(["ptj", "export-bip174", path_str(&ordered)]).unwrap())
+            .unwrap();
+    let core_path = temp.path().join("core.psbt");
+    std::fs::write(&core_path, core_psbt).unwrap();
+
+    let imported = run_to_psbt([
+        "ptj",
+        "import-bip174",
+        "--modifiable",
+        path_str(&core_path),
+    ]);
+    assert!(!imported.outputs[0].has_unique_id());
+    let imported_path = write_psbt(temp.path(), "imported.psbt", imported);
+
+    // Previously failed here: the import has no PSBT_OUT_UNIQUE_ID.
+    let error = run_error(["ptj", "make-unordered", path_str(&imported_path)]);
+    assert!(error.to_string().contains("PSBT_OUT_UNIQUE_ID"));
+
+    let assigned = run_to_psbt(["ptj", "assign-ids", path_str(&imported_path)]);
+    assert!(assigned.outputs[0].has_unique_id());
+    let assigned_path = write_psbt(temp.path(), "assigned.psbt", assigned);
+
+    let unordered = run_to_psbt(["ptj", "make-unordered", path_str(&assigned_path)]);
+    assert!(unordered.global.is_unordered());
+    assert!(unordered.outputs[0].has_unique_id());
+}
+
+#[test]
+fn assign_ids_is_idempotent_and_preserves_existing_ids() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut psbt = sorted_psbt(TXID, 0, 1, 50_000);
+    psbt.outputs[0].proprietaries.clear();
+    let path = write_psbt(temp.path(), "bare.psbt", psbt);
+
+    let first = run_to_psbt(["ptj", "assign-ids", path_str(&path)]);
+    let assigned_uid = first.outputs[0].unique_id().expect("assigned");
+    assert_eq!(assigned_uid.as_bytes().len(), 16);
+
+    let first_path = write_psbt(temp.path(), "first.psbt", first.clone());
+    let second = run_to_psbt(["ptj", "assign-ids", path_str(&first_path)]);
+    assert_eq!(psbt_bytes(&second), psbt_bytes(&first));
+}
+
+#[test]
+fn assign_ids_manual_directives_set_chosen_ids() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut psbt = sorted_psbt(TXID, 0, 1, 50_000);
+    psbt.outputs[0].proprietaries.clear();
+    let path = write_psbt(temp.path(), "bare.psbt", psbt);
+
+    let assigned = run_to_psbt([
+        "ptj",
+        "assign-ids",
+        "--id",
+        "out:0=0102030405060708090a0b0c0d0e0f10",
+        "--id",
+        "in:0=aa11",
+        path_str(&path),
+    ]);
+    assert_eq!(
+        assigned.outputs[0].unique_id().unwrap().into_bytes(),
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    );
+    assert_eq!(
+        concurrent_psbt::removal::InputUniqueIdExt::unique_id(&assigned.inputs[0]),
+        Some(vec![0xaa, 0x11]),
+    );
+
+    // Re-asserting the same id is idempotent; a different one needs --overwrite.
+    let assigned_path = write_psbt(temp.path(), "assigned.psbt", assigned);
+    let error = run_error(["ptj", "assign-ids", "--id", "out:0=ffff", path_str(&assigned_path)]);
+    assert!(error.to_string().contains("--overwrite"), "{error}");
+    let overwritten = run_to_psbt([
+        "ptj",
+        "assign-ids",
+        "--overwrite",
+        "--id",
+        "out:0=ffff",
+        path_str(&assigned_path),
+    ]);
+    assert_eq!(
+        overwritten.outputs[0].unique_id().unwrap().into_bytes(),
+        vec![0xff, 0xff],
+    );
+
+    let error = run_error(["ptj", "assign-ids", "--id", "out:5=abcd", path_str(&path)]);
+    assert!(error.to_string().contains("out of range"), "{error}");
+}
+
+#[test]
+fn assign_ids_rejects_colliding_manual_output_ids() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut psbt = run_to_psbt([
+        "ptj",
+        "create",
+        "--network",
+        "regtest",
+        "--input",
+        &format!("{TXID}:7"),
+        "--output",
+        &format!("{}:0.00050000", regtest_address(1)),
+        "--output",
+        &format!("{}:0.00060000", regtest_address(2)),
+        "--seed",
+        SEED,
+    ]);
+    for output in &mut psbt.outputs {
+        output.proprietaries.clear();
+    }
+    let path = write_psbt(temp.path(), "two-outputs.psbt", psbt);
+
+    let error = run_error([
+        "ptj",
+        "assign-ids",
+        "--id",
+        "out:0=abcd",
+        "--id",
+        "out:1=abcd",
+        path_str(&path),
+    ]);
+    assert!(error.to_string().contains("must be unique"), "{error}");
+
+    // --auto fills the outputs the manual directives did not cover.
+    let assigned = run_to_psbt([
+        "ptj",
+        "assign-ids",
+        "--auto",
+        "--id",
+        "out:0=abcd",
+        path_str(&path),
+    ]);
+    assert_eq!(
+        assigned.outputs[0].unique_id().unwrap().into_bytes(),
+        vec![0xab, 0xcd],
+    );
+    assert!(assigned.outputs[1].has_unique_id());
+
+    // Without --auto, manual-only leaves the other output untouched.
+    let manual_only = run_to_psbt([
+        "ptj",
+        "assign-ids",
+        "--id",
+        "out:0=abcd",
+        path_str(&path),
+    ]);
+    assert!(!manual_only.outputs[1].has_unique_id());
+}
+
 #[test]
 fn atomize_emits_joinable_unordered_fragments() {
     let temp = tempfile::tempdir().unwrap();
