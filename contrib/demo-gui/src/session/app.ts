@@ -76,6 +76,7 @@ import {
   sessionByKey,
   sessionFocus,
   validateFocus,
+  wireDisposition,
   wireVerdict,
   type FocusState,
   type NodeRef,
@@ -394,6 +395,22 @@ function nodeName(ref: NodeRef): string {
   return `${ref.kind} ${ref.key}`;
 }
 
+// Transient rejection feedback (the demo's red failure pulse, card-shaped):
+// tapping a blocked/unbacked target pulses the card and pins the reason chip
+// to it for a moment; the status bar carries the same text persistently.
+let wireRejection: { ref: NodeRef; text: string } | null = null;
+
+function flashWireRejection(ref: NodeRef, text: string): void {
+  const rejection = { ref, text };
+  wireRejection = rejection;
+  window.setTimeout(() => {
+    if (wireRejection === rejection) {
+      wireRejection = null;
+      render();
+    }
+  }, 1800);
+}
+
 function startWire(kind: NodeRef["kind"], key: string): void {
   wire = beginWire(kind, key);
   showStatus("", false);
@@ -423,11 +440,16 @@ async function performWire(v: WireVerdict, target: NodeRef): Promise<void> {
     return;
   }
   if (!v.allowed) {
-    const text = v.backed
-      ? `cannot wire ${nodeName(source)} → ${nodeName(target)}: ${v.reason}`
-      : `${nodeName(source)} → ${nodeName(target)} is not wired yet — needs backend: ${v.needs}`;
+    const action = v.label ?? `${nodeName(source)} → ${nodeName(target)}`;
+    const text =
+      wireDisposition(v) === "blocked"
+        ? `${action} — blocked: ${v.reason}`
+        : v.needs
+          ? `${action} is not wired yet — needs backend: ${v.needs}`
+          : `${action}: ${v.reason ?? "no join is defined"}`;
     showStatus(text, true);
     logEvent(text);
+    flashWireRejection(target, v.reason ?? v.needs ?? "not wireable");
     render();
     return;
   }
@@ -726,20 +748,36 @@ function outputRow(output: OutputView): HTMLElement {
   return row;
 }
 
-// Highlight and arm wire targets while a wire is pending.
+// Highlight and arm wire targets while a wire is pending. The three-way
+// vocabulary (compatible green / blocked red / unbacked dim) and the action
+// label in the title come from the presenter's verdict; a recently rejected
+// tap keeps its pulse + reason chip independent of wire mode.
 function decorateWireTarget(node: HTMLElement, ref: NodeRef): void {
+  if (wireRejection && wireRejection.ref.kind === ref.kind && wireRejection.ref.key === ref.key) {
+    node.classList.add("session-wire-rejected");
+    node.append(span("session-wire-reason", wireRejection.text));
+  }
   if (!wire.source) return;
   if (wire.source.kind === ref.kind && wire.source.key === ref.key) {
     node.classList.add("session-wire-source");
     return;
   }
   const v = wireVerdict(wire.source, ref, objects);
-  if (v.allowed && v.backed) {
-    node.classList.add("session-wire-target");
-    node.title = `wire here: ${v.kind}`;
-  } else {
-    node.classList.add("session-wire-blocked");
-    node.title = v.backed ? `not wireable: ${v.reason ?? ""}` : `needs backend: ${v.needs ?? ""}`;
+  switch (wireDisposition(v)) {
+    case "compatible":
+      node.classList.add("session-wire-target");
+      node.title = `wire here: ${v.label ?? v.kind}`;
+      break;
+    case "blocked":
+      node.classList.add("session-wire-incompatible");
+      node.title = `${v.label ?? "not wireable"} — blocked: ${v.reason ?? ""}`;
+      break;
+    default:
+      node.classList.add("session-wire-blocked");
+      node.title = v.needs
+        ? `${v.label ?? "not wireable"} — needs backend: ${v.needs}`
+        : (v.reason ?? "no join is defined");
+      break;
   }
   node.addEventListener("click", (event) => {
     // The explicit per-card buttons keep working; a plain click on the card

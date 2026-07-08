@@ -2220,3 +2220,45 @@ img.session-lifehash {
 #createWireTarget[hidden] {
   display: none;
 }
+
+/* =============================================================
+   Session wiring vocabulary (wiring lane).
+   Three-way wire-target vocabulary on cards, porting the demo's
+   halo colors (styles.css .wire-halo/.wire-halo.invalid):
+   compatible = green outline (.session-wire-target above),
+   blocked    = red-tinted outline (defined pair, rule refuses),
+   unbacked   = dimmed (.session-wire-blocked above).
+   Plus the transient rejected-tap pulse + reason chip (the card
+   analog of the demo's .wire-failed pulse).
+   ============================================================= */
+
+.session-wire-incompatible {
+  outline: 2px dashed var(--red);
+  outline-offset: 2px;
+  background: color-mix(in srgb, var(--red) 5%, var(--surface));
+}
+
+.session-wire-rejected {
+  animation: session-wire-rejected-pulse 0.9s ease-in-out 2;
+}
+
+@keyframes session-wire-rejected-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(179, 38, 30, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(179, 38, 30, 0.45);
+  }
+}
+
+.session-wire-reason {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 8px;
+  border: 1px solid var(--red);
+  border-radius: 10px;
+  background: rgba(179, 38, 30, 0.07);
+  color: var(--red);
+  font-size: 12px;
+}

@@ -452,6 +452,12 @@ export interface WireVerdict {
   // Precise missing-seam description for !backed pairs (these are the
   // backend tasks the wiring model is waiting on).
   needs: string | null;
+  // Human-readable ACTION label ("Join psbt-1 into psbt-2", "Publish psbt-1
+  // to session lunch") for every DEFINED pair — the demo's wire-tooltip
+  // vocabulary. null only when no join is defined at all (kind "none").
+  // The label serves both the tap path (target titles, status bar) and any
+  // future drag path (a live ribbon shows the same string).
+  label: string | null;
 }
 
 function verdict(
@@ -460,38 +466,87 @@ function verdict(
   backed: boolean,
   reason: string | null = null,
   needs: string | null = null,
+  label: string | null = null,
 ): WireVerdict {
-  return { kind, allowed, backed, reason, needs };
+  return { kind, allowed, backed, reason, needs, label };
 }
 
 function unordered(a: NodeKind, b: NodeKind, x: NodeKind, y: NodeKind): boolean {
   return (a === x && b === y) || (a === y && b === x);
 }
 
+// Display name for a node in wire action labels: sessions and peers carry
+// human names, payments a user label; fragments (and everything else) go by
+// their key, which is already the visible card title.
+export function nodeDisplayName(ref: NodeRef, state: ObjectsState): string {
+  switch (ref.kind) {
+    case "session":
+      return sessionByKey(state, ref.key)?.name ?? ref.key;
+    case "peer":
+      return peerByKey(state, ref.key)?.name ?? ref.key;
+    case "payment": {
+      const payment = state.payments.find((candidate) => candidate.key === ref.key);
+      return payment && payment.label ? payment.label : ref.key;
+    }
+    default:
+      return ref.key;
+  }
+}
+
+// Three-way target vocabulary (the demo's halo colors, ported to cards):
+//   compatible — wire executes now (green outline);
+//   blocked    — the pair is defined and backed, but a rule refuses it right
+//                now (red-tinted outline + the reason);
+//   unbacked   — no join is defined, or the seam that would implement it
+//                does not exist yet (dimmed + reason/needs).
+export type WireDisposition = "compatible" | "blocked" | "unbacked";
+
+export function wireDisposition(v: WireVerdict): WireDisposition {
+  if (v.allowed && v.backed) return "compatible";
+  if (v.backed) return "blocked";
+  return "unbacked";
+}
+
 export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsState): WireVerdict {
   const a = source.kind;
   const b = target.kind;
+  const sourceName = nodeDisplayName(source, state);
+  const targetName = nodeDisplayName(target, state);
   if (a === b && source.key === target.key) {
     return verdict("none", false, false, `cannot wire a ${a} to itself`);
   }
 
   if (a === "fragment" && b === "fragment") {
-    return verdict("fragment-join", true, true);
+    const label = `Join ${sourceName} into ${targetName}`;
+    return verdict("fragment-join", true, true, null, null, label);
   }
 
   if (unordered(a, b, "fragment", "session")) {
     const sessionKey = a === "session" ? source.key : target.key;
     const fragmentKey = a === "fragment" ? source.key : target.key;
     const session = sessionByKey(state, sessionKey);
+    const label = `Publish ${fragmentKey} to session ${
+      a === "session" ? sourceName : targetName
+    }`;
     if (session && session.fragmentKeys.includes(fragmentKey)) {
-      return verdict("fragment-into-session", false, true, "fragment is already in the session");
+      return verdict(
+        "fragment-into-session",
+        false,
+        true,
+        "fragment is already in the session",
+        null,
+        label,
+      );
     }
-    return verdict("fragment-into-session", true, true);
+    return verdict("fragment-into-session", true, true, null, null, label);
   }
 
   if (unordered(a, b, "peer", "session")) {
     const peerKey = a === "peer" ? source.key : target.key;
     const peer = peerByKey(state, peerKey);
+    const sessionName = a === "session" ? sourceName : targetName;
+    const peerName = a === "peer" ? sourceName : targetName;
+    const label = `Sync session ${sessionName} over peer ${peerName}`;
     if (peer && peer.transport === "nostr") {
       // The nostr transport is not served by /api/sync yet; keep the pair
       // visible but honestly unwired.
@@ -501,6 +556,7 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
         false,
         null,
         "a nostr transport behind /api/sync (npub peers cannot sync yet)",
+        label,
       );
     }
     if (peer && (peer.transport === "unknown" || !peer.identity)) {
@@ -509,17 +565,29 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
         false,
         true,
         "peer has no usable transport identity (configure a ticket or signaling files)",
+        null,
+        label,
       );
     }
-    return verdict("peer-into-session", true, true);
+    return verdict("peer-into-session", true, true, null, null, label);
   }
 
   if (unordered(a, b, "payment", "fragment")) {
-    return verdict("attach-payment", true, true);
+    const paymentRef = a === "payment" ? source : target;
+    const fragmentKey = a === "fragment" ? source.key : target.key;
+    const label = `Attach payment ${nodeDisplayName(paymentRef, state)} to ${fragmentKey}`;
+    return verdict("attach-payment", true, true, null, null, label);
   }
 
   if (a === "utxo" && b === "create") {
-    return verdict("add-create-input", true, true);
+    return verdict(
+      "add-create-input",
+      true,
+      true,
+      null,
+      null,
+      `Use ${sourceName} as a create-form input`,
+    );
   }
   if (a === "utxo" || b === "utxo") {
     return verdict(
@@ -537,6 +605,7 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
       false,
       null,
       "a session-state merge seam (lattice join of two converging session states)",
+      `Merge sessions ${sourceName} and ${targetName}`,
     );
   }
 
@@ -547,6 +616,7 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
       false,
       null,
       "a standalone peer-to-peer channel establishment seam",
+      `Bridge peers ${sourceName}, ${targetName}`,
     );
   }
 
@@ -557,6 +627,7 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
       false,
       null,
       "descriptor derivation (Backend.classifyPaste) to match fragment scripts to the descriptor",
+      `Attribute ${sourceName} scripts to ${targetName}`,
     );
   }
 
