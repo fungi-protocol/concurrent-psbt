@@ -36,7 +36,11 @@
             cargoArtifacts = deps;
             CARGO_PROFILE = profile;
             cargoNextestExtraArgs = "--user-config-file ${./nextest-record.toml}";
-            nativeBuildInputs = [ pkgs.unzip ];
+            nativeBuildInputs = [
+              # capnp for transport-plugin-api's build.rs (clobbers commonArgs)
+              pkgs.capnproto
+              pkgs.unzip
+            ];
             preCheck = ''
               export NEXTEST_STATE_DIR="$TMPDIR/nextest-state"
               mkdir -p "$NEXTEST_STATE_DIR"
@@ -70,6 +74,8 @@
             nativeBuildInputs = with pkgs; [
               cargo-llvm-cov
               cargo-nextest
+              # capnp for transport-plugin-api's build.rs (clobbers commonArgs)
+              capnproto
             ];
             buildPhaseCargoCommand = ''
               bash ${./coverage/collect.sh} \
@@ -213,6 +219,8 @@
             CARGO_PROFILE = "dev";
             pnameSuffix = "-mutants";
             nativeBuildInputs = [
+              # capnp for transport-plugin-api's build.rs (clobbers commonArgs)
+              pkgs.capnproto
               pkgs.cargo-mutants
               pkgs.cargo-nextest
             ];
