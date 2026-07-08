@@ -1,0 +1,31 @@
+[package]
+name = "transport-plugin-api"
+version.workspace = true
+edition = "2024"
+
+# transport-plugin-api: the Cap'n Proto wire contract between ptj (the host)
+# and out-of-process transport plugins — separate binaries with their OWN
+# lockfiles, spawned by the host, spoken to over child stdin/stdout via
+# twoparty RPC. Schema + generated bindings + the protocol version constant,
+# nothing else. Both the host (ptj `plugin-transports`) and every plugin
+# binary (e.g. plugins/ptj-transport-nym, workspace-EXCLUDED) depend on it;
+# it re-exports capnp/capnp-rpc so both sides share one grounded RPC stack.
+
+[dependencies]
+# Runtime support for the generated bindings (message builders/readers,
+# capability types). Version grounded via `cargo add` (2026-07); re-exported
+# at the crate root so host and plugins share this one grounded version.
+capnp = "0.26.2"
+# The twoparty vat both sides run over the child's stdio. Not used by this
+# crate's own code — re-exported for the host and the plugin binaries, which
+# must agree on the RPC stack version. Grounded via `cargo add` (2026-07).
+capnp-rpc = "0.26.1"
+
+[build-dependencies]
+# Drives the `capnp` TOOL (from the nix devshell) at build time to generate
+# transport_capnp.rs from schema/transport.capnp. Grounded via `cargo add`
+# (2026-07).
+capnpc = "0.26.0"
+
+[lints]
+workspace = true

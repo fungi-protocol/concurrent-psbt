@@ -24,6 +24,10 @@
       commonArgs = {
         inherit src;
         strictDeps = true;
+        # transport-plugin-api's build.rs shells out to the capnp tool
+        # (capnpc schema compilation); every cargo-building derivation needs
+        # it on PATH (deps-only builds run build scripts too).
+        nativeBuildInputs = [ pkgs.capnproto ];
       };
 
       cargoArtifactsDev = craneLib.buildDepsOnly (commonArgs // { CARGO_PROFILE = "dev"; });
