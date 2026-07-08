@@ -25,7 +25,7 @@ import type {
   InspectResponse,
   PsbtResponse,
 } from "../shared-frontend/core/backend.js";
-import { amountParts, seedFromRandomBytes } from "../model.js";
+import { seedFromRandomBytes } from "../model.js";
 import {
   addFragment,
   asArray,
@@ -51,6 +51,7 @@ import {
   type SyncTransport,
 } from "./state.js";
 import {
+  amountSpanParts,
   elisionLabel,
   fragmentCardModel,
   type InputView,
@@ -258,12 +259,14 @@ function lifehashBadge(hex: string, title: string): HTMLElement {
   return img;
 }
 
+// BIP 177 sat-first emphasis (display.ts amountSpanParts): symbol/scale/
+// digits spans whose classes carry only opacity and weight — every part
+// inherits the surrounding color (the ead6ca05 rule).
 function amountSpan(sats: number): HTMLElement {
-  const parts = amountParts(sats);
   const node = span("session-amount", "");
-  if (parts.prefix) node.append(span("session-amount-whole", parts.prefix));
-  node.append(span("session-amount-muted", parts.muted));
-  if (parts.sats) node.append(span("session-amount-sats", parts.sats));
+  for (const part of amountSpanParts(sats)) {
+    node.append(span(part.className, part.text));
+  }
   return node;
 }
 

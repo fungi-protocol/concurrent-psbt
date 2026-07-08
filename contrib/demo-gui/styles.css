@@ -1947,17 +1947,26 @@ h2 {
   margin-left: auto;
 }
 
-.session-amount-whole {
+/* BIP 177 sat-first emphasis: the amount parts vary ONLY in opacity and
+   weight and INHERIT the surrounding color (the demo's ead6ca05 rule —
+   colored contexts, e.g. a deficit's red, must tint the near-transparent
+   scaffold, never grey it). The scale scaffold (decimal point + leading
+   zeros) keeps all eight fraction digits positionally aligned while the
+   significant digits read as sats; the ₿ symbol is less transparent than
+   the scaffold. `.session-amount-digits` deliberately has no rule: the
+   significant digits fully inherit color, opacity, and weight. */
+.session-amount {
   font-weight: 600;
 }
 
-.session-amount-muted {
-  color: var(--muted);
+.session-amount-symbol {
+  opacity: 0.68;
+  font-weight: 700;
 }
 
-.session-amount-sats {
-  font-weight: 600;
-  color: var(--green);
+.session-amount-scale {
+  opacity: 0.42;
+  font-weight: 500;
 }
 
 .session-fee-line {

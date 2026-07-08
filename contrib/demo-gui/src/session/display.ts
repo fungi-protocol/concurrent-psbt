@@ -29,7 +29,7 @@
 // bitvomit on expand — this module exposes the digest strings.
 
 import type { InspectResponse } from "../shared-frontend/core/backend.js";
-import { formatSatAmount } from "../model.js";
+import { amountParts, formatSatAmount } from "../model.js";
 import { addressFromScript, type Network } from "./encoding.js";
 import {
   asArray,
@@ -187,6 +187,63 @@ export function outputViews(
       provenance: (uniqueIdHex && provenance?.outputs[uniqueIdHex]) || null,
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Amount emphasis — the BIP 177 sat-first reading of the demo's amount
+// convention (src/model.ts amountParts + src/app.ts appendAmountPartTspans).
+// ---------------------------------------------------------------------------
+//
+// Every amount renders the FULL BTC-position string (all eight fraction
+// digits always present) split into three emphasis parts:
+//   symbol — the unicode ₿, dimmed but LESS transparent than the scaffold;
+//   scale  — the decimal point and leading zero digits: the positional
+//            scaffold, nearly transparent, so the significant digits read as
+//            sats while the 8th-sat digit keeps its column;
+//   digits — the significant digits (and the whole-BTC digits): full
+//            opacity.
+// The classes carry ONLY opacity/weight in styles.css. No part ever forces
+// a color: all three INHERIT the surrounding color (the demo's ead6ca05
+// rule — a deficit-red context must tint its scaffold red at low opacity,
+// never grey it).
+
+export interface AmountSpanPart {
+  part: "symbol" | "scale" | "digits";
+  className: "session-amount-symbol" | "session-amount-scale" | "session-amount-digits";
+  text: string;
+}
+
+function amountSpanPart(part: AmountSpanPart["part"], text: string): AmountSpanPart {
+  return { part, className: `session-amount-${part}`, text };
+}
+
+// Split a leading ₿ off into the symbol part (the analog of the demo's
+// appendAmountPartTspans): amountParts rides the currency symbol inside
+// `prefix` (≥ 1 BTC) or `muted` (< 1 BTC).
+function pushAmountText(parts: AmountSpanPart[], text: string, part: AmountSpanPart["part"]): void {
+  if (!text) return;
+  if (text.startsWith("₿")) {
+    parts.push(amountSpanPart("symbol", "₿"));
+    text = text.slice(1);
+  }
+  if (text) parts.push(amountSpanPart(part, text));
+}
+
+export function amountSpanParts(valueSats: number): AmountSpanPart[] {
+  const raw = amountParts(valueSats);
+  const parts: AmountSpanPart[] = [];
+  pushAmountText(parts, raw.prefix, "digits");
+  pushAmountText(parts, raw.muted, "scale");
+  pushAmountText(parts, raw.sats, "digits");
+  return parts;
+}
+
+// Signed variant for balance deltas: the sign is a significant digit (it
+// inherits the surrounding color — deficit contexts render it red).
+export function signedAmountSpanParts(valueSats: number): AmountSpanPart[] {
+  const parts = amountSpanParts(Math.abs(valueSats));
+  if (valueSats < 0) parts.unshift(amountSpanPart("digits", "−"));
+  return parts;
 }
 
 // ---------------------------------------------------------------------------
