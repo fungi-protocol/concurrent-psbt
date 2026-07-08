@@ -47,22 +47,22 @@ pub(crate) fn classify(payload: &str, network: bitcoin::Network) -> Result<serde
     let mut attempts: Vec<String> = Vec::new();
 
     // --- peer identifiers (npub; more kinds later) --------------------------
-    if let Ok((hrp, data)) = bitcoin::bech32::decode(payload) {
-        if hrp.to_lowercase() == "npub" {
-            if data.len() == 32 {
-                return Ok(json!({
-                    "kind": "peer_id",
-                    "format": "npub",
-                    "id_hex": hex_encode(&data),
-                }));
-            }
-            attempts.push(format!(
-                "not an npub peer id (payload is {} bytes, expected 32)",
-                data.len()
-            ));
+    // Other bech32 HRPs (bc/tb/lnbc/lno/...) fall through: they are addresses
+    // or lightning objects the payment-instructions parser owns.
+    if let Ok((hrp, data)) = bitcoin::bech32::decode(payload)
+        && hrp.to_lowercase() == "npub"
+    {
+        if data.len() == 32 {
+            return Ok(json!({
+                "kind": "peer_id",
+                "format": "npub",
+                "id_hex": hex_encode(&data),
+            }));
         }
-        // Other HRPs (bc/tb/lnbc/lno/...) fall through: they are addresses or
-        // lightning objects the payment-instructions parser owns.
+        attempts.push(format!(
+            "not an npub peer id (payload is {} bytes, expected 32)",
+            data.len()
+        ));
     }
 
     // --- output descriptors --------------------------------------------------
