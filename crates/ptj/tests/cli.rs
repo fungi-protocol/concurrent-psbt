@@ -2405,6 +2405,28 @@ fn sort_strips_negotiation_band() {
     assert!(report["payments"].as_array().unwrap().is_empty());
 }
 
+#[test]
+fn sort_strips_fee_band() {
+    // Regression armor: two independent reviews mis-filed a "fee leaks through
+    // sort" bug off a stale doc. The sorter's clear_removal_and_fee() strips
+    // the 0x22 band; prove it end to end.
+    let temp = tempfile::tempdir().unwrap();
+    let base = write_psbt(temp.path(), "base.psbt", create_psbt(TXID, 0, 1, 50_000));
+    let declared = write_psbt(temp.path(), "declared.psbt", run_to_psbt([
+        "ptj", "fee", "--amount-sats", "700", path_str(&base),
+    ]));
+    let before: serde_json::Value = serde_json::from_str(&run_to_string([
+        "ptj", "inspect", path_str(&declared),
+    ])).unwrap();
+    assert_eq!(before["totals"]["declared_fee_sats"].as_u64(), Some(700));
+    let sorted = write_psbt(temp.path(), "sorted.psbt", run_to_psbt(["ptj", "sort", path_str(&declared)]));
+    let after: serde_json::Value = serde_json::from_str(&run_to_string([
+        "ptj", "inspect", path_str(&sorted),
+    ])).unwrap();
+    assert_eq!(after["totals"]["declared_fee_sats"].as_u64(), Some(0));
+    assert_eq!(after["totals"]["declared_fee_undecoded_count"].as_u64(), Some(0));
+}
+
 // ---- fee: explicit fee contributions ----
 
 #[test]
