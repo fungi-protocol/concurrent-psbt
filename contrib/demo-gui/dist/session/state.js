@@ -174,9 +174,9 @@ export function buildCreateRequest(form) {
         // validation); nothing is second-guessed here.
         outputs.push({ address, amountBtc });
     }
-    if (inputs.length === 0 && outputs.length === 0) {
-        return fail("add at least one input or output");
-    }
+    // Zero rows is a valid request: /api/create returns an empty MODIFIABLE
+    // unordered PSBT (tx-modifiable flags set) — the natural starting fragment
+    // for a session that grows by joins.
     return {
         ok: true,
         value: {
@@ -346,8 +346,8 @@ export function buildConfirmArgs(form) {
 // Paste/upload helpers.
 // ---------------------------------------------------------------------------
 // Classify pasted text: a base64 BIP 370 / BIP 174 blob is accepted as-is
-// (the two share the `psbt` magic; which decoder applies is the user's
-// explicit choice of button, exactly like `ptj import-bip174` vs stdin).
+// (the two share the `psbt` magic; which decoder applies is a downstream
+// classification outcome — BIP 370 first, BIP 174 import as the fallback).
 export function pastedPsbt(text) {
     const compact = compactBase64(text);
     return looksLikeBase64Psbt(compact) ? compact : null;
