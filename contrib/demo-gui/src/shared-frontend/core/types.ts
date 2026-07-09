@@ -183,7 +183,10 @@ export interface SyncRequest {
 }
 
 export interface SyncResponse {
-  psbt: string;
+  // Absent exactly when the request minted an empty shared document
+  // (`irohTicketOut` with zero fragments): there is nothing to converge and
+  // a fabricated fragment would misstate the document contents.
+  psbt?: string;
   inspect?: InspectResponse;
   payments: string[];
   confirmations: string[];
