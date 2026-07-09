@@ -2029,15 +2029,76 @@ async function makeUnorderedSelected(): Promise<void> {
   }
 }
 
+// --- override fixes -----------------------------------------------------------
+//
+// An armed override on a gate that carries a fix APPLIES the repair instead
+// of sending the blocked request as-is (the backend would reject it — an
+// escape hatch into a guaranteed 400 is no escape hatch). Every repair mints
+// a NEW fragment through the normal grow-only path, so the provenance stays
+// visible in the fragment set.
+
+// PSBT_GLOBAL_TX_MODIFIABLE: raw global key 0x06, value 0x03 = bits 0
+// (inputs) + 1 (outputs) modifiable — the field-edit route's raw handles.
+const TX_MODIFIABLE_KEY_HEX = "06";
+const TX_MODIFIABLE_BOTH_HEX = "03";
+
+async function applySetTxModifiableFix(fragment: SessionFragment): Promise<SessionFragment> {
+  const response = await backend.applyPsbtEdits(fragment.psbt, [
+    { map: "global", key: TX_MODIFIABLE_KEY_HEX, value: TX_MODIFIABLE_BOTH_HEX },
+  ]);
+  if (response.psbt === undefined) {
+    throw new Error(response.error ?? "the tx-modifiable raw edit failed save-time validation");
+  }
+  const minted = await addResponse(
+    { psbt: response.psbt, inspect: response.inspect },
+    "edit",
+    `raw edit of ${fragment.key}: TX_MODIFIABLE set to both (override fix)`,
+  );
+  logEvent(`override fix: ${fragment.key} → ${minted.key} (TX_MODIFIABLE flags set via /api/edit)`);
+  return minted;
+}
+
+async function applySortFirstFix(fragment: SessionFragment): Promise<SessionFragment> {
+  let seed = inputValue("sortSeed").trim() || undefined;
+  if (!seed && !fragmentSummary(fragment.inspect).seedHex) {
+    // The sorter role needs PSBT_GLOBAL_SORT_SEED; the fragment carries none
+    // and the field is blank, so generate one (the create form's spec
+    // minimum: 128 bits) and say so.
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    seed = seedFromRandomBytes(bytes);
+    logEvent(`override fix: generated a random sort seed (${seed}) — fill the sort-seed field to control it`);
+  }
+  const sorted = await addResponse(
+    await backend.sortPsbt(fragment.psbt, seed),
+    "sort",
+    `sort of ${fragment.key} (override fix)`,
+  );
+  logEvent(`override fix: ${fragment.key} → ${sorted.key} (sorted via /api/sort)`);
+  return sorted;
+}
+
+// The gate's armed-override repair for this action, if any (null = run the
+// action on the selection as-is, the send-as-is override semantics).
+function armedOverrideFix(action: SessionAction) {
+  const state = actionState(action, enablementContext());
+  return state.enabled && state.overridden ? (state.gate?.fix ?? null) : null;
+}
+
 async function atomizeSelected(): Promise<void> {
   const selected = requireEnabled("atomize");
   if (!selected) return;
+  const fix = armedOverrideFix("atomize");
   try {
-    const response = await backend.atomizePsbt(selected[0].psbt);
+    let target = selected[0];
+    if (fix?.kind === "set-tx-modifiable") {
+      target = await applySetTxModifiableFix(target);
+    }
+    const response = await backend.atomizePsbt(target.psbt);
     let index = 0;
     for (const piece of response.fragments) {
       index += 1;
-      await addResponse(piece, "atomize", `atom ${index}/${response.fragments.length} of ${selected[0].key}`);
+      await addResponse(piece, "atomize", `atom ${index}/${response.fragments.length} of ${target.key}`);
     }
     logEvent(`atomize produced ${response.fragments.length} fragments`);
     showStatus("", false);
@@ -2139,9 +2200,14 @@ function exportSelectedV2(): void {
 async function exportSelectedBip174(): Promise<void> {
   const selected = requireEnabled("export-bip174");
   if (!selected) return;
+  const fix = armedOverrideFix("export-bip174");
   try {
-    const exported = await backend.exportBip174(selected[0].psbt);
-    showOutput(`${selected[0].key} — BIP 174 base64`, exported.psbt);
+    let target = selected[0];
+    if (fix?.kind === "sort-first") {
+      target = await applySortFirstFix(target);
+    }
+    const exported = await backend.exportBip174(target.psbt);
+    showOutput(`${target.key} — BIP 174 base64`, exported.psbt);
     showStatus("", false);
   } catch (error) {
     reportError("export BIP 174", error);
