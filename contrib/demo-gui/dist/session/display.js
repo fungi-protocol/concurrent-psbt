@@ -29,6 +29,7 @@
 import { formatSatAmount } from "../model.js";
 import { addressFromScript } from "./encoding.js";
 import { asArray, asBoolean, asNumber, asObject, asString, fragmentSummary, } from "./state.js";
+import { scriptFromAddress } from "./encoding.js";
 const SCRIPT_LABEL = {
     p2pkh: "legacy (P2PKH)",
     p2sh: "script hash (P2SH)",
@@ -68,6 +69,29 @@ function classifyScript(scriptHex) {
         }
     }
     return "unknown";
+}
+// ---------------------------------------------------------------------------
+// LifeHash chips for addresses/scripts — the CARD face never shows an
+// address or script as text: a LifeHash fingerprint chip stands in, and the
+// textual form survives only in the chip's title/aria-label, the expanded
+// detail view, and the field editor.
+// ---------------------------------------------------------------------------
+//
+// Chip contract: the digest input is the script_pubkey HEX (never the
+// address string), so the same script fingerprints identically however it
+// reached the card; GET /api/lifehash/<hex> accepts arbitrary-length data.
+export const LIFEHASH_ROUTE = "/api/lifehash/";
+export function lifehashSrc(digestHex) {
+    return `${LIFEHASH_ROUTE}${digestHex}`;
+}
+// Digest for an address-carrying object (payment cards, utxo nodes): the
+// script the address encodes. Strings that decode to no script (a lightning
+// invoice or BOLT 12 offer riding a payment's address slot) return null —
+// those keep their textual rendering, there is no script to fingerprint.
+export function addressChipDigestHex(address) {
+    if (!address)
+        return null;
+    return scriptFromAddress(address)?.scriptHex ?? null;
 }
 export function inputViews(inspect, provenance) {
     const inputs = asArray(asObject(inspect)?.inputs) ?? [];
@@ -177,6 +201,23 @@ export function cardGroups(inputs, outputs) {
             slot.group.outputSubtotalSats = null;
     }
     return slots.map((slot) => slot.group);
+}
+// A group header wears the group's script fingerprint when the group has ONE
+// concrete script identity (every output shares a script_pubkey — the
+// pseudo-descriptor/template resolves to a single script). Mixed-script
+// groups (a template bucket over different addresses) show no chip: one
+// fingerprint would misattribute the rows under it.
+export function groupChipDigestHex(group) {
+    let digest = null;
+    for (const output of group.outputs) {
+        if (!output.scriptHex)
+            return null;
+        if (digest === null)
+            digest = output.scriptHex;
+        else if (digest !== output.scriptHex)
+            return null;
+    }
+    return digest;
 }
 // The demo's formatSatAmount renders non-negative amounts; the fee delta is
 // the one place a NEGATIVE number appears (outputs exceeding known inputs).

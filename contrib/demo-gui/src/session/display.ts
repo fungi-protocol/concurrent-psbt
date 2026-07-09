@@ -39,6 +39,7 @@ import {
   fragmentSummary,
   type FragmentSummary,
 } from "./state.js";
+import { scriptFromAddress } from "./encoding.js";
 
 export interface InputView {
   index: number;
@@ -107,6 +108,32 @@ function classifyScript(scriptHex: string | null): ScriptKind {
     }
   }
   return "unknown";
+}
+
+// ---------------------------------------------------------------------------
+// LifeHash chips for addresses/scripts — the CARD face never shows an
+// address or script as text: a LifeHash fingerprint chip stands in, and the
+// textual form survives only in the chip's title/aria-label, the expanded
+// detail view, and the field editor.
+// ---------------------------------------------------------------------------
+//
+// Chip contract: the digest input is the script_pubkey HEX (never the
+// address string), so the same script fingerprints identically however it
+// reached the card; GET /api/lifehash/<hex> accepts arbitrary-length data.
+
+export const LIFEHASH_ROUTE = "/api/lifehash/";
+
+export function lifehashSrc(digestHex: string): string {
+  return `${LIFEHASH_ROUTE}${digestHex}`;
+}
+
+// Digest for an address-carrying object (payment cards, utxo nodes): the
+// script the address encodes. Strings that decode to no script (a lightning
+// invoice or BOLT 12 offer riding a payment's address slot) return null —
+// those keep their textual rendering, there is no script to fingerprint.
+export function addressChipDigestHex(address: string | null): string | null {
+  if (!address) return null;
+  return scriptFromAddress(address)?.scriptHex ?? null;
 }
 
 // Provenance from pseudo-descriptor metadata (not in inspect JSON yet):
@@ -250,6 +277,21 @@ export function cardGroups(inputs: InputView[], outputs: OutputView[]): CardGrou
     if (slot.group.outputs.length === 0) slot.group.outputSubtotalSats = null;
   }
   return slots.map((slot) => slot.group);
+}
+
+// A group header wears the group's script fingerprint when the group has ONE
+// concrete script identity (every output shares a script_pubkey — the
+// pseudo-descriptor/template resolves to a single script). Mixed-script
+// groups (a template bucket over different addresses) show no chip: one
+// fingerprint would misattribute the rows under it.
+export function groupChipDigestHex(group: Pick<CardGroup, "outputs">): string | null {
+  let digest: string | null = null;
+  for (const output of group.outputs) {
+    if (!output.scriptHex) return null;
+    if (digest === null) digest = output.scriptHex;
+    else if (digest !== output.scriptHex) return null;
+  }
+  return digest;
 }
 
 // ---------------------------------------------------------------------------
