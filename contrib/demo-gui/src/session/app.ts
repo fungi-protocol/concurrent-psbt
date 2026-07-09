@@ -56,6 +56,7 @@ import {
   elisionLabel,
   fragmentBadges,
   fragmentCardModel,
+  rowDetailPairs,
   signedAmountSpanParts,
   type AmountSpanPart,
   type BalanceSheet,
@@ -154,6 +155,9 @@ let assignIdsTarget: string | null = null;
 // an override is an explicit, per-situation decision, never a sticky default.
 const overrides = new Set<string>();
 const expanded = new Set<string>();
+// Expanded input/output rows, keyed "<fragment>:<side>:<index>" — clicking a
+// row toggles its full-field detail (display.ts rowDetailPairs).
+const expandedRows = new Set<string>();
 // Lineage notes for operation results ("join of psbt-1, psbt-2") — the
 // lattice provenance the card shows under the title.
 const lineage = new Map<string, string>();
@@ -1013,13 +1017,13 @@ function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
       outputColumn.append(span("session-column-heading", "outputs"));
     }
     for (const input of group.inputs.slice(0, INPUT_ROWS_SHOWN)) {
-      inputColumn.append(inputRow(input));
+      inputColumn.append(expandableCoinRow(fragment, "input", input.index, inputRow(input)));
     }
     const inputsHidden = elisionLabel(INPUT_ROWS_SHOWN, group.inputs.length);
     if (inputsHidden) inputColumn.append(span("item-meta session-elided", `inputs ${inputsHidden}`));
 
     for (const output of group.outputs.slice(0, OUTPUT_ROWS_SHOWN)) {
-      outputColumn.append(outputRow(output));
+      outputColumn.append(expandableCoinRow(fragment, "output", output.index, outputRow(output)));
     }
     const outputsHidden = elisionLabel(OUTPUT_ROWS_SHOWN, group.outputs.length);
     if (outputsHidden) outputColumn.append(span("item-meta session-elided", `outputs ${outputsHidden}`));
@@ -1066,6 +1070,9 @@ function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
       session = removeFragment(session, fragment.key);
       objects = dropFragmentKey(objects, fragment.key);
       expanded.delete(fragment.key);
+      for (const rowKey of Array.from(expandedRows)) {
+        if (rowKey.startsWith(`${fragment.key}:`)) expandedRows.delete(rowKey);
+      }
       lineage.delete(fragment.key);
       logEvent(`removed ${fragment.key}`);
       render();
@@ -1219,6 +1226,70 @@ function balanceReport(sheet: BalanceSheet, feeText: string): HTMLElement {
     block.append(span("item-meta session-fee-line", sheet.fallbackText));
   }
   return block;
+}
+
+// Row expansion: clicking an input/output row toggles a detail block with
+// the textual address and EVERY field inspect carries for that index — all
+// decoded entry fields plus the raw keymap entries (display.ts
+// rowDetailPairs), the counterpart of the chips-instead-of-text card face.
+// During a wire gesture the whole card is the tap target, so expansion
+// steps aside (the click bubbles to the card's wire handler).
+function expandableCoinRow(
+  fragment: SessionFragment,
+  side: "input" | "output",
+  index: number,
+  row: HTMLElement,
+): HTMLElement {
+  const key = `${fragment.key}:${side}:${index}`;
+  const host = document.createElement("div");
+  host.className = "session-coin-item";
+  const open = expandedRows.has(key);
+  row.classList.add("session-coin-row-expandable");
+  row.setAttribute("role", "button");
+  row.setAttribute("aria-expanded", String(open));
+  row.tabIndex = 0;
+  row.title = `${side} ${index} — click for every field (address, omitted fields, raw keymap entries)`;
+  const toggle = () => {
+    if (expandedRows.has(key)) {
+      expandedRows.delete(key);
+    } else {
+      expandedRows.add(key);
+    }
+    render();
+  };
+  row.addEventListener("click", (event) => {
+    if (wire.source) return; // wiring in progress: the card handles the tap
+    if ((event.target as HTMLElement).closest("button, a, input")) return;
+    event.stopPropagation();
+    toggle();
+  });
+  row.addEventListener("keydown", (event) => {
+    if (wire.source) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      toggle();
+    }
+  });
+  host.append(row);
+  if (open) {
+    const detail = document.createElement("dl");
+    detail.className = "session-coin-detail";
+    const pairs = rowDetailPairs(fragment.inspect, side, index, displayNetwork());
+    for (const pair of pairs) {
+      const term = document.createElement("dt");
+      term.textContent = pair.label;
+      const value = document.createElement("dd");
+      value.textContent = pair.value;
+      detail.append(term, value);
+    }
+    if (!pairs.length) {
+      const term = document.createElement("dt");
+      term.textContent = "(not decoded)";
+      detail.append(term);
+    }
+    host.append(detail);
+  }
+  return host;
 }
 
 function inputRow(input: InputView): HTMLElement {
