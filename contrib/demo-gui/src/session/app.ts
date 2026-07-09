@@ -17,7 +17,7 @@
 // served Cache-Control: no-store; cache busting rides the ?v on
 // dist/session/app.js in session.html alone).
 
-import { addressChipDigestHex, groupChipDigestHex } from "./display.js";
+import { addressChipDigestHex, groupChipDigestHex, lifehashSrc } from "./display.js";
 import { HttpBackend } from "../shared-frontend/backends/http.js";
 import { PtjBackendError } from "../shared-frontend/core/types.js";
 import type {
@@ -214,7 +214,6 @@ function displayNetwork(): Network {
 // swaps to a clearly marked placeholder chip carrying the truncated hex —
 // graceful, never blocking.
 
-const LIFEHASH_ROUTE = "/api/lifehash/";
 // Hexes whose fetch already failed: skip re-requesting on every render (a
 // reload retries).
 const lifehashFailed = new Set<string>();
@@ -242,10 +241,12 @@ function lifehashBadge(hex: string, title: string): HTMLElement {
   const img = document.createElement("img");
   img.className = "session-lifehash";
   img.alt = `fingerprint ${hex.slice(0, 8)}`;
+  // The full textual value (an address chip's address) reads out to AT.
+  img.setAttribute("aria-label", title);
   img.title = `${title}\n${hex}`;
   // Cards render in bulk; fingerprints load as they scroll into view.
   img.loading = "lazy";
-  img.src = `${LIFEHASH_ROUTE}${hex}`;
+  img.src = lifehashSrc(hex);
   img.addEventListener(
     "error",
     () => {
