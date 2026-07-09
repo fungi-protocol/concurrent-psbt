@@ -1324,22 +1324,11 @@ export function actionState(action: SessionAction, ctx: EnablementContext): Acti
     return { enabled: false, reason: arity, gate: null, overridden: false, needsBackend };
   }
 
-  if (action === "assign-ids") {
-    const summary = ctx.selected[0];
-    if (
-      summary.outputUidPresent !== null &&
-      summary.outputCount !== null &&
-      summary.outputUidPresent >= summary.outputCount
-    ) {
-      return {
-        enabled: false,
-        reason: "all outputs already carry unique ids",
-        gate: null,
-        overridden: false,
-        needsBackend,
-      };
-    }
-  }
+  // assign-ids stays available when every output already carries an id:
+  // backend-minted fragments ALWAYS do (/api/create assigns ids), and the
+  // panel this action opens owns the id-complete cases explicitly (manual
+  // per-output ids, the overwrite-existing-ids checkbox). Arity is the only
+  // pre-condition.
 
   const gate = gateFor(action, ctx.selected);
   if (gate && !ctx.overrides.has(gate.id)) {
