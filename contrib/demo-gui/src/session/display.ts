@@ -559,6 +559,67 @@ export function elisionLabel(shown: number, total: number): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Expanded row detail — everything inspect knows about ONE input/output.
+// ---------------------------------------------------------------------------
+//
+// The card face deliberately elides (LifeHash chips instead of textual
+// addresses, headline fields only); clicking a row expands this projection:
+// the textual address first, then EVERY decoded field of the entry (labeled
+// by its inspect JSON key, the omitted ones included), then the raw keymap
+// entries for that index — kind=known included, because "known" only means
+// a decoded field ELSEWHERE carries it, and this view is the complete one.
+
+export interface RowDetailPair {
+  label: string;
+  value: string;
+}
+
+function detailValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+export function rowDetailPairs(
+  inspect: InspectResponse | null,
+  side: "input" | "output",
+  index: number,
+  network: Network,
+): RowDetailPair[] {
+  const root = asObject(inspect);
+  const entries = asArray(side === "input" ? root?.inputs : root?.outputs) ?? [];
+  const entry = asObject(entries[index]);
+  const pairs: RowDetailPair[] = [];
+
+  // The textual address the LifeHash chip stands for (outputs only: inspect
+  // carries no per-input script data — the documented gap).
+  if (side === "output") {
+    const scriptHex = asString(entry?.script_pubkey_hex);
+    const address = scriptHex ? addressFromScript(scriptHex, network) : null;
+    if (address) pairs.push({ label: "address", value: address });
+  }
+
+  for (const [key, value] of Object.entries(entry ?? {})) {
+    pairs.push({ label: key, value: detailValue(value) });
+  }
+
+  const raw = asObject(root?.raw);
+  const maps = asArray(side === "input" ? raw?.inputs : raw?.outputs);
+  for (const rawEntry of asArray(maps?.[index]) ?? []) {
+    const object = asObject(rawEntry);
+    const keyHex = asString(object?.key_hex);
+    if (keyHex === null) continue;
+    const kind = asString(object?.kind) ?? "unknown";
+    pairs.push({
+      label: `raw ${kind} ${keyHex}`,
+      value: asString(object?.value_hex) ?? "",
+    });
+  }
+  return pairs;
+}
+
+// ---------------------------------------------------------------------------
 // Status badges — emoji + text pills (the demo's status emoji set,
 // src/app.ts psbtStatusBadges, merged into the session's pills).
 // ---------------------------------------------------------------------------

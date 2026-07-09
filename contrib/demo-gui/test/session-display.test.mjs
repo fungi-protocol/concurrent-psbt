@@ -15,6 +15,7 @@ import {
   fragmentCardModel,
   inputViews,
   outputViews,
+  rowDetailPairs,
   scriptTemplate,
   signedAmountSpanParts,
   sizeEstimateVbytesFromInspect,
@@ -273,6 +274,68 @@ test("elisionLabel counts what the card hides", () => {
   assert.equal(elisionLabel(3, 10), "+7 more");
   assert.equal(elisionLabel(3, 3), null);
   assert.equal(elisionLabel(5, 2), null);
+});
+
+// --- expanded row detail (rowDetailPairs) -----------------------------------
+
+test("rowDetailPairs: every decoded field plus the raw keymap entries", () => {
+  // Extend the shared fixture with a raw projection so the raw entries (the
+  // kind=known ones INCLUDED — this view is the complete one) surface.
+  const withRaw = {
+    ...INSPECT,
+    raw: {
+      global: [{ key_hex: "fb", value_hex: "02000000", kind: "known" }],
+      inputs: [
+        [
+          { key_hex: "0e", value_hex: "aa".repeat(32), kind: "known" },
+          { key_hex: "ef01", value_hex: "beef", kind: "unknown" },
+        ],
+        [],
+      ],
+      outputs: [
+        [{ key_hex: "fc0f636f6e63757272656e742d70736274aa", value_hex: "11".repeat(32), kind: "proprietary" }],
+        [],
+        [],
+      ],
+    },
+  };
+
+  // Output 0: the textual address FIRST (the LifeHash chip's counterpart),
+  // then every decoded field by its inspect key, then the raw entries.
+  const output = rowDetailPairs(withRaw, "output", 0, "bitcoin");
+  assert.equal(output[0].label, "address");
+  assert.equal(output[0].value, "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4");
+  const outputLabels = output.map((pair) => pair.label);
+  assert.ok(outputLabels.includes("amount_sats"));
+  assert.ok(outputLabels.includes("script_pubkey_hex"));
+  assert.ok(outputLabels.includes("unique_id_hex"));
+  assert.deepEqual(output[output.length - 1], {
+    label: "raw proprietary fc0f636f6e63757272656e742d70736274aa",
+    value: "11".repeat(32),
+  });
+
+  // Input 0: no address (inspect carries no per-input script data), every
+  // decoded field including the booleans the card row elides, raw entries
+  // with kind=known included.
+  const input = rowDetailPairs(withRaw, "input", 0, "bitcoin");
+  const inputLabels = input.map((pair) => pair.label);
+  assert.ok(inputLabels.includes("outpoint"));
+  assert.ok(inputLabels.includes("sequence"));
+  assert.ok(inputLabels.includes("has_witness_utxo"));
+  assert.ok(inputLabels.includes("raw known 0e"));
+  assert.ok(inputLabels.includes("raw unknown ef01"));
+  assert.equal(input.find((pair) => pair.label === "has_witness_utxo").value, "true");
+
+  // Null decoded values render as an honest dash, not "null" noise.
+  const second = rowDetailPairs(withRaw, "input", 1, "bitcoin");
+  assert.equal(second.find((pair) => pair.label === "sequence").value, "\u2014");
+
+  // Defensive: no inspect, out-of-range index, missing raw section.
+  assert.deepEqual(rowDetailPairs(null, "input", 0, "bitcoin"), []);
+  assert.deepEqual(rowDetailPairs(withRaw, "output", 9, "bitcoin"), []);
+  const bare = rowDetailPairs(INSPECT, "output", 1, "bitcoin");
+  assert.ok(bare.length > 0);
+  assert.ok(bare.every((pair) => !pair.label.startsWith("raw ")));
 });
 
 // --- amount emphasis (BIP 177 sat-first; the ead6ca05 convention) ----------
