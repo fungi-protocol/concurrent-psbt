@@ -2203,6 +2203,15 @@ img.session-lifehash {
   background: var(--surface-2);
 }
 
+/* Derived-script chips on descriptor cards: the chips ride inline after the
+   `derives:` label, wrapping as a row of fingerprints. */
+.session-derived-scripts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 /* Keep the hidden attribute authoritative for the new session components
    whose classes set display (same fix the session panels needed). */
 .session-wire-status[hidden],
