@@ -153,8 +153,21 @@ export function amountSpanParts(valueSats) {
     const raw = amountParts(valueSats);
     const parts = [];
     pushAmountText(parts, raw.prefix, "digits");
-    pushAmountText(parts, raw.muted, "scale");
-    pushAmountText(parts, raw.sats, "digits");
+    if (raw.prefix) {
+        // Nonzero whole-BTC part: every fraction digit is a sat digit
+        // (8.00000000 IS 800,000,000 sats — the zeros ARE the sat integer).
+        // amountParts rides the fraction's leading-zero run inside `muted`;
+        // reclassify everything after the decimal point as significant.
+        pushAmountText(parts, ".", "scale");
+        pushAmountText(parts, raw.muted.slice(1) + raw.sats, "digits");
+    }
+    else {
+        // Below 1 BTC: the "0." and the zeros before the first significant
+        // digit stay scaffold; trailing zeros after it already ride in
+        // `sats` (0.05000000 keeps its seven significant digits).
+        pushAmountText(parts, raw.muted, "scale");
+        pushAmountText(parts, raw.sats, "digits");
+    }
     return parts;
 }
 // Signed variant for balance deltas: the sign is a significant digit (it
