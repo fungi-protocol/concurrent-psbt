@@ -576,6 +576,13 @@ export interface BadgeView {
   title: string;
 }
 
+// The serialization format wears its BIP number on the card; inspect's
+// internal names stay as the seam vocabulary.
+const FORMAT_LABEL: Record<string, string> = {
+  bip370: "BIP 370",
+  bip174: "BIP 174",
+};
+
 export function fragmentBadges(
   card: Pick<FragmentCardModel, "summary" | "uidPresent" | "uidTotal">,
 ): BadgeView[] {
@@ -583,7 +590,7 @@ export function fragmentBadges(
   const badges: BadgeView[] = [];
   badges.push({
     emoji: null,
-    text: summary.format ?? "not decoded",
+    text: summary.format === null ? "not decoded" : (FORMAT_LABEL[summary.format] ?? summary.format),
     tone: "neutral",
     title: "PSBT serialization format",
   });
