@@ -197,11 +197,15 @@ export function outputViews(
 // Every amount renders the FULL BTC-position string (all eight fraction
 // digits always present) split into three emphasis parts:
 //   symbol — the unicode ₿, dimmed but LESS transparent than the scaffold;
-//   scale  — the decimal point and leading zero digits: the positional
-//            scaffold, nearly transparent, so the significant digits read as
-//            sats while the 8th-sat digit keeps its column;
-//   digits — the significant digits (and the whole-BTC digits): full
-//            opacity.
+//   scale  — the positional scaffold, nearly transparent: the decimal point
+//            and ONLY the zeros before the first significant digit (the
+//            "0.00000" of 0.00000141). Trailing zeros are NOT scaffold —
+//            in 8.00000000 every fraction digit is part of the sat integer
+//            (800,000,000 sats), so with a nonzero whole-BTC part the
+//            scaffold is the decimal point alone;
+//   digits — the significant digits (the whole-BTC digits, and every
+//            fraction digit from the first significant digit on, trailing
+//            zeros included): full opacity.
 // The classes carry ONLY opacity/weight in styles.css. No part ever forces
 // a color: all three INHERIT the surrounding color (the demo's ead6ca05
 // rule — a deficit-red context must tint its scaffold red at low opacity,
@@ -233,8 +237,20 @@ export function amountSpanParts(valueSats: number): AmountSpanPart[] {
   const raw = amountParts(valueSats);
   const parts: AmountSpanPart[] = [];
   pushAmountText(parts, raw.prefix, "digits");
-  pushAmountText(parts, raw.muted, "scale");
-  pushAmountText(parts, raw.sats, "digits");
+  if (raw.prefix) {
+    // Nonzero whole-BTC part: every fraction digit is a sat digit
+    // (8.00000000 IS 800,000,000 sats — the zeros ARE the sat integer).
+    // amountParts rides the fraction's leading-zero run inside `muted`;
+    // reclassify everything after the decimal point as significant.
+    pushAmountText(parts, ".", "scale");
+    pushAmountText(parts, raw.muted.slice(1) + raw.sats, "digits");
+  } else {
+    // Below 1 BTC: the "0." and the zeros before the first significant
+    // digit stay scaffold; trailing zeros after it already ride in
+    // `sats` (0.05000000 keeps its seven significant digits).
+    pushAmountText(parts, raw.muted, "scale");
+    pushAmountText(parts, raw.sats, "digits");
+  }
   return parts;
 }
 

@@ -236,25 +236,45 @@ test("amountSpanParts: sub-BTC keeps the leading zeros as scale scaffold", () =>
 
 test("amountSpanParts: whole BTC digits are significant, separators kept", () => {
   // 2,500 BTC + 12,345 sats: the whole-BTC digits are high-order sat digits
-  // (full emphasis); only the decimal point and zero run scaffold.
+  // (full emphasis). With a nonzero whole-BTC part ONLY the decimal point
+  // scaffolds — the fraction's zero run belongs to the sat integer.
   const parts = amountSpanParts(250_000_012_345);
   assert.deepEqual(flatten(parts), [
     "symbol:₿",
     "digits:2,500",
-    "scale:.000",
-    "digits:12345",
+    "scale:.",
+    "digits:00012345",
   ]);
+});
 
-  // Exact whole BTC: the entire fraction is scaffold.
-  assert.deepEqual(flatten(amountSpanParts(100_000_000)), [
+test("amountSpanParts: trailing zeros are significant (8.00000000 IS 800,000,000 sats)", () => {
+  assert.deepEqual(flatten(amountSpanParts(800_000_000)), [
+    "symbol:₿",
+    "digits:8",
+    "scale:.",
+    "digits:00000000",
+  ]);
+});
+
+test("amountSpanParts: 0.00000141 keeps its leading-zero scaffold", () => {
+  assert.deepEqual(flatten(amountSpanParts(141)), [
+    "symbol:₿",
+    "scale:0.00000",
+    "digits:141",
+  ]);
+});
+
+test("amountSpanParts: zeros after a mid significant digit are significant (1.05000000)", () => {
+  assert.deepEqual(flatten(amountSpanParts(105_000_000)), [
     "symbol:₿",
     "digits:1",
-    "scale:.00000000",
+    "scale:.",
+    "digits:05000000",
   ]);
 });
 
 test("amountSpanParts: concatenation is the flat string with all 8 fraction digits", () => {
-  for (const sats of [0, 1, 549, 12_345, 99_999_999, 100_000_000, 250_000_012_345]) {
+  for (const sats of [0, 1, 141, 549, 12_345, 99_999_999, 100_000_000, 105_000_000, 800_000_000, 250_000_012_345]) {
     const joined = amountSpanParts(sats).map((part) => part.text).join("");
     assert.equal(joined, formatSatAmount(sats));
     const fraction = joined.split(".")[1];
