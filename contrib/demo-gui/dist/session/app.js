@@ -21,7 +21,7 @@ import { HttpBackend } from "../shared-frontend/backends/http.js";
 import { PtjBackendError } from "../shared-frontend/core/types.js";
 import { seedFromRandomBytes } from "../model.js";
 import { addFragment, asArray, asObject, asString, buildConfirmArgs, buildCreateRequest, buildPayArgs, buildSyncRequest, bytesToBase64, emptySession, fragmentSummary, negotiationView, pastedPsbt, removeFragment, selectedFragments, setSelected, } from "./state.js";
-import { amountBits, amountSpanParts, elisionLabel, fragmentBadges, fragmentCardModel, signedAmountSpanParts, } from "./display.js";
+import { amountBits, amountSpanParts, elisionLabel, fragmentBadges, fragmentCardModel, rowDetailPairs, signedAmountSpanParts, } from "./display.js";
 import { classifyPaste, mintFromPaste } from "./ingest.js";
 import { actionState, addBridge, addFragmentToSession, addPeerToSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, enrichPayment, idleWire, mergeSessions, mineFragmentKeys, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, sessionByKey, sessionFocus, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
 import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, validateEditor, violationsFromServer, } from "./editor.js";
@@ -50,6 +50,9 @@ let assignIdsTarget = null;
 // an override is an explicit, per-situation decision, never a sticky default.
 const overrides = new Set();
 const expanded = new Set();
+// Expanded input/output rows, keyed "<fragment>:<side>:<index>" — clicking a
+// row toggles its full-field detail (display.ts rowDetailPairs).
+const expandedRows = new Set();
 // Lineage notes for operation results ("join of psbt-1, psbt-2") — the
 // lattice provenance the card shows under the title.
 const lineage = new Map();
@@ -119,10 +122,21 @@ function reportError(context, error) {
     showStatus(`${context}: ${detail}`, true);
     logEvent(`ERROR ${context}: ${detail}`);
 }
+// Opening a panel must be VISIBLE: the wide panels live below the fold, and
+// unhiding one without scrolling reads as a dead button (the live-review
+// symptom on Edit). Reveal = unhide + scroll into view + move focus to the
+// panel so keyboard/AT users land where the action went.
+function revealPanel(id) {
+    const panel = el(id);
+    panel.hidden = false;
+    panel.tabIndex = -1;
+    panel.scrollIntoView({ behavior: "smooth", block: "start" });
+    panel.focus({ preventScroll: true });
+}
 function showOutput(title, body) {
     el("outputTitle").textContent = title;
     el("outputBody").value = body;
-    el("outputPanel").hidden = false;
+    revealPanel("outputPanel");
 }
 function copyText(text, what) {
     navigator.clipboard.writeText(text).then(() => showStatus(`${what} copied to the clipboard`, false), (error) => reportError(`copy ${what}`, error));
@@ -741,18 +755,33 @@ function renderFragmentCard(fragment) {
         }
         title.append(span("", group.label));
         groupNode.append(title);
+        // Inputs LEFT, outputs RIGHT — the demo's section layout, card-shaped.
+        // The columns collapse to one in narrow cards (container query); the
+        // per-row in/out side markers keep the sides readable there.
+        const columns = document.createElement("div");
+        columns.className = "session-group-columns";
+        const inputColumn = document.createElement("div");
+        inputColumn.className = "session-group-column session-group-column-inputs";
+        const outputColumn = document.createElement("div");
+        outputColumn.className = "session-group-column session-group-column-outputs";
+        if (group.inputs.length || group.outputs.length) {
+            inputColumn.append(span("session-column-heading", "inputs"));
+            outputColumn.append(span("session-column-heading", "outputs"));
+        }
         for (const input of group.inputs.slice(0, INPUT_ROWS_SHOWN)) {
-            groupNode.append(inputRow(input));
+            inputColumn.append(expandableCoinRow(fragment, "input", input.index, inputRow(input)));
         }
         const inputsHidden = elisionLabel(INPUT_ROWS_SHOWN, group.inputs.length);
         if (inputsHidden)
-            groupNode.append(span("item-meta session-elided", `inputs ${inputsHidden}`));
+            inputColumn.append(span("item-meta session-elided", `inputs ${inputsHidden}`));
         for (const output of group.outputs.slice(0, OUTPUT_ROWS_SHOWN)) {
-            groupNode.append(outputRow(output));
+            outputColumn.append(expandableCoinRow(fragment, "output", output.index, outputRow(output)));
         }
         const outputsHidden = elisionLabel(OUTPUT_ROWS_SHOWN, group.outputs.length);
         if (outputsHidden)
-            groupNode.append(span("item-meta session-elided", `outputs ${outputsHidden}`));
+            outputColumn.append(span("item-meta session-elided", `outputs ${outputsHidden}`));
+        columns.append(inputColumn, outputColumn);
+        groupNode.append(columns);
         // Per-group subtotals at the BOTTOM of the columns. With a single
         // group the card-level report directly below would repeat them (the
         // demo's grand-total elision rule, inverted for the card layout).
@@ -768,7 +797,7 @@ function renderFragmentCard(fragment) {
     // Footer: per-card actions.
     const foot = document.createElement("div");
     foot.className = "session-card-actions";
-    foot.append(button(expanded.has(fragment.key) ? "Hide raw" : "Raw", "Full inspect JSON (bitvomit view)", () => {
+    foot.append(button(expanded.has(fragment.key) ? "Hide JSON" : "JSON", "The full inspect JSON dump (not raw bytes — those live behind the export buttons)", () => {
         if (expanded.has(fragment.key)) {
             expanded.delete(fragment.key);
         }
@@ -781,11 +810,15 @@ function renderFragmentCard(fragment) {
         pendingEditorFixes.clear();
         editorOverrides.clear();
         renderEditor([]);
-        el("editorPanel").hidden = false;
-    }), button("Wire", "Connect this fragment to another object (join, session, payment)", () => startWire("fragment", fragment.key)), button("Remove", "Drop the fragment from the set", () => {
+        revealPanel("editorPanel");
+    }), ...wireButtonNodes(ref, "Connect this fragment to another object (join, session, payment)."), button("Remove", "Drop the fragment from the set", () => {
         session = removeFragment(session, fragment.key);
         objects = dropFragmentKey(objects, fragment.key);
         expanded.delete(fragment.key);
+        for (const rowKey of Array.from(expandedRows)) {
+            if (rowKey.startsWith(`${fragment.key}:`))
+                expandedRows.delete(rowKey);
+        }
         lineage.delete(fragment.key);
         logEvent(`removed ${fragment.key}`);
         render();
@@ -913,6 +946,68 @@ function balanceReport(sheet, feeText) {
     }
     return block;
 }
+// Row expansion: clicking an input/output row toggles a detail block with
+// the textual address and EVERY field inspect carries for that index — all
+// decoded entry fields plus the raw keymap entries (display.ts
+// rowDetailPairs), the counterpart of the chips-instead-of-text card face.
+// During a wire gesture the whole card is the tap target, so expansion
+// steps aside (the click bubbles to the card's wire handler).
+function expandableCoinRow(fragment, side, index, row) {
+    const key = `${fragment.key}:${side}:${index}`;
+    const host = document.createElement("div");
+    host.className = "session-coin-item";
+    const open = expandedRows.has(key);
+    row.classList.add("session-coin-row-expandable");
+    row.setAttribute("role", "button");
+    row.setAttribute("aria-expanded", String(open));
+    row.tabIndex = 0;
+    row.title = `${side} ${index} — click for every field (address, omitted fields, raw keymap entries)`;
+    const toggle = () => {
+        if (expandedRows.has(key)) {
+            expandedRows.delete(key);
+        }
+        else {
+            expandedRows.add(key);
+        }
+        render();
+    };
+    row.addEventListener("click", (event) => {
+        if (wire.source)
+            return; // wiring in progress: the card handles the tap
+        if (event.target.closest("button, a, input"))
+            return;
+        event.stopPropagation();
+        toggle();
+    });
+    row.addEventListener("keydown", (event) => {
+        if (wire.source)
+            return;
+        if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            toggle();
+        }
+    });
+    host.append(row);
+    if (open) {
+        const detail = document.createElement("dl");
+        detail.className = "session-coin-detail";
+        const pairs = rowDetailPairs(fragment.inspect, side, index, displayNetwork());
+        for (const pair of pairs) {
+            const term = document.createElement("dt");
+            term.textContent = pair.label;
+            const value = document.createElement("dd");
+            value.textContent = pair.value;
+            detail.append(term, value);
+        }
+        if (!pairs.length) {
+            const term = document.createElement("dt");
+            term.textContent = "(not decoded)";
+            detail.append(term);
+        }
+        host.append(detail);
+    }
+    return host;
+}
 function inputRow(input) {
     const row = document.createElement("div");
     row.className = "session-coin-row";
@@ -964,6 +1059,54 @@ function outputRow(output) {
     if (output.amountSats !== null)
         row.append(amountSpan(output.amountSats));
     return row;
+}
+// The per-card Wire affordance, action made visible (the wiring verdict
+// system's labels): idle it STARTS a gesture; while a gesture is active it
+// becomes the completion affordance on other cards — labeled with the
+// verdict's action ("Join psbt-1 into psbt-2") — and the cancel affordance
+// on the source card. Blocked/unbacked pairs disable it with the reason.
+// A "N queued" chip beside it shows the card's pending-wire participation
+// (tooltip: the queued action labels).
+function wireButtonNodes(ref, idleTitle) {
+    const nodes = [];
+    if (!wire.source) {
+        nodes.push(button("Wire", `${idleTitle}\nCompatible targets light up and their buttons name the action ("Join X into Y").`, () => startWire(ref.kind, ref.key)));
+    }
+    else if (wire.source.kind === ref.kind && wire.source.key === ref.key) {
+        nodes.push(button("Cancel wiring", "Stop the wire gesture without queueing anything", cancelWire));
+    }
+    else {
+        const v = wireVerdict(wire.source, ref, objects);
+        const label = v.label ?? "Wire";
+        const node = button(label, "", () => wireTo(ref));
+        switch (wireDisposition(v)) {
+            case "compatible":
+                node.title = `${label} — queue this wire`;
+                break;
+            case "blocked":
+                node.disabled = true;
+                node.title = `${label} — blocked: ${v.reason ?? ""}`;
+                break;
+            default:
+                node.disabled = true;
+                node.title = v.needs
+                    ? `${label} — needs backend: ${v.needs}`
+                    : (v.reason ?? "no join is defined");
+                break;
+        }
+        nodes.push(node);
+    }
+    const queued = pendingWires.filter((wireEntry) => (wireEntry.source.kind === ref.kind && wireEntry.source.key === ref.key) ||
+        (wireEntry.target.kind === ref.kind && wireEntry.target.key === ref.key));
+    if (queued.length) {
+        const chip = span("session-badge session-wire-queued-chip", `${queued.length} queued`);
+        chip.title = queued
+            .map((wireEntry) => wireVerdict(wireEntry.source, wireEntry.target, objects).label ??
+            `${nodeName(wireEntry.source)} ⋈ ${nodeName(wireEntry.target)}`)
+            .join("\n");
+        nodes.push(chip);
+    }
+    return nodes;
 }
 // Highlight and arm wire targets while a wire is pending. The three-way
 // vocabulary (compatible green / blocked red / unbacked dim) and the action
@@ -1033,7 +1176,7 @@ function renderObjects() {
         actions.append(button("Focus", "Fill the viewport with this session (mobile view)", () => {
             focus = sessionFocus(sessionObject.key);
             render();
-        }), button("Wire", "Connect fragments or peers to this session", () => startWire("session", sessionObject.key)), button("Sync now", "Sync this session's fragments over its transport", () => {
+        }), ...wireButtonNodes(ref, "Connect fragments or peers to this session."), button("Sync now", "Sync this session's fragments over its transport", () => {
             void syncSessionOverPeer(sessionObject.key, null);
         }));
         item.append(actions);
@@ -1080,7 +1223,7 @@ function renderObjects() {
             el("payAmount").value = (payment.amountSats / 100_000_000).toFixed(8);
             el("payLabel").value = payment.label;
             logEvent(`prefilled the Pay form from ${payment.key}`);
-        }), button("Wire", "Attach this payment to a fragment", () => startWire("payment", payment.key)));
+        }), ...wireButtonNodes({ kind: "payment", key: payment.key }, "Attach this payment to a fragment."));
         item.append(actions);
         list.append(item);
     }
@@ -1103,7 +1246,7 @@ function renderObjects() {
             item.append(addressNode(utxo.address, `address of ${utxo.key}`, "item-meta session-address"));
         const actions = document.createElement("div");
         actions.className = "session-card-actions";
-        actions.append(button("Wire", "Use as a create-form input", () => startWire("utxo", utxo.key)), button("Copy hex", "Copy the raw transaction hex", () => copyText(utxo.rawTxHex, `${utxo.key} hex`)));
+        actions.append(...wireButtonNodes({ kind: "utxo", key: utxo.key }, "Use as a create-form input."), button("Copy hex", "Copy the raw transaction hex", () => copyText(utxo.rawTxHex, `${utxo.key} hex`)));
         item.append(actions);
         list.append(item);
     }
@@ -1160,7 +1303,7 @@ function renderPeerCard(peer) {
     item.append(head);
     const actions = document.createElement("div");
     actions.className = "session-card-actions";
-    actions.append(button("Copy id", "Copy the full transport identity", () => copyText(peer.identity, `${peer.key} identity`)), button("Wire", "Connect this peer to a session or bridge it with another peer", () => startWire("peer", peer.key)));
+    actions.append(button("Copy id", "Copy the full transport identity", () => copyText(peer.identity, `${peer.key} identity`)), ...wireButtonNodes({ kind: "peer", key: peer.key }, "Connect this peer to a session or bridge it with another peer."));
     item.append(actions);
     return item;
 }
@@ -1193,7 +1336,7 @@ function renderBridgeGroupCard(members) {
     }
     const actions = document.createElement("div");
     actions.className = "session-card-actions";
-    actions.append(button("Wire", "Connect this bridge group to a session (as one peer)", () => startWire("peer", members[0].key)));
+    actions.append(...wireButtonNodes({ kind: "peer", key: members[0].key }, "Connect this bridge group to a session (as one peer)."));
     item.append(actions);
     return item;
 }
@@ -1416,40 +1559,30 @@ async function saveEditor() {
     }
 }
 // --- session screen: load + set operations -----------------------------------
-async function addPsbtText(raw, kind) {
+async function addPsbtText(raw) {
     const psbt = pastedPsbt(raw) ?? classifyPasteToPsbt(raw);
-    if (!psbt) {
-        if (kind !== "auto")
-            showStatus("paste a base64 PSBT first (v2 or BIP 174)", true);
+    if (!psbt)
         return false;
-    }
     try {
-        if (kind === "bip174") {
-            await addResponse(await backend.importBip174(psbt), "import-bip174");
-        }
-        else if (kind === "v2") {
+        // Which decoder applies is a CLASSIFICATION OUTCOME, not a button: try
+        // BIP 370 first, fall back to a BIP 174 upgrade (mirrors the demo
+        // sandbox's hydratePastedPsbtFragment). The formats share the `psbt`
+        // magic.
+        try {
             const inspect = await backend.inspectPsbt(psbt);
             addAndRender(psbt, inspect, "paste");
         }
-        else {
-            // Auto: try v2 first, fall back to a BIP 174 upgrade (mirrors the demo
-            // sandbox's hydratePastedPsbtFragment).
-            try {
-                const inspect = await backend.inspectPsbt(psbt);
-                addAndRender(psbt, inspect, "paste");
-            }
-            catch (error) {
-                if (!(error instanceof PtjBackendError))
-                    throw error;
-                await addResponse(await backend.importBip174(psbt), "import-bip174");
-                logEvent("paste decoded as BIP 174 and upgraded to v2");
-            }
+        catch (error) {
+            if (!(error instanceof PtjBackendError))
+                throw error;
+            await addResponse(await backend.importBip174(psbt), "import-bip174");
+            logEvent("paste decoded as BIP 174 and upgraded to BIP 370");
         }
         showStatus("", false);
         return true;
     }
     catch (error) {
-        reportError(kind === "bip174" ? "import BIP 174" : "inspect", error);
+        reportError("add PSBT", error);
         return true; // it WAS a PSBT; the error is already reported
     }
 }
@@ -1461,7 +1594,7 @@ async function addObject() {
     const raw = textareaValue("pasteInput");
     const pasted = classifyPaste(raw);
     if (pasted.kind === "psbt") {
-        if (await addPsbtText(raw, "auto")) {
+        if (await addPsbtText(raw)) {
             el("pasteInput").value = "";
         }
         return;
@@ -1524,11 +1657,6 @@ async function enrichFromClassify(node, pasted) {
             (error instanceof Error ? error.message : String(error)));
     }
 }
-async function addPasted(kind) {
-    if (await addPsbtText(textareaValue("pasteInput"), kind)) {
-        el("pasteInput").value = "";
-    }
-}
 async function loadUpload() {
     const input = el("uploadInput");
     const file = input.files?.[0];
@@ -1537,7 +1665,9 @@ async function loadUpload() {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const text = new TextDecoder().decode(bytes).trim();
     // A .psbt file is either raw binary or already-base64 text; both end up as
-    // base64 in the paste box, decoded by the button the user picks.
+    // base64 in the paste box, decoded when the user hits Add (BIP 370 first,
+    // BIP 174 upgrade as the fallback — the same auto-classification as a
+    // direct paste).
     el("pasteInput").value =
         pastedPsbt(text) ?? bytesToBase64(bytes);
     logEvent(`loaded ${file.name} into the paste box`);
@@ -1600,16 +1730,64 @@ async function makeUnorderedSelected() {
         reportError("make unordered", error);
     }
 }
+// --- override fixes -----------------------------------------------------------
+//
+// An armed override on a gate that carries a fix APPLIES the repair instead
+// of sending the blocked request as-is (the backend would reject it — an
+// escape hatch into a guaranteed 400 is no escape hatch). Every repair mints
+// a NEW fragment through the normal grow-only path, so the provenance stays
+// visible in the fragment set.
+// PSBT_GLOBAL_TX_MODIFIABLE: raw global key 0x06, value 0x03 = bits 0
+// (inputs) + 1 (outputs) modifiable — the field-edit route's raw handles.
+const TX_MODIFIABLE_KEY_HEX = "06";
+const TX_MODIFIABLE_BOTH_HEX = "03";
+async function applySetTxModifiableFix(fragment) {
+    const response = await backend.applyPsbtEdits(fragment.psbt, [
+        { map: "global", key: TX_MODIFIABLE_KEY_HEX, value: TX_MODIFIABLE_BOTH_HEX },
+    ]);
+    if (response.psbt === undefined) {
+        throw new Error(response.error ?? "the tx-modifiable raw edit failed save-time validation");
+    }
+    const minted = await addResponse({ psbt: response.psbt, inspect: response.inspect }, "edit", `raw edit of ${fragment.key}: TX_MODIFIABLE set to both (override fix)`);
+    logEvent(`override fix: ${fragment.key} → ${minted.key} (TX_MODIFIABLE flags set via /api/edit)`);
+    return minted;
+}
+async function applySortFirstFix(fragment) {
+    let seed = inputValue("sortSeed").trim() || undefined;
+    if (!seed && !fragmentSummary(fragment.inspect).seedHex) {
+        // The sorter role needs PSBT_GLOBAL_SORT_SEED; the fragment carries none
+        // and the field is blank, so generate one (the create form's spec
+        // minimum: 128 bits) and say so.
+        const bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        seed = seedFromRandomBytes(bytes);
+        logEvent(`override fix: generated a random sort seed (${seed}) — fill the sort-seed field to control it`);
+    }
+    const sorted = await addResponse(await backend.sortPsbt(fragment.psbt, seed), "sort", `sort of ${fragment.key} (override fix)`);
+    logEvent(`override fix: ${fragment.key} → ${sorted.key} (sorted via /api/sort)`);
+    return sorted;
+}
+// The gate's armed-override repair for this action, if any (null = run the
+// action on the selection as-is, the send-as-is override semantics).
+function armedOverrideFix(action) {
+    const state = actionState(action, enablementContext());
+    return state.enabled && state.overridden ? (state.gate?.fix ?? null) : null;
+}
 async function atomizeSelected() {
     const selected = requireEnabled("atomize");
     if (!selected)
         return;
+    const fix = armedOverrideFix("atomize");
     try {
-        const response = await backend.atomizePsbt(selected[0].psbt);
+        let target = selected[0];
+        if (fix?.kind === "set-tx-modifiable") {
+            target = await applySetTxModifiableFix(target);
+        }
+        const response = await backend.atomizePsbt(target.psbt);
         let index = 0;
         for (const piece of response.fragments) {
             index += 1;
-            await addResponse(piece, "atomize", `atom ${index}/${response.fragments.length} of ${selected[0].key}`);
+            await addResponse(piece, "atomize", `atom ${index}/${response.fragments.length} of ${target.key}`);
         }
         logEvent(`atomize produced ${response.fragments.length} fragments`);
         showStatus("", false);
@@ -1635,7 +1813,7 @@ function openAssignIds() {
     const fragment = selected[0];
     assignIdsTarget = fragment.key;
     renderAssignIds(fragment);
-    el("assignIdsPanel").hidden = false;
+    revealPanel("assignIdsPanel");
 }
 function renderAssignIds(fragment) {
     el("assignIdsTitle").textContent = `Assign unique ids — ${fragment.key}`;
@@ -1696,15 +1874,20 @@ function exportSelectedV2() {
     const selected = requireEnabled("export-v2");
     if (!selected)
         return;
-    showOutput(`${selected[0].key} — PSBT v2 (BIP 370) base64`, selected[0].psbt);
+    showOutput(`${selected[0].key} — BIP 370 base64`, selected[0].psbt);
 }
 async function exportSelectedBip174() {
     const selected = requireEnabled("export-bip174");
     if (!selected)
         return;
+    const fix = armedOverrideFix("export-bip174");
     try {
-        const exported = await backend.exportBip174(selected[0].psbt);
-        showOutput(`${selected[0].key} — BIP 174 base64`, exported.psbt);
+        let target = selected[0];
+        if (fix?.kind === "sort-first") {
+            target = await applySortFirstFix(target);
+        }
+        const exported = await backend.exportBip174(target.psbt);
+        showOutput(`${target.key} — BIP 174 base64`, exported.psbt);
         showStatus("", false);
     }
     catch (error) {
@@ -1772,6 +1955,72 @@ async function createPsbt(event) {
 function syncTransportValue() {
     return selectValue("syncTransport");
 }
+// --- compile-time capabilities (GET /api/capabilities) ----------------------
+//
+// Which transports THIS ptj binary can drive is a compile-time fact; the
+// Sync dropdown reflects it up front (disabled option + the rebuild hint)
+// instead of failing on use. Fetched directly rather than through the
+// Backend seam: this is deployment metadata of the HTTP shell, not a PSBT
+// operation. An older server without the route degrades to
+// everything-enabled with precise use-time errors.
+const SYNC_TRANSPORT_CAPABILITY = {
+    iroh: { key: "iroh", feature: "iroh-sync" },
+    str0m: { key: "str0m", feature: "str0m" },
+    "webrtc-rs": { key: "webrtc_rs", feature: "webrtc-rs" },
+};
+let transportCapabilities = null;
+function transportUnavailable(transport) {
+    const mapping = SYNC_TRANSPORT_CAPABILITY[transport];
+    if (!mapping || !transportCapabilities)
+        return null;
+    return transportCapabilities[mapping.key] === false
+        ? `${transport} is unavailable in this build — rebuild ptj with --features ${mapping.feature}`
+        : null;
+}
+function markSyncTransportOptions() {
+    if (!transportCapabilities)
+        return;
+    const select = el("syncTransport");
+    for (const option of Array.from(select.options)) {
+        const mapping = SYNC_TRANSPORT_CAPABILITY[option.value];
+        if (!mapping || transportCapabilities[mapping.key] !== false)
+            continue;
+        option.disabled = true;
+        if (!option.text.includes("unavailable")) {
+            option.text = `${option.text} — unavailable in this build (rebuild with --features ${mapping.feature})`;
+        }
+        if (select.value === option.value) {
+            select.value = "local";
+            renderSyncFields();
+        }
+    }
+}
+async function loadCapabilities() {
+    try {
+        const response = await fetch("/api/capabilities");
+        if (!response.ok)
+            throw new Error(`HTTP ${response.status}`);
+        const transports = asObject(asObject((await response.json()))?.transports);
+        if (!transports)
+            return;
+        const capabilities = {};
+        for (const [key, value] of Object.entries(transports)) {
+            capabilities[key] = value === true;
+        }
+        transportCapabilities = capabilities;
+        markSyncTransportOptions();
+        const off = Object.entries(SYNC_TRANSPORT_CAPABILITY)
+            .filter(([, mapping]) => capabilities[mapping.key] === false)
+            .map(([name, mapping]) => `${name} (rebuild with --features ${mapping.feature})`);
+        if (off.length) {
+            logEvent(`this build lacks sync transports: ${off.join(", ")}`);
+        }
+    }
+    catch (error) {
+        logEvent("transport availability unknown (/api/capabilities did not answer) — " +
+            (error instanceof Error ? error.message : String(error)));
+    }
+}
 function renderSyncFields() {
     const transport = syncTransportValue();
     for (const section of Array.from(document.querySelectorAll("[data-transport]"))) {
@@ -1817,16 +2066,35 @@ async function runSyncRequest(psbts, sourceLabel) {
         setSyncState("error", built.error);
         return;
     }
+    // buildSyncRequest always sets transport; the DTO type keeps it optional
+    // for the legacy no-transport request shape.
+    const unavailable = transportUnavailable(built.value.transport ?? "local");
+    if (unavailable) {
+        showStatus(unavailable, true);
+        setSyncState("error", unavailable);
+        return;
+    }
     const runButton = el("syncRun");
     runButton.disabled = true;
     setSyncState("syncing", `${sourceLabel} over ${built.value.transport}…`);
     showStatus("syncing…", false);
     try {
         const response = await backend.syncPsbts(built.value);
-        const converged = await addResponse(response, "sync", `sync convergence (${sourceLabel})`);
-        const view = negotiationView(response);
-        const summary = `${sourceLabel}: converged into ${converged.key}; ` +
-            `${view.paymentCount} payment record(s), ${view.confirmationCount} confirmation record(s) out of band`;
+        let summary;
+        if (response.psbt !== undefined) {
+            const converged = await addResponse({ psbt: response.psbt, inspect: response.inspect }, "sync", `sync convergence (${sourceLabel})`);
+            const view = negotiationView(response);
+            summary =
+                `${sourceLabel}: converged into ${converged.key}; ` +
+                    `${view.paymentCount} payment record(s), ${view.confirmationCount} confirmation record(s) out of band`;
+        }
+        else {
+            // Ticket-only response: the request minted an EMPTY shared document —
+            // nothing to converge, no fragment to add (a fabricated one would
+            // misstate the document contents).
+            summary =
+                `${sourceLabel}: created an empty shared document — share the ticket so peers can publish into it`;
+        }
         setSyncState("ok", summary);
         pushSyncResult(summary);
         if (response.irohTicketOut) {
@@ -1850,9 +2118,12 @@ async function runSyncRequest(psbts, sourceLabel) {
 async function runSync(event) {
     event.preventDefault();
     const state = actionState("sync", enablementContext());
-    if (!state.enabled && syncTransportValue() !== "local") {
-        // Local sync legitimately runs from server-side sources with nothing
-        // selected; every other transport syncs the selection.
+    // Zero-selection syncs that are legitimate: local sync runs from
+    // server-side sources, and iroh with ticket-out CREATES an empty shared
+    // document (peers publish into it later). Every other shape syncs the
+    // selection.
+    const createsEmptyDoc = syncTransportValue() === "iroh" && el("syncIrohTicketOut").checked;
+    if (!state.enabled && syncTransportValue() !== "local" && !createsEmptyDoc) {
         showStatus(`sync: ${state.reason ?? "not available"}`, true);
         return;
     }
@@ -2020,8 +2291,6 @@ function wireDom() {
         BASE_TITLE.set(id, el(id).title);
     }
     el("addObject").addEventListener("click", () => void addObject());
-    el("addV2").addEventListener("click", () => void addPasted("v2"));
-    el("addBip174").addEventListener("click", () => void addPasted("bip174"));
     el("uploadInput").addEventListener("change", () => void loadUpload());
     el("opJoin").addEventListener("click", () => void joinSelected());
     el("opConcatenate").addEventListener("click", () => void concatenateSelected());
@@ -2099,6 +2368,7 @@ function wireDom() {
     renderSyncFields();
     renderNegotiationModes();
     setSyncState("idle", "");
+    void loadCapabilities();
     render();
 }
 wireDom();
