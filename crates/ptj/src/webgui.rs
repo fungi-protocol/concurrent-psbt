@@ -411,7 +411,7 @@ fn sync_response_result(body: &[u8]) -> Result<Vec<u8>> {
         // (or error if nothing to fold). Identical to the old no-ticket branch.
         let joined = local
             .ok_or_else(|| Error::new("request must contain `psbts` or a network transport"))?;
-        return sync_json(&joined, &[], None);
+        return sync_json(Some(&joined), &[], None);
     }
 
     if config.transport == crate::cli::TransportKind::Local {
@@ -436,7 +436,7 @@ fn sync_response_result(body: &[u8]) -> Result<Vec<u8>> {
         let (joined, messages) = crate::commands::sync::drive_async(async move {
             crate::commands::sync::sync_step(&mut transport).await
         })?;
-        return sync_json(&joined, &messages, None);
+        return sync_json(Some(&joined), &messages, None);
     }
 
     // Network transport: build it through the shared selector, publish our
@@ -454,7 +454,7 @@ fn sync_response_result(body: &[u8]) -> Result<Vec<u8>> {
                 .await?;
         }
         tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
-        crate::commands::sync::sync_step(transport.as_mut()).await
+        crate::commands::sync::sync_step_allow_empty(transport.as_mut()).await
     })?;
     // `iroh_ticket_out: true` asked the selector to create a fresh document;
     // the ticket it wrote (server-side temp file, exactly like the inbound
@@ -466,7 +466,15 @@ fn sync_response_result(body: &[u8]) -> Result<Vec<u8>> {
                 .map_err(|error| Error::new(format!("reading created iroh ticket: {error}")))
         })
         .transpose()?;
-    sync_json(&joined, &messages, ticket_out.as_deref())
+    match &joined {
+        Some(psbt) => sync_json(Some(psbt), &messages, ticket_out.as_deref()),
+        // An empty fold is legitimate exactly when this request minted a
+        // fresh document with nothing to publish into it: the response
+        // carries the ticket and no `psbt`. Every other empty fold keeps the
+        // established join error.
+        None if ticket_out.is_some() => sync_json(None, &messages, ticket_out.as_deref()),
+        None => Err(Error::new("join expects at least one PSBT file")),
+    }
 }
 
 /// Build a `SyncConfig` from a `/api/sync` JSON request.
@@ -689,10 +697,12 @@ fn write_ticket_tempfile(_ticket: &str) -> Result<std::path::PathBuf> {
 
 /// Serialize a sync result: converged PSBT plus any out-of-band negotiation
 /// messages (hex-encoded; payments and confirmations are opaque records).
+/// `joined: None` is the create-an-empty-shared-document response: no `psbt`
+/// field at all (a fabricated fragment would misstate the document contents).
 /// `iroh_ticket_out` is the ticket of a document freshly created for this
 /// request (`iroh_ticket_out: true`), echoed back so the browser can share it.
 fn sync_json(
-    joined: &psbt_v2::v2::Psbt,
+    joined: Option<&psbt_v2::v2::Psbt>,
     messages: &[Message],
     iroh_ticket_out: Option<&str>,
 ) -> Result<Vec<u8>> {
@@ -707,11 +717,13 @@ fn sync_json(
         }
     }
     let mut body = serde_json::json!({
-        "psbt": crate::io::encode_psbt(joined),
-        "inspect": crate::commands::inspect::inspect_psbt(joined),
         "payments": payments,
         "confirmations": confirmations,
     });
+    if let Some(joined) = joined {
+        body["psbt"] = serde_json::Value::String(crate::io::encode_psbt(joined));
+        body["inspect"] = crate::commands::inspect::inspect_psbt(joined);
+    }
     if let Some(ticket) = iroh_ticket_out {
         body["iroh_ticket_out"] = serde_json::Value::String(ticket.to_owned());
     }

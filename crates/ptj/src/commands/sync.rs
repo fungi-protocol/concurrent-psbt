@@ -505,6 +505,22 @@ pub(crate) async fn sync_once_over(transport: &mut dyn Transport) -> Result<Psbt
 /// path carries negotiation inside the PSBT, so `sync_once_over` discards
 /// them; GUI flows convey them out of band and want them back.
 pub(crate) async fn sync_step(transport: &mut dyn Transport) -> Result<(Psbt, Vec<Message>)> {
+    let (joined, messages) = sync_step_allow_empty(transport).await?;
+    // The CLI contract: a step must converge SOMETHING. The message matches
+    // the empty-fold error `join::join_psbts` always reported here.
+    let joined = joined.ok_or_else(|| Error::new("join expects at least one PSBT file"))?;
+    Ok((joined, messages))
+}
+
+/// [`sync_step`] minus the non-empty requirement: `None` means the transport
+/// delivered no PSBTs at all. The caller decides whether that is legitimate —
+/// the webgui's create-an-empty-shared-document path (`iroh_ticket_out` with
+/// zero fragments) is; the CLI, which always folds local sources first, is
+/// not. Nothing is published back on an empty gather: an empty document must
+/// stay empty rather than receive a fabricated fragment.
+pub(crate) async fn sync_step_allow_empty(
+    transport: &mut dyn Transport,
+) -> Result<(Option<Psbt>, Vec<Message>)> {
     // gather: drain the transport, decode envelopes (legacy raw PSBTs fall
     // back cleanly), and split PSBTs from negotiation messages.
     let mut psbts = Vec::new();
@@ -517,6 +533,9 @@ pub(crate) async fn sync_step(transport: &mut dyn Transport) -> Result<(Psbt, Ve
             other => messages.push(other),
         }
     }
+    if psbts.is_empty() {
+        return Ok((None, messages));
+    }
 
     // converge: the EXISTING engine — reduce(Join::join), conflict reporting,
     // try_unwrap. Order/dedup are irrelevant (idempotent/commutative join).
@@ -526,7 +545,7 @@ pub(crate) async fn sync_step(transport: &mut dyn Transport) -> Result<(Psbt, Ve
     transport
         .publish(Message::Psbt(io::encode_psbt(&joined).into_bytes()).encode())
         .await?;
-    Ok((joined, messages))
+    Ok((Some(joined), messages))
 }
 
 /// Build the default file/dir transport for a sync invocation.
@@ -794,5 +813,60 @@ mod tests {
         assert_eq!(first, vec![b"early".to_vec(), b"live".to_vec()]);
         assert_eq!(second, vec![b"live".to_vec()]);
         assert_eq!(published, vec![b"ours".to_vec()]);
+    }
+
+    /// An empty transport (no sources, no state, no peers): the tolerant step
+    /// reports None and publishes NOTHING back — an empty shared document
+    /// stays empty instead of receiving a fabricated fragment.
+    #[test]
+    fn sync_step_allow_empty_reports_none_and_publishes_nothing() {
+        struct Empty {
+            published: usize,
+        }
+        #[async_trait::async_trait]
+        impl Transport for Empty {
+            async fn publish(&mut self, _message: Vec<u8>) -> transport_core::Result<()> {
+                self.published += 1;
+                Ok(())
+            }
+            async fn collect(&mut self) -> transport_core::Result<Vec<Vec<u8>>> {
+                Ok(Vec::new())
+            }
+        }
+
+        let mut transport = Empty { published: 0 };
+        let (joined, messages) = drive_async(async {
+            sync_step_allow_empty(&mut transport).await
+        })
+        .unwrap();
+        assert!(joined.is_none());
+        assert!(messages.is_empty());
+        assert_eq!(transport.published, 0);
+    }
+
+    /// The strict step keeps its all-or-error contract (the CLI path always
+    /// folds local sources first, so an empty gather is a caller mistake).
+    #[test]
+    fn sync_step_still_errors_on_an_empty_gather() {
+        struct Empty;
+        #[async_trait::async_trait]
+        impl Transport for Empty {
+            async fn publish(&mut self, _message: Vec<u8>) -> transport_core::Result<()> {
+                Ok(())
+            }
+            async fn collect(&mut self) -> transport_core::Result<Vec<Vec<u8>>> {
+                Ok(Vec::new())
+            }
+        }
+
+        let mut transport = Empty;
+        let error = drive_async(async { sync_step(&mut transport).await })
+            .err()
+            .expect("empty gather must error")
+            .to_string();
+        assert!(
+            error.contains("join expects at least one PSBT file"),
+            "got: {error}"
+        );
     }
 }
