@@ -1029,7 +1029,7 @@ function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
   const foot = document.createElement("div");
   foot.className = "session-card-actions";
   foot.append(
-    button(expanded.has(fragment.key) ? "Hide raw" : "Raw", "Full inspect JSON (bitvomit view)", () => {
+    button(expanded.has(fragment.key) ? "Hide JSON" : "JSON", "The full inspect JSON dump (not raw bytes — those live behind the export buttons)", () => {
       if (expanded.has(fragment.key)) {
         expanded.delete(fragment.key);
       } else {
