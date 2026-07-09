@@ -1834,15 +1834,16 @@ async function addPsbtText(raw: string): Promise<boolean> {
   if (!psbt) return false;
   try {
     // Which decoder applies is a CLASSIFICATION OUTCOME, not a button: try
-    // v2 first, fall back to a BIP 174 upgrade (mirrors the demo sandbox's
-    // hydratePastedPsbtFragment). The two formats share the `psbt` magic.
+    // BIP 370 first, fall back to a BIP 174 upgrade (mirrors the demo
+    // sandbox's hydratePastedPsbtFragment). The formats share the `psbt`
+    // magic.
     try {
       const inspect = await backend.inspectPsbt(psbt);
       addAndRender(psbt, inspect, "paste");
     } catch (error) {
       if (!(error instanceof PtjBackendError)) throw error;
       await addResponse(await backend.importBip174(psbt), "import-bip174");
-      logEvent("paste decoded as BIP 174 and upgraded to v2");
+      logEvent("paste decoded as BIP 174 and upgraded to BIP 370");
     }
     showStatus("", false);
     return true;
@@ -2181,7 +2182,7 @@ async function runAssignIds(): Promise<void> {
 function exportSelectedV2(): void {
   const selected = requireEnabled("export-v2");
   if (!selected) return;
-  showOutput(`${selected[0].key} — PSBT v2 (BIP 370) base64`, selected[0].psbt);
+  showOutput(`${selected[0].key} — BIP 370 base64`, selected[0].psbt);
 }
 
 async function exportSelectedBip174(): Promise<void> {

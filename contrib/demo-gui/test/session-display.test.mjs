@@ -225,9 +225,11 @@ test("fragmentCardModel assembles summary, groups, uid indicator, fee", () => {
 test("fragmentBadges: the demo emoji ride the matching pills", () => {
   const card = fragmentCardModel(INSPECT, "regtest");
   const badges = fragmentBadges(card);
+  // The format pill wears its BIP number (inspect's internal "bip370" stays
+  // seam vocabulary).
   assert.deepEqual(
     badges.map((badgeView) => `${badgeView.emoji ?? "-"} ${badgeView.text}`),
-    ["- bip370", "🔀 unordered", "✏️ modifiable both", "- ids 2/3"],
+    ["- BIP 370", "🔀 unordered", "✏️ modifiable both", "- ids 2/3"],
   );
   // Pills whose text IS the content carry no emoji (they never collapse).
   assert.equal(badges[0].emoji, null);
