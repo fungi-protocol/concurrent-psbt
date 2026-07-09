@@ -2411,6 +2411,74 @@ function syncTransportValue(): SyncTransport {
   return selectValue("syncTransport") as SyncTransport;
 }
 
+// --- compile-time capabilities (GET /api/capabilities) ----------------------
+//
+// Which transports THIS ptj binary can drive is a compile-time fact; the
+// Sync dropdown reflects it up front (disabled option + the rebuild hint)
+// instead of failing on use. Fetched directly rather than through the
+// Backend seam: this is deployment metadata of the HTTP shell, not a PSBT
+// operation. An older server without the route degrades to
+// everything-enabled with precise use-time errors.
+
+const SYNC_TRANSPORT_CAPABILITY: Record<string, { key: string; feature: string }> = {
+  iroh: { key: "iroh", feature: "iroh-sync" },
+  str0m: { key: "str0m", feature: "str0m" },
+  "webrtc-rs": { key: "webrtc_rs", feature: "webrtc-rs" },
+};
+
+let transportCapabilities: Record<string, boolean> | null = null;
+
+function transportUnavailable(transport: string): string | null {
+  const mapping = SYNC_TRANSPORT_CAPABILITY[transport];
+  if (!mapping || !transportCapabilities) return null;
+  return transportCapabilities[mapping.key] === false
+    ? `${transport} is unavailable in this build — rebuild ptj with --features ${mapping.feature}`
+    : null;
+}
+
+function markSyncTransportOptions(): void {
+  if (!transportCapabilities) return;
+  const select = el<HTMLSelectElement>("syncTransport");
+  for (const option of Array.from(select.options)) {
+    const mapping = SYNC_TRANSPORT_CAPABILITY[option.value];
+    if (!mapping || transportCapabilities[mapping.key] !== false) continue;
+    option.disabled = true;
+    if (!option.text.includes("unavailable")) {
+      option.text = `${option.text} — unavailable in this build (rebuild with --features ${mapping.feature})`;
+    }
+    if (select.value === option.value) {
+      select.value = "local";
+      renderSyncFields();
+    }
+  }
+}
+
+async function loadCapabilities(): Promise<void> {
+  try {
+    const response = await fetch("/api/capabilities");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const transports = asObject(asObject((await response.json()) as unknown)?.transports);
+    if (!transports) return;
+    const capabilities: Record<string, boolean> = {};
+    for (const [key, value] of Object.entries(transports)) {
+      capabilities[key] = value === true;
+    }
+    transportCapabilities = capabilities;
+    markSyncTransportOptions();
+    const off = Object.entries(SYNC_TRANSPORT_CAPABILITY)
+      .filter(([, mapping]) => capabilities[mapping.key] === false)
+      .map(([name, mapping]) => `${name} (rebuild with --features ${mapping.feature})`);
+    if (off.length) {
+      logEvent(`this build lacks sync transports: ${off.join(", ")}`);
+    }
+  } catch (error) {
+    logEvent(
+      "transport availability unknown (/api/capabilities did not answer) — " +
+        (error instanceof Error ? error.message : String(error)),
+    );
+  }
+}
+
 function renderSyncFields(): void {
   const transport = syncTransportValue();
   for (const section of Array.from(document.querySelectorAll<HTMLElement>("[data-transport]"))) {
@@ -2460,17 +2528,38 @@ async function runSyncRequest(psbts: string[], sourceLabel: string): Promise<voi
     setSyncState("error", built.error);
     return;
   }
+  // buildSyncRequest always sets transport; the DTO type keeps it optional
+  // for the legacy no-transport request shape.
+  const unavailable = transportUnavailable(built.value.transport ?? "local");
+  if (unavailable) {
+    showStatus(unavailable, true);
+    setSyncState("error", unavailable);
+    return;
+  }
   const runButton = el<HTMLButtonElement>("syncRun");
   runButton.disabled = true;
   setSyncState("syncing", `${sourceLabel} over ${built.value.transport}…`);
   showStatus("syncing…", false);
   try {
     const response = await backend.syncPsbts(built.value);
-    const converged = await addResponse(response, "sync", `sync convergence (${sourceLabel})`);
-    const view = negotiationView(response);
-    const summary =
-      `${sourceLabel}: converged into ${converged.key}; ` +
-      `${view.paymentCount} payment record(s), ${view.confirmationCount} confirmation record(s) out of band`;
+    let summary: string;
+    if (response.psbt !== undefined) {
+      const converged = await addResponse(
+        { psbt: response.psbt, inspect: response.inspect },
+        "sync",
+        `sync convergence (${sourceLabel})`,
+      );
+      const view = negotiationView(response);
+      summary =
+        `${sourceLabel}: converged into ${converged.key}; ` +
+        `${view.paymentCount} payment record(s), ${view.confirmationCount} confirmation record(s) out of band`;
+    } else {
+      // Ticket-only response: the request minted an EMPTY shared document —
+      // nothing to converge, no fragment to add (a fabricated one would
+      // misstate the document contents).
+      summary =
+        `${sourceLabel}: created an empty shared document — share the ticket so peers can publish into it`;
+    }
     setSyncState("ok", summary);
     pushSyncResult(summary);
     if (response.irohTicketOut) {
@@ -2493,9 +2582,13 @@ async function runSyncRequest(psbts: string[], sourceLabel: string): Promise<voi
 async function runSync(event: Event): Promise<void> {
   event.preventDefault();
   const state = actionState("sync", enablementContext());
-  if (!state.enabled && syncTransportValue() !== "local") {
-    // Local sync legitimately runs from server-side sources with nothing
-    // selected; every other transport syncs the selection.
+  // Zero-selection syncs that are legitimate: local sync runs from
+  // server-side sources, and iroh with ticket-out CREATES an empty shared
+  // document (peers publish into it later). Every other shape syncs the
+  // selection.
+  const createsEmptyDoc =
+    syncTransportValue() === "iroh" && el<HTMLInputElement>("syncIrohTicketOut").checked;
+  if (!state.enabled && syncTransportValue() !== "local" && !createsEmptyDoc) {
     showStatus(`sync: ${state.reason ?? "not available"}`, true);
     return;
   }
@@ -2770,6 +2863,7 @@ function wireDom(): void {
   renderSyncFields();
   renderNegotiationModes();
   setSyncState("idle", "");
+  void loadCapabilities();
   render();
 }
 
