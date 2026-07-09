@@ -999,17 +999,32 @@ function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
     title.append(span("", group.label));
     groupNode.append(title);
 
+    // Inputs LEFT, outputs RIGHT — the demo's section layout, card-shaped.
+    // The columns collapse to one in narrow cards (container query); the
+    // per-row in/out side markers keep the sides readable there.
+    const columns = document.createElement("div");
+    columns.className = "session-group-columns";
+    const inputColumn = document.createElement("div");
+    inputColumn.className = "session-group-column session-group-column-inputs";
+    const outputColumn = document.createElement("div");
+    outputColumn.className = "session-group-column session-group-column-outputs";
+    if (group.inputs.length || group.outputs.length) {
+      inputColumn.append(span("session-column-heading", "inputs"));
+      outputColumn.append(span("session-column-heading", "outputs"));
+    }
     for (const input of group.inputs.slice(0, INPUT_ROWS_SHOWN)) {
-      groupNode.append(inputRow(input));
+      inputColumn.append(inputRow(input));
     }
     const inputsHidden = elisionLabel(INPUT_ROWS_SHOWN, group.inputs.length);
-    if (inputsHidden) groupNode.append(span("item-meta session-elided", `inputs ${inputsHidden}`));
+    if (inputsHidden) inputColumn.append(span("item-meta session-elided", `inputs ${inputsHidden}`));
 
     for (const output of group.outputs.slice(0, OUTPUT_ROWS_SHOWN)) {
-      groupNode.append(outputRow(output));
+      outputColumn.append(outputRow(output));
     }
     const outputsHidden = elisionLabel(OUTPUT_ROWS_SHOWN, group.outputs.length);
-    if (outputsHidden) groupNode.append(span("item-meta session-elided", `outputs ${outputsHidden}`));
+    if (outputsHidden) outputColumn.append(span("item-meta session-elided", `outputs ${outputsHidden}`));
+    columns.append(inputColumn, outputColumn);
+    groupNode.append(columns);
 
     // Per-group subtotals at the BOTTOM of the columns. With a single
     // group the card-level report directly below would repeat them (the

@@ -1951,6 +1951,43 @@ h2 {
   font-weight: 600;
 }
 
+/* Two-column group body: inputs LEFT, outputs RIGHT (the demo's section
+   layout, card-shaped). Collapses to a single column in narrow cards — the
+   per-row in/out side markers keep the sides readable there. */
+.session-group-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 4px 14px;
+  align-items: start;
+}
+
+.session-group-column {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  align-content: start;
+}
+
+.session-column-heading {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+@container (max-width: 520px) {
+  .session-group-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Fallback for engines without container queries. */
+@media (max-width: 480px) {
+  .session-group-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .session-coin-row {
   display: flex;
   align-items: center;
