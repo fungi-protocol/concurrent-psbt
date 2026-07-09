@@ -186,6 +186,16 @@ pub(crate) fn response_for(method: &str, path: &str, body: &[u8]) -> Response {
         return text_response(405, "Method Not Allowed", "method not allowed");
     }
 
+    // GET /api/capabilities -> the compile-time transport/feature surface of
+    // this binary (the Sync panel's dropdown source).
+    if path == "/api/capabilities" {
+        let mut response = capabilities_response();
+        if method == "HEAD" {
+            response.body = Vec::new();
+        }
+        return response;
+    }
+
     // GET /api/lifehash/<hex-digest> -> PNG fingerprint (content-addressed:
     // the digest fully determines the image, so responses are immutable).
     if let Some(digest) = path.strip_prefix("/api/lifehash/") {
@@ -411,7 +421,7 @@ fn sync_response_result(body: &[u8]) -> Result<Vec<u8>> {
         // (or error if nothing to fold). Identical to the old no-ticket branch.
         let joined = local
             .ok_or_else(|| Error::new("request must contain `psbts` or a network transport"))?;
-        return sync_json(&joined, &[], None);
+        return sync_json(Some(&joined), &[], None);
     }
 
     if config.transport == crate::cli::TransportKind::Local {
@@ -436,7 +446,7 @@ fn sync_response_result(body: &[u8]) -> Result<Vec<u8>> {
         let (joined, messages) = crate::commands::sync::drive_async(async move {
             crate::commands::sync::sync_step(&mut transport).await
         })?;
-        return sync_json(&joined, &messages, None);
+        return sync_json(Some(&joined), &messages, None);
     }
 
     // Network transport: build it through the shared selector, publish our
@@ -454,7 +464,7 @@ fn sync_response_result(body: &[u8]) -> Result<Vec<u8>> {
                 .await?;
         }
         tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
-        crate::commands::sync::sync_step(transport.as_mut()).await
+        crate::commands::sync::sync_step_allow_empty(transport.as_mut()).await
     })?;
     // `iroh_ticket_out: true` asked the selector to create a fresh document;
     // the ticket it wrote (server-side temp file, exactly like the inbound
@@ -466,7 +476,15 @@ fn sync_response_result(body: &[u8]) -> Result<Vec<u8>> {
                 .map_err(|error| Error::new(format!("reading created iroh ticket: {error}")))
         })
         .transpose()?;
-    sync_json(&joined, &messages, ticket_out.as_deref())
+    match &joined {
+        Some(psbt) => sync_json(Some(psbt), &messages, ticket_out.as_deref()),
+        // An empty fold is legitimate exactly when this request minted a
+        // fresh document with nothing to publish into it: the response
+        // carries the ticket and no `psbt`. Every other empty fold keeps the
+        // established join error.
+        None if ticket_out.is_some() => sync_json(None, &messages, ticket_out.as_deref()),
+        None => Err(Error::new("join expects at least one PSBT file")),
+    }
 }
 
 /// Build a `SyncConfig` from a `/api/sync` JSON request.
@@ -689,10 +707,12 @@ fn write_ticket_tempfile(_ticket: &str) -> Result<std::path::PathBuf> {
 
 /// Serialize a sync result: converged PSBT plus any out-of-band negotiation
 /// messages (hex-encoded; payments and confirmations are opaque records).
+/// `joined: None` is the create-an-empty-shared-document response: no `psbt`
+/// field at all (a fabricated fragment would misstate the document contents).
 /// `iroh_ticket_out` is the ticket of a document freshly created for this
 /// request (`iroh_ticket_out: true`), echoed back so the browser can share it.
 fn sync_json(
-    joined: &psbt_v2::v2::Psbt,
+    joined: Option<&psbt_v2::v2::Psbt>,
     messages: &[Message],
     iroh_ticket_out: Option<&str>,
 ) -> Result<Vec<u8>> {
@@ -707,15 +727,59 @@ fn sync_json(
         }
     }
     let mut body = serde_json::json!({
-        "psbt": crate::io::encode_psbt(joined),
-        "inspect": crate::commands::inspect::inspect_psbt(joined),
         "payments": payments,
         "confirmations": confirmations,
     });
+    if let Some(joined) = joined {
+        body["psbt"] = serde_json::Value::String(crate::io::encode_psbt(joined));
+        body["inspect"] = crate::commands::inspect::inspect_psbt(joined);
+    }
     if let Some(ticket) = iroh_ticket_out {
         body["iroh_ticket_out"] = serde_json::Value::String(ticket.to_owned());
     }
     Ok(body.to_string().into_bytes())
+}
+
+/// `GET /api/capabilities`: what THIS binary was compiled with, so the UI can
+/// mark unavailable transports with the rebuild hint instead of letting them
+/// fail on use. `transports` maps the sync transport kinds the browser can
+/// select to their cargo-feature booleans (`local` is unconditional);
+/// `features` lists every enabled optional feature by its cargo name.
+fn capabilities_response() -> Response {
+    const FEATURES: [(&str, bool); 11] = [
+        ("webgui", cfg!(feature = "webgui")),
+        ("tui", cfg!(feature = "tui")),
+        ("iroh-sync", cfg!(feature = "iroh-sync")),
+        ("arti", cfg!(feature = "arti")),
+        ("nym", cfg!(feature = "nym")),
+        ("emissary", cfg!(feature = "emissary")),
+        ("mdk", cfg!(feature = "mdk")),
+        ("str0m", cfg!(feature = "str0m")),
+        ("webrtc-rs", cfg!(feature = "webrtc-rs")),
+        ("payjoin-dir", cfg!(feature = "payjoin-dir")),
+        ("plugin-transports", cfg!(feature = "plugin-transports")),
+    ];
+    let features: Vec<&str> = FEATURES
+        .iter()
+        .filter(|(_, enabled)| *enabled)
+        .map(|(name, _)| *name)
+        .collect();
+    let body = serde_json::json!({
+        "transports": {
+            "local": true,
+            "iroh": cfg!(feature = "iroh-sync"),
+            "str0m": cfg!(feature = "str0m"),
+            "webrtc_rs": cfg!(feature = "webrtc-rs"),
+            "payjoin_dir": cfg!(feature = "payjoin-dir"),
+        },
+        "features": features,
+    });
+    Response {
+        status: 200,
+        reason: "OK",
+        content_type: "application/json; charset=utf-8",
+        body: body.to_string().into_bytes(),
+    }
 }
 
 fn join_response(body: &[u8]) -> Response {
@@ -3245,6 +3309,53 @@ mod tests {
         assert_eq!(response.status, 400);
         let body = String::from_utf8_lossy(&response.body);
         assert!(body.contains("arti"), "expected arti rebuild hint, got: {body}");
+    }
+
+    /// `/api/capabilities` reports the compile-time transport surface: the
+    /// booleans track this build's cfg! exactly (feature-agnostic assertion)
+    /// and the features list carries the enabled cargo names.
+    #[test]
+    fn capabilities_endpoint_reports_compile_time_surface() {
+        let response = response_for("GET", "/api/capabilities", b"");
+        assert_eq!(response.status, 200);
+        let value: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let transports = value.get("transports").expect("transports object");
+        assert_eq!(transports["local"], serde_json::json!(true));
+        assert_eq!(
+            transports["iroh"],
+            serde_json::json!(cfg!(feature = "iroh-sync"))
+        );
+        assert_eq!(
+            transports["str0m"],
+            serde_json::json!(cfg!(feature = "str0m"))
+        );
+        assert_eq!(
+            transports["webrtc_rs"],
+            serde_json::json!(cfg!(feature = "webrtc-rs"))
+        );
+        assert_eq!(
+            transports["payjoin_dir"],
+            serde_json::json!(cfg!(feature = "payjoin-dir"))
+        );
+        let features: Vec<&str> = value["features"]
+            .as_array()
+            .expect("features array")
+            .iter()
+            .map(|name| name.as_str().unwrap())
+            .collect();
+        // This test only builds with the webgui feature on (webgui.rs is
+        // gated behind it), so the list must name it.
+        assert!(features.contains(&"webgui"), "got: {features:?}");
+        assert_eq!(
+            features.contains(&"iroh-sync"),
+            cfg!(feature = "iroh-sync")
+        );
+
+        // HEAD mirrors GET minus the body; POST is not a capability query.
+        let head = response_for("HEAD", "/api/capabilities", b"");
+        assert_eq!(head.status, 200);
+        assert!(head.body.is_empty());
+        assert_eq!(response_for("POST", "/api/capabilities", b"").status, 405);
     }
 
     /// An unknown transport name is a clean 400 listing the accepted kinds.
