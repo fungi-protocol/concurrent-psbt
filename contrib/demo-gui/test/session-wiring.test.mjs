@@ -776,6 +776,9 @@ test("join gate: ordered fragments block, override arms with warning kept", () =
   assert.equal(blocked.gate.id, "join-ordered");
   assert.match(blocked.reason, /1 selected fragment\(s\) are ordered/);
   assert.match(blocked.gate.warning, /Overriding sends them as-is/);
+  // Audited: /api/join accepts ordered PSBTs (no systematic 400), so this
+  // override keeps send-as-is semantics — no repair to apply.
+  assert.equal(blocked.gate.fix, null);
 
   const overridden = actionState("join", { selected: mixed, overrides: new Set(["join-ordered"]) });
   assert.equal(overridden.enabled, true);
@@ -792,6 +795,8 @@ test("sort and make-unordered idempotence gates", () => {
   const sortGate = actionState("sort", ordered);
   assert.equal(sortGate.enabled, false);
   assert.equal(sortGate.gate.id, "sort-ordered");
+  // Legitimate re-runs, not bypasses into a 400: no repair to apply.
+  assert.equal(sortGate.gate.fix, null);
   assert.equal(actionState("sort", { ...ordered, overrides: new Set(["sort-ordered"]) }).enabled, true);
 
   const unordered = { selected: [summary()], overrides: new Set() };
@@ -799,6 +804,7 @@ test("sort and make-unordered idempotence gates", () => {
   assert.equal(shuffleGate.enabled, false);
   assert.equal(shuffleGate.gate.id, "make-unordered-unordered");
   assert.match(shuffleGate.gate.warning, /re-randomizes/);
+  assert.equal(shuffleGate.gate.fix, null);
   // An ordered fragment passes make-unordered without a gate.
   assert.equal(actionState("make-unordered", ordered).enabled, true);
 });
@@ -812,13 +818,18 @@ test("atomize gates: unmodifiable flags and already-atomic", () => {
   assert.equal(gate.enabled, false);
   assert.equal(gate.gate.id, "atomize-unmodifiable");
   assert.match(gate.gate.warning, /constructor role/);
-  assert.equal(
-    actionState("atomize", { ...unmodifiable, overrides: new Set(["atomize-unmodifiable"]) }).enabled,
-    true,
-  );
+  // The backend is KNOWN to reject unmodifiable atomize (a guaranteed 400),
+  // so the armed override APPLIES the repair: raw-edit the TX_MODIFIABLE
+  // flags via /api/edit, then atomize the minted fragment.
+  assert.deepEqual(gate.gate.fix, { kind: "set-tx-modifiable" });
+  const armed = actionState("atomize", { ...unmodifiable, overrides: new Set(["atomize-unmodifiable"]) });
+  assert.equal(armed.enabled, true);
+  assert.deepEqual(armed.gate.fix, { kind: "set-tx-modifiable" });
 
   const atomic = { selected: [summary({ inputCount: 1, outputCount: 0 })], overrides: new Set() };
   assert.equal(actionState("atomize", atomic).gate.id, "atomize-atomic");
+  // No repair exists for an already-atomic fragment: send-as-is override.
+  assert.equal(actionState("atomize", atomic).gate.fix, null);
 
   // Unknown counts and partial modifiability do not gate.
   const unknown = { selected: [summary({ inputCount: null, outputCount: null })], overrides: new Set() };
@@ -833,6 +844,9 @@ test("export-bip174 gate: unordered fragments need a sort first (observed route 
   assert.equal(gate.enabled, false);
   assert.equal(gate.gate.id, "export-bip174-unordered");
   assert.match(gate.gate.warning, /ordered PSBTs for BIP 174/);
+  // The route is KNOWN to reject unordered PSBTs, so the armed override
+  // APPLIES the repair: run the sorter role first, export the result.
+  assert.deepEqual(gate.gate.fix, { kind: "sort-first" });
   assert.equal(
     actionState("export-bip174", { ...unordered, overrides: new Set(["export-bip174-unordered"]) })
       .enabled,
