@@ -843,7 +843,7 @@ test("export-bip174 gate: unordered fragments need a sort first (observed route 
   assert.equal(actionState("export-v2", unordered).enabled, true);
 });
 
-test("assign-ids: enabled through the Backend seam, arity-checked, uid-aware", () => {
+test("assign-ids: enabled through the Backend seam, arity-checked", () => {
   // The assignIds seam landed (/api/assign-ids): outputs missing ids enable
   // the action, nothing is waiting on a backend anymore.
   const missing = { selected: [summary({ outputUidPresent: 1, outputCount: 2 })], overrides: new Set() };
@@ -852,10 +852,15 @@ test("assign-ids: enabled through the Backend seam, arity-checked, uid-aware", (
   assert.equal(ready.needsBackend, null);
   assert.equal(ready.reason, null);
 
+  // Id-complete fragments stay actionable: backend-minted fragments ALWAYS
+  // carry ids (/api/create assigns them), and the panel this action opens
+  // owns the id-complete cases explicitly (manual per-output ids, the
+  // overwrite-existing-ids checkbox). A lockout here made the affordance
+  // permanently dead.
   const complete = { selected: [summary({ outputUidPresent: 2, outputCount: 2 })], overrides: new Set() };
   const done = actionState("assign-ids", complete);
-  assert.equal(done.enabled, false);
-  assert.match(done.reason, /already carry unique ids/);
+  assert.equal(done.enabled, true);
+  assert.equal(done.reason, null);
 
   const wrongArity = actionState("assign-ids", { selected: [], overrides: new Set() });
   assert.match(wrongArity.reason, /exactly 1/);
