@@ -1996,6 +1996,44 @@ h2 {
   min-width: 0;
 }
 
+/* Expandable rows: a row is a disclosure button for its full-field detail
+   (textual address, omitted decoded fields, raw keymap entries). */
+.session-coin-item {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.session-coin-row-expandable {
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.session-coin-row-expandable:hover,
+.session-coin-row-expandable:focus-visible {
+  background: var(--surface-2);
+}
+
+.session-coin-detail {
+  margin: 0 0 4px 26px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 1px 10px;
+  font-size: 12px;
+}
+
+.session-coin-detail dt {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.session-coin-detail dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+  min-width: 0;
+}
+
 .session-coin-side {
   flex: none;
   width: 26px;
