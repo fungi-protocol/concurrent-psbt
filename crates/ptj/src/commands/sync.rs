@@ -861,8 +861,7 @@ mod tests {
 
         let mut transport = Empty;
         let error = drive_async(async { sync_step(&mut transport).await })
-            .err()
-            .expect("empty gather must error")
+            .expect_err("empty gather must error")
             .to_string();
         assert!(
             error.contains("join expects at least one PSBT file"),
