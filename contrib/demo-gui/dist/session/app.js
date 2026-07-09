@@ -1919,7 +1919,10 @@ function addCreateRow(kind) {
             '<label class="field-label">txid' +
                 '<input data-role="txid" autocomplete="off" spellcheck="false" placeholder="64 hex chars"></label>' +
                 '<label class="field-label compact">vout' +
-                '<input data-role="vout" type="number" min="0" value="0"></label>';
+                // Placeholder, not value: a pristine row must count as BLANK so the
+                // zero-row create path stays reachable; an omitted vout defaults to 0
+                // when a txid is entered (buildCreateRequest).
+                '<input data-role="vout" type="number" min="0" placeholder="0"></label>';
     }
     else {
         row.innerHTML =
