@@ -55,7 +55,7 @@
 
         <div class="session-load">
           <label class="field-label" for="pasteInput">
-            Paste anything: PSBT (base64 or hex), bitcoin: URI, descriptor, npub, iroh ticket, signed tx hex
+            Paste anything: PSBT (BIP 370 or BIP 174; base64 or hex), bitcoin: URI, descriptor, npub, iroh ticket, signed tx hex
             <textarea id="pasteInput" rows="3" spellcheck="false" placeholder="cHNidP8B… / bitcoin:… / wpkh(… / npub1… / doc… / 0200…"></textarea>
           </label>
           <div class="session-load-actions">
@@ -88,8 +88,8 @@
           </label>
           <button id="opAtomize" type="button" data-action="atomize" title="Split the selected PSBT into single-element fragments">Atomize</button>
           <button id="opAssignIds" type="button" data-action="assign-ids" title="Assign unique ids to outputs missing them (manual per-output ids optional; the panel opens on click)">Assign ids</button>
-          <button id="opExportV2" type="button" data-action="export-v2">Export v2</button>
-          <button id="opExportBip174" type="button" data-action="export-bip174">Export BIP 174</button>
+          <button id="opExportV2" type="button" data-action="export-v2" title="Show the selected fragment as BIP 370 base64">Export BIP 370</button>
+          <button id="opExportBip174" type="button" data-action="export-bip174" title="Convert the selected fragment to BIP 174 base64 (needs an ordered PSBT)">Export BIP 174</button>
         </div>
         <div id="gateOverrides" class="session-gate-overrides"></div>
       </section>
