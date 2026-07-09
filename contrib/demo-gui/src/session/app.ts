@@ -1829,34 +1829,25 @@ async function saveEditor(): Promise<void> {
 
 // --- session screen: load + set operations -----------------------------------
 
-async function addPsbtText(raw: string, kind: "v2" | "bip174" | "auto"): Promise<boolean> {
+async function addPsbtText(raw: string): Promise<boolean> {
   const psbt = pastedPsbt(raw) ?? classifyPasteToPsbt(raw);
-  if (!psbt) {
-    if (kind !== "auto") showStatus("paste a base64 PSBT first (v2 or BIP 174)", true);
-    return false;
-  }
+  if (!psbt) return false;
   try {
-    if (kind === "bip174") {
-      await addResponse(await backend.importBip174(psbt), "import-bip174");
-    } else if (kind === "v2") {
+    // Which decoder applies is a CLASSIFICATION OUTCOME, not a button: try
+    // v2 first, fall back to a BIP 174 upgrade (mirrors the demo sandbox's
+    // hydratePastedPsbtFragment). The two formats share the `psbt` magic.
+    try {
       const inspect = await backend.inspectPsbt(psbt);
       addAndRender(psbt, inspect, "paste");
-    } else {
-      // Auto: try v2 first, fall back to a BIP 174 upgrade (mirrors the demo
-      // sandbox's hydratePastedPsbtFragment).
-      try {
-        const inspect = await backend.inspectPsbt(psbt);
-        addAndRender(psbt, inspect, "paste");
-      } catch (error) {
-        if (!(error instanceof PtjBackendError)) throw error;
-        await addResponse(await backend.importBip174(psbt), "import-bip174");
-        logEvent("paste decoded as BIP 174 and upgraded to v2");
-      }
+    } catch (error) {
+      if (!(error instanceof PtjBackendError)) throw error;
+      await addResponse(await backend.importBip174(psbt), "import-bip174");
+      logEvent("paste decoded as BIP 174 and upgraded to v2");
     }
     showStatus("", false);
     return true;
   } catch (error) {
-    reportError(kind === "bip174" ? "import BIP 174" : "inspect", error);
+    reportError("add PSBT", error);
     return true; // it WAS a PSBT; the error is already reported
   }
 }
@@ -1870,7 +1861,7 @@ async function addObject(): Promise<void> {
   const raw = textareaValue("pasteInput");
   const pasted = classifyPaste(raw);
   if (pasted.kind === "psbt") {
-    if (await addPsbtText(raw, "auto")) {
+    if (await addPsbtText(raw)) {
       el<HTMLTextAreaElement>("pasteInput").value = "";
     }
     return;
@@ -1939,12 +1930,6 @@ async function enrichFromClassify(node: NodeRef, pasted: PasteClassification): P
   }
 }
 
-async function addPasted(kind: "v2" | "bip174"): Promise<void> {
-  if (await addPsbtText(textareaValue("pasteInput"), kind)) {
-    el<HTMLTextAreaElement>("pasteInput").value = "";
-  }
-}
-
 async function loadUpload(): Promise<void> {
   const input = el<HTMLInputElement>("uploadInput");
   const file = input.files?.[0];
@@ -1952,7 +1937,9 @@ async function loadUpload(): Promise<void> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const text = new TextDecoder().decode(bytes).trim();
   // A .psbt file is either raw binary or already-base64 text; both end up as
-  // base64 in the paste box, decoded by the button the user picks.
+  // base64 in the paste box, decoded when the user hits Add (BIP 370 first,
+  // BIP 174 upgrade as the fallback — the same auto-classification as a
+  // direct paste).
   el<HTMLTextAreaElement>("pasteInput").value =
     pastedPsbt(text) ?? bytesToBase64(bytes);
   logEvent(`loaded ${file.name} into the paste box`);
@@ -2553,8 +2540,6 @@ function wireDom(): void {
   }
 
   el<HTMLButtonElement>("addObject").addEventListener("click", () => void addObject());
-  el<HTMLButtonElement>("addV2").addEventListener("click", () => void addPasted("v2"));
-  el<HTMLButtonElement>("addBip174").addEventListener("click", () => void addPasted("bip174"));
   el<HTMLInputElement>("uploadInput").addEventListener("change", () => void loadUpload());
 
   el<HTMLButtonElement>("opJoin").addEventListener("click", () => void joinSelected());

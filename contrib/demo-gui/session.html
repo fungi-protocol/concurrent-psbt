@@ -59,9 +59,7 @@
             <textarea id="pasteInput" rows="3" spellcheck="false" placeholder="cHNidP8B… / bitcoin:… / wpkh(… / npub1… / doc… / 0200…"></textarea>
           </label>
           <div class="session-load-actions">
-            <button id="addObject" type="button" class="primary">Add object</button>
-            <button id="addV2" type="button" title="Decode strictly as a PSBT v2 (BIP 370)">Add PSBT v2</button>
-            <button id="addBip174" type="button" title="Decode strictly as BIP 174 and upgrade">Import BIP 174</button>
+            <button id="addObject" type="button" class="primary" title="Classifies the paste automatically — PSBTs try the BIP 370 decoder and fall back to the BIP 174 import/upgrade">Add</button>
             <label class="session-upload">
               Upload file
               <input id="uploadInput" type="file">
