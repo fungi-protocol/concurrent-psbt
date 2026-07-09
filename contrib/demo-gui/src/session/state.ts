@@ -544,8 +544,8 @@ export function buildConfirmArgs(form: ConfirmForm): FormResult<ConfirmArgs> {
 // ---------------------------------------------------------------------------
 
 // Classify pasted text: a base64 BIP 370 / BIP 174 blob is accepted as-is
-// (the two share the `psbt` magic; which decoder applies is the user's
-// explicit choice of button, exactly like `ptj import-bip174` vs stdin).
+// (the two share the `psbt` magic; which decoder applies is a downstream
+// classification outcome — BIP 370 first, BIP 174 import as the fallback).
 export function pastedPsbt(text: string): string | null {
   const compact = compactBase64(text);
   return looksLikeBase64Psbt(compact) ? compact : null;
