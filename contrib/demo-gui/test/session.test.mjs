@@ -216,6 +216,9 @@ test("buildCreateRequest validates rows and maps ordering", () => {
   assert.equal(halfOutput.ok, false);
   assert.match(halfOutput.error, /address and amount/);
 
+  // Zero rows is a valid request: /api/create returns an empty MODIFIABLE
+  // unordered PSBT — the natural starting fragment for a session that grows
+  // by joins.
   const nothing = buildCreateRequest({
     network: "regtest",
     ordering: "unset",
@@ -223,8 +226,9 @@ test("buildCreateRequest validates rows and maps ordering", () => {
     inputs: [],
     outputs: [],
   });
-  assert.equal(nothing.ok, false);
-  assert.match(nothing.error, /at least one/);
+  assert.equal(nothing.ok, true);
+  assert.deepEqual(nothing.value.inputs, []);
+  assert.deepEqual(nothing.value.outputs, []);
 });
 
 test("buildSyncRequest local transport folds psbts, sources, and state", () => {
