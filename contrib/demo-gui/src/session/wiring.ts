@@ -1177,12 +1177,28 @@ export type SessionAction =
   | "sync"
   | "assign-ids";
 
+// The repair an ARMED override applies before running the gated action.
+// Overriding a gate the backend is KNOWN to reject would be a bypass in name
+// only (a guaranteed 400), so those gates carry the fix as data: the shell
+// executes it (minting fragments along the way — grow-only) and runs the
+// action on the result. Gates without a fix keep send-as-is semantics.
+export type GateOverrideFix =
+  // Raw-edit PSBT_GLOBAL_TX_MODIFIABLE (raw global key 06) to 3 via
+  // /api/edit, then act on the minted fragment.
+  | { kind: "set-tx-modifiable" }
+  // Run the sorter role (/api/sort) first, then act on the minted ordered
+  // fragment.
+  | { kind: "sort-first" };
+
 export interface GateInfo {
   // Stable id the shell arms to override the gate (per-action, explicit,
   // never silent).
   id: string;
   label: string;
   warning: string;
+  // Present when the override APPLIES this repair instead of sending the
+  // blocked request as-is.
+  fix: GateOverrideFix | null;
 }
 
 export interface ActionState {
@@ -1251,6 +1267,7 @@ function gateFor(action: SessionAction, selected: FragmentSummary[]): GateInfo |
           label: `${ordered} selected fragment(s) are ordered`,
           warning:
             "the lattice join is defined over unordered fragments; the backend may reject ordered ones. Overriding sends them as-is.",
+          fix: null,
         };
       }
       return null;
@@ -1261,6 +1278,7 @@ function gateFor(action: SessionAction, selected: FragmentSummary[]): GateInfo |
           id: "sort-ordered",
           label: "fragment is already ordered",
           warning: "sorting an already-ordered PSBT asks the backend to re-run the sorter role on it.",
+          fix: null,
         };
       }
       return null;
@@ -1271,6 +1289,7 @@ function gateFor(action: SessionAction, selected: FragmentSummary[]): GateInfo |
           id: "make-unordered-unordered",
           label: "fragment is already unordered",
           warning: "re-shuffling an unordered PSBT re-randomizes its element order.",
+          fix: null,
         };
       }
       return null;
@@ -1283,7 +1302,8 @@ function gateFor(action: SessionAction, selected: FragmentSummary[]): GateInfo |
           id: "export-bip174-unordered",
           label: "fragment is unordered (BIP 174 needs an ordered PSBT)",
           warning:
-            "the backend rejects unordered PSBTs for BIP 174 export — run Sort first; overriding sends it anyway and surfaces the route's error.",
+            "the backend rejects unordered PSBTs for BIP 174 export — overriding runs the sorter role first (the sort-seed field applies; a random seed is generated when the fragment carries none), mints the ordered fragment, and exports THAT.",
+          fix: { kind: "sort-first" },
         };
       }
       return null;
@@ -1296,7 +1316,8 @@ function gateFor(action: SessionAction, selected: FragmentSummary[]): GateInfo |
           id: "atomize-unmodifiable",
           label: "fragment is not modifiable (tx-modifiable flags are clear)",
           warning:
-            "atomize parses through the constructor role, which requires modifiable flags; the backend will reject this unless the flags are edited. Overriding sends it as-is.",
+            "atomize parses through the constructor role, which requires modifiable flags; overriding performs the raw edit — /api/edit sets the TX_MODIFIABLE flags on a NEW fragment — and atomizes that fragment.",
+          fix: { kind: "set-tx-modifiable" },
         };
       }
       const elements = (summary.inputCount ?? 0) + (summary.outputCount ?? 0);
@@ -1305,6 +1326,7 @@ function gateFor(action: SessionAction, selected: FragmentSummary[]): GateInfo |
           id: "atomize-atomic",
           label: "fragment is already atomic (one element)",
           warning: "the backend reports 'PSBT is already atomic' for single-element fragments.",
+          fix: null,
         };
       }
       return null;
