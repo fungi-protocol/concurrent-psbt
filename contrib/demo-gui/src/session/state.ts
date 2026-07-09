@@ -329,9 +329,9 @@ export function buildCreateRequest(form: CreateForm): FormResult<CreatePsbtReque
     // validation); nothing is second-guessed here.
     outputs.push({ address, amountBtc });
   }
-  if (inputs.length === 0 && outputs.length === 0) {
-    return fail("add at least one input or output");
-  }
+  // Zero rows is a valid request: /api/create returns an empty MODIFIABLE
+  // unordered PSBT (tx-modifiable flags set) — the natural starting fragment
+  // for a session that grows by joins.
   return {
     ok: true,
     value: {
