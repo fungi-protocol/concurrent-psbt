@@ -209,6 +209,24 @@ test("buildCreateRequest validates rows and maps ordering", () => {
   assert.equal(badVout.ok, false);
   assert.match(badVout.error, /vout/);
 
+  // An omitted vout defaults to 0 once a txid identifies the row (the row
+  // template shows the 0 as a placeholder), so a pristine row stays blank
+  // while a txid-only row still builds.
+  const voutDefaulted = buildCreateRequest({
+    ...form,
+    inputs: [{ txid, vout: "" }],
+  });
+  assert.equal(voutDefaulted.ok, true);
+  assert.deepEqual(voutDefaulted.value.inputs, [{ txid, vout: 0 }]);
+  // A typed vout WITHOUT a txid is not blank: typed information is never
+  // silently dropped.
+  const voutOnly = buildCreateRequest({
+    ...form,
+    inputs: [{ txid: "", vout: "7" }],
+  });
+  assert.equal(voutOnly.ok, false);
+  assert.match(voutOnly.error, /txid/);
+
   const halfOutput = buildCreateRequest({
     ...form,
     outputs: [{ address: "bcrt1qexample", amountBtc: "" }],

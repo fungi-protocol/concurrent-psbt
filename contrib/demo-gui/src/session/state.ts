@@ -307,7 +307,10 @@ export function buildCreateRequest(form: CreateForm): FormResult<CreatePsbtReque
   const inputs: CreateInput[] = [];
   for (const [index, row] of form.inputs.entries()) {
     const txid = row.txid.trim().toLowerCase();
-    const voutText = row.vout.trim();
+    // An omitted vout defaults to 0 once a txid identifies the row (the row
+    // template shows the 0 as a placeholder); a typed vout without a txid
+    // still errors below — typed information is never silently dropped.
+    const voutText = row.vout.trim() || (txid ? "0" : "");
     if (!txid && !voutText) continue; // blank row
     if (!isHexBytes(txid, 32)) {
       return fail(`input ${index + 1}: txid must be 32 hex bytes`);
