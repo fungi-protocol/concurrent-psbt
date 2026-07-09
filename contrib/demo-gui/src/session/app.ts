@@ -1063,9 +1063,7 @@ function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
       renderEditor([]);
       revealPanel("editorPanel");
     }),
-    button("Wire", "Connect this fragment to another object (join, session, payment)", () =>
-      startWire("fragment", fragment.key),
-    ),
+    ...wireButtonNodes(ref, "Connect this fragment to another object (join, session, payment)."),
     button("Remove", "Drop the fragment from the set", () => {
       session = removeFragment(session, fragment.key);
       objects = dropFragmentKey(objects, fragment.key);
@@ -1342,6 +1340,65 @@ function outputRow(output: OutputView): HTMLElement {
   return row;
 }
 
+// The per-card Wire affordance, action made visible (the wiring verdict
+// system's labels): idle it STARTS a gesture; while a gesture is active it
+// becomes the completion affordance on other cards — labeled with the
+// verdict's action ("Join psbt-1 into psbt-2") — and the cancel affordance
+// on the source card. Blocked/unbacked pairs disable it with the reason.
+// A "N queued" chip beside it shows the card's pending-wire participation
+// (tooltip: the queued action labels).
+function wireButtonNodes(ref: NodeRef, idleTitle: string): HTMLElement[] {
+  const nodes: HTMLElement[] = [];
+  if (!wire.source) {
+    nodes.push(
+      button(
+        "Wire",
+        `${idleTitle}\nCompatible targets light up and their buttons name the action ("Join X into Y").`,
+        () => startWire(ref.kind, ref.key),
+      ),
+    );
+  } else if (wire.source.kind === ref.kind && wire.source.key === ref.key) {
+    nodes.push(button("Cancel wiring", "Stop the wire gesture without queueing anything", cancelWire));
+  } else {
+    const v = wireVerdict(wire.source, ref, objects);
+    const label = v.label ?? "Wire";
+    const node = button(label, "", () => wireTo(ref));
+    switch (wireDisposition(v)) {
+      case "compatible":
+        node.title = `${label} — queue this wire`;
+        break;
+      case "blocked":
+        node.disabled = true;
+        node.title = `${label} — blocked: ${v.reason ?? ""}`;
+        break;
+      default:
+        node.disabled = true;
+        node.title = v.needs
+          ? `${label} — needs backend: ${v.needs}`
+          : (v.reason ?? "no join is defined");
+        break;
+    }
+    nodes.push(node);
+  }
+  const queued = pendingWires.filter(
+    (wireEntry) =>
+      (wireEntry.source.kind === ref.kind && wireEntry.source.key === ref.key) ||
+      (wireEntry.target.kind === ref.kind && wireEntry.target.key === ref.key),
+  );
+  if (queued.length) {
+    const chip = span("session-badge session-wire-queued-chip", `${queued.length} queued`);
+    chip.title = queued
+      .map(
+        (wireEntry) =>
+          wireVerdict(wireEntry.source, wireEntry.target, objects).label ??
+          `${nodeName(wireEntry.source)} ⋈ ${nodeName(wireEntry.target)}`,
+      )
+      .join("\n");
+    nodes.push(chip);
+  }
+  return nodes;
+}
+
 // Highlight and arm wire targets while a wire is pending. The three-way
 // vocabulary (compatible green / blocked red / unbacked dim) and the action
 // label in the title come from the presenter's verdict; a recently rejected
@@ -1422,9 +1479,7 @@ function renderObjects(): void {
         focus = sessionFocus(sessionObject.key);
         render();
       }),
-      button("Wire", "Connect fragments or peers to this session", () =>
-        startWire("session", sessionObject.key),
-      ),
+      ...wireButtonNodes(ref, "Connect fragments or peers to this session."),
       button("Sync now", "Sync this session's fragments over its transport", () => {
         void syncSessionOverPeer(sessionObject.key, null);
       }),
@@ -1480,7 +1535,7 @@ function renderObjects(): void {
         el<HTMLInputElement>("payLabel").value = payment.label;
         logEvent(`prefilled the Pay form from ${payment.key}`);
       }),
-      button("Wire", "Attach this payment to a fragment", () => startWire("payment", payment.key)),
+      ...wireButtonNodes({ kind: "payment", key: payment.key }, "Attach this payment to a fragment."),
     );
     item.append(actions);
     list.append(item);
@@ -1511,7 +1566,7 @@ function renderObjects(): void {
     const actions = document.createElement("div");
     actions.className = "session-card-actions";
     actions.append(
-      button("Wire", "Use as a create-form input", () => startWire("utxo", utxo.key)),
+      ...wireButtonNodes({ kind: "utxo", key: utxo.key }, "Use as a create-form input."),
       button("Copy hex", "Copy the raw transaction hex", () => copyText(utxo.rawTxHex, `${utxo.key} hex`)),
     );
     item.append(actions);
@@ -1602,9 +1657,7 @@ function renderPeerCard(peer: PeerObject): HTMLLIElement {
   actions.className = "session-card-actions";
   actions.append(
     button("Copy id", "Copy the full transport identity", () => copyText(peer.identity, `${peer.key} identity`)),
-    button("Wire", "Connect this peer to a session or bridge it with another peer", () =>
-      startWire("peer", peer.key),
-    ),
+    ...wireButtonNodes({ kind: "peer", key: peer.key }, "Connect this peer to a session or bridge it with another peer."),
   );
   item.append(actions);
   return item;
@@ -1657,8 +1710,9 @@ function renderBridgeGroupCard(members: PeerObject[]): HTMLLIElement {
   const actions = document.createElement("div");
   actions.className = "session-card-actions";
   actions.append(
-    button("Wire", "Connect this bridge group to a session (as one peer)", () =>
-      startWire("peer", members[0].key),
+    ...wireButtonNodes(
+      { kind: "peer", key: members[0].key },
+      "Connect this bridge group to a session (as one peer).",
     ),
   );
   item.append(actions);
