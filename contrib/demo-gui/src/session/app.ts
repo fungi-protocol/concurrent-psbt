@@ -233,10 +233,22 @@ function reportError(context: string, error: unknown): void {
   logEvent(`ERROR ${context}: ${detail}`);
 }
 
+// Opening a panel must be VISIBLE: the wide panels live below the fold, and
+// unhiding one without scrolling reads as a dead button (the live-review
+// symptom on Edit). Reveal = unhide + scroll into view + move focus to the
+// panel so keyboard/AT users land where the action went.
+function revealPanel(id: string): void {
+  const panel = el<HTMLElement>(id);
+  panel.hidden = false;
+  panel.tabIndex = -1;
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  panel.focus({ preventScroll: true });
+}
+
 function showOutput(title: string, body: string): void {
   el<HTMLElement>("outputTitle").textContent = title;
   el<HTMLTextAreaElement>("outputBody").value = body;
-  el<HTMLElement>("outputPanel").hidden = false;
+  revealPanel("outputPanel");
 }
 
 function copyText(text: string, what: string): void {
@@ -1030,7 +1042,7 @@ function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
       pendingEditorFixes.clear();
       editorOverrides.clear();
       renderEditor([]);
-      el<HTMLElement>("editorPanel").hidden = false;
+      revealPanel("editorPanel");
     }),
     button("Wire", "Connect this fragment to another object (join, session, payment)", () =>
       startWire("fragment", fragment.key),
@@ -2051,7 +2063,7 @@ function openAssignIds(): void {
   const fragment = selected[0];
   assignIdsTarget = fragment.key;
   renderAssignIds(fragment);
-  el<HTMLElement>("assignIdsPanel").hidden = false;
+  revealPanel("assignIdsPanel");
 }
 
 function renderAssignIds(fragment: SessionFragment): void {
