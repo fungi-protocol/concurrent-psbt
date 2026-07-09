@@ -683,7 +683,7 @@ function renderObjects() {
         }
         item.append(head);
         if (utxo.address)
-            item.append(span("item-meta session-address", utxo.address));
+            item.append(addressNode(utxo.address, `address of ${utxo.key}`, "item-meta session-address"));
         const actions = document.createElement("div");
         actions.className = "session-card-actions";
         actions.append(button("Wire", "Use as a create-form input", () => startWire("utxo", utxo.key)), button("Copy hex", "Copy the raw transaction hex", () => copyText(utxo.rawTxHex, `${utxo.key} hex`)));
@@ -709,10 +709,14 @@ function renderObjects() {
             item.append(span("item-meta session-gate-warning", "contains PRIVATE key material — anyone holding this descriptor can spend from it"));
         }
         if (descriptor.derived.length) {
-            const derived = descriptor.derived
-                .map((entry) => entry.address ?? `${entry.scriptPubkeyHex.slice(0, 18)}…`)
-                .join(", ");
-            item.append(span("item-meta", `derives${descriptor.isRanged ? " (ranged)" : ""}: ${derived}`));
+            // Derived scripts render as LifeHash chips of their script_pubkey hex
+            // (never address/script text on the card face; the textual form rides
+            // each chip's title/aria-label — display.js chip contract).
+            const derivedRow = span("item-meta session-derived-scripts", `derives${descriptor.isRanged ? " (ranged)" : ""}:`);
+            for (const entry of descriptor.derived) {
+                derivedRow.append(lifehashBadge(entry.scriptPubkeyHex, `${entry.address ?? "derived script"} (derivation index ${entry.index})`));
+            }
+            item.append(derivedRow);
             item.append(span("item-meta", "matching these scripts to fragments still needs backend (descriptor → fragment wiring)"));
         }
         else {
