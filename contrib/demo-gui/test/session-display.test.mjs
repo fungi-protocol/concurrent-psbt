@@ -11,6 +11,11 @@ import {
   scriptTemplate,
 } from "../dist/session/display.js";
 import { fragmentSummary } from "../dist/session/state.js";
+import {
+  addressChipDigestHex,
+  groupChipDigestHex,
+  lifehashSrc,
+} from "../dist/session/display.js";
 
 // BIP-350 reference script: P2WPKH for the shared test vector address.
 const P2WPKH = "0014751e76e8199196d454941c45d1b3a323f1433bd6";
@@ -60,6 +65,33 @@ test("scriptTemplate classifies the standard templates", () => {
   assert.equal(scriptTemplate(null).kind, "absent");
   assert.equal(scriptTemplate("zz").kind, "unknown");
   assert.match(scriptTemplate(P2WPKH).label, /P2WPKH/);
+});
+
+// --- LifeHash chips (addresses/scripts fingerprint, never card text) --------
+
+test("lifehashSrc: the chip src is the lifehash route over the digest hex", () => {
+  assert.equal(lifehashSrc(P2WPKH), `/api/lifehash/${P2WPKH}`);
+  assert.equal(lifehashSrc("ee".repeat(32)), `/api/lifehash/${"ee".repeat(32)}`);
+});
+
+test("addressChipDigestHex: an address chips as its script_pubkey hex", () => {
+  // BIP-350 shared test vector: this address IS the P2WPKH script above, so
+  // pasting the address and decoding the script fingerprint identically.
+  assert.equal(addressChipDigestHex("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"), P2WPKH);
+  // Non-script payment strings (a lightning invoice riding the address
+  // slot) yield no digest: the caller keeps the textual rendering.
+  assert.equal(addressChipDigestHex("lnbc10n1pexample"), null);
+  assert.equal(addressChipDigestHex(""), null);
+  assert.equal(addressChipDigestHex(null), null);
+});
+
+test("groupChipDigestHex: one shared script fingerprints the group", () => {
+  assert.equal(groupChipDigestHex({ outputs: [{ scriptHex: P2WPKH }, { scriptHex: P2WPKH }] }), P2WPKH);
+  // Mixed or unknown scripts: no chip (one fingerprint would misattribute).
+  assert.equal(groupChipDigestHex({ outputs: [{ scriptHex: P2WPKH }, { scriptHex: P2TR }] }), null);
+  assert.equal(groupChipDigestHex({ outputs: [{ scriptHex: P2WPKH }, { scriptHex: null }] }), null);
+  // Input-only groups carry no output script identity.
+  assert.equal(groupChipDigestHex({ outputs: [] }), null);
 });
 
 test("inputViews and outputViews project inspect JSON defensively", () => {

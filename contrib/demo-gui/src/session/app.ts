@@ -17,6 +17,7 @@
 // served Cache-Control: no-store; cache busting rides the ?v on
 // dist/session/app.js in session.html alone).
 
+import { addressChipDigestHex, groupChipDigestHex } from "./display.js";
 import { HttpBackend } from "../shared-frontend/backends/http.js";
 import { PtjBackendError } from "../shared-frontend/core/types.js";
 import type {
@@ -204,6 +205,16 @@ function lifehashPlaceholder(hex: string, title: string): HTMLElement {
   const chip = span("session-fingerprint-pending", hex.slice(0, 8));
   chip.title = `${title}\n${hex}\n(LifeHash pending — needs backend: GET /api/lifehash/<hex> PNG route)`;
   return chip;
+}
+
+// An address slot on a card: the LifeHash chip of the script the address
+// encodes (display.js addressChipDigestHex — identical scripts fingerprint
+// identically), the address itself riding the chip title/aria-label. Strings
+// that decode to no script (a lightning invoice or offer in a payment's
+// address slot) stay textual — there is no script to fingerprint.
+function addressNode(address: string, what: string, className = "session-address"): HTMLElement {
+  const digest = addressChipDigestHex(address);
+  return digest ? lifehashBadge(digest, `${address}\n${what}`) : span(className, address);
 }
 
 function lifehashBadge(hex: string, title: string): HTMLElement {
@@ -559,6 +570,15 @@ function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
     groupNode.className = `session-group session-group-${group.kind}`;
     const title = document.createElement("div");
     title.className = "session-group-title";
+    // The header wears the group's script fingerprint when every output
+    // shares one script_pubkey (display.js groupChipDigestHex).
+    const groupChip = groupChipDigestHex(group);
+    if (groupChip) {
+      const groupAddress = group.outputs.find((output) => output.address)?.address;
+      title.append(
+        lifehashBadge(groupChip, `${groupAddress ?? group.label}\nshared script of every output in this group`),
+      );
+    }
     title.append(span("", group.label));
     if (group.inputSubtotalSats !== null) {
       title.append(span("item-meta", " in "), amountSpan(group.inputSubtotalSats));
@@ -663,10 +683,13 @@ function outputRow(output: OutputView): HTMLElement {
   } else {
     row.append(span("session-badge session-badge-warn", "no id"));
   }
-  if (output.address) {
-    const address = span("session-address", output.address);
-    address.title = output.scriptHex ? `${output.scriptLabel}\n${output.scriptHex}` : output.scriptLabel;
-    row.append(address);
+  if (output.scriptHex && output.address) {
+    // Address as LifeHash chip of the script_pubkey hex — the textual
+    // address rides the chip title/aria-label and stays available in the
+    // expanded raw view and the field editor.
+    row.append(
+      lifehashBadge(output.scriptHex, `${output.address}\n${output.scriptLabel} (output ${output.index})`),
+    );
   } else if (output.scriptHex) {
     const script = document.createElement("span");
     script.className = "item-meta";
@@ -777,7 +800,7 @@ function renderObjects(): void {
     head.append(
       span("item-title", payment.label || payment.key),
       badge("payment", "session-badge"),
-      span("session-address", payment.address),
+      addressNode(payment.address, "payment address"),
       amountSpan(payment.amountSats),
     );
     item.append(head);
