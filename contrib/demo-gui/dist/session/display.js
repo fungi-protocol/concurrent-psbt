@@ -383,12 +383,58 @@ export function fragmentCardModel(inspect, network, provenance) {
 export function elisionLabel(shown, total) {
     return total > shown ? `+${total - shown} more` : null;
 }
+function detailValue(value) {
+    if (value === null || value === undefined)
+        return "—";
+    if (typeof value === "string")
+        return value;
+    if (typeof value === "number" || typeof value === "boolean")
+        return String(value);
+    return JSON.stringify(value);
+}
+export function rowDetailPairs(inspect, side, index, network) {
+    const root = asObject(inspect);
+    const entries = asArray(side === "input" ? root?.inputs : root?.outputs) ?? [];
+    const entry = asObject(entries[index]);
+    const pairs = [];
+    // The textual address the LifeHash chip stands for (outputs only: inspect
+    // carries no per-input script data — the documented gap).
+    if (side === "output") {
+        const scriptHex = asString(entry?.script_pubkey_hex);
+        const address = scriptHex ? addressFromScript(scriptHex, network) : null;
+        if (address)
+            pairs.push({ label: "address", value: address });
+    }
+    for (const [key, value] of Object.entries(entry ?? {})) {
+        pairs.push({ label: key, value: detailValue(value) });
+    }
+    const raw = asObject(root?.raw);
+    const maps = asArray(side === "input" ? raw?.inputs : raw?.outputs);
+    for (const rawEntry of asArray(maps?.[index]) ?? []) {
+        const object = asObject(rawEntry);
+        const keyHex = asString(object?.key_hex);
+        if (keyHex === null)
+            continue;
+        const kind = asString(object?.kind) ?? "unknown";
+        pairs.push({
+            label: `raw ${kind} ${keyHex}`,
+            value: asString(object?.value_hex) ?? "",
+        });
+    }
+    return pairs;
+}
+// The serialization format wears its BIP number on the card; inspect's
+// internal names stay as the seam vocabulary.
+const FORMAT_LABEL = {
+    bip370: "BIP 370",
+    bip174: "BIP 174",
+};
 export function fragmentBadges(card) {
     const { summary, uidPresent, uidTotal } = card;
     const badges = [];
     badges.push({
         emoji: null,
-        text: summary.format ?? "not decoded",
+        text: summary.format === null ? "not decoded" : (FORMAT_LABEL[summary.format] ?? summary.format),
         tone: "neutral",
         title: "PSBT serialization format",
     });
