@@ -9,5 +9,6 @@ pub mod negotiation;
 // read the grow-only payment/confirmation sets out of a Global and sequence
 // join → confirmation → export.
 pub mod graph;
+pub mod membership;
 pub mod readiness;
 pub mod session;
