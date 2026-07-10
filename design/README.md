@@ -8,6 +8,13 @@ paired with a plain-language explanation plus an "under the hood" note mapping t
 the concurrent-PSBT mechanics (unordered drafts, CRDT-style merging, unique-ID conflict
 surfacing, canonical sort before broadcast).
 
+`Tab-prototype.html` is the screens-only, clickable version: one phone frame you tap
+through — Join → Invite (the table fills in) → Live tab → Chip in → the tab settles
+itself → Paid. The mismatch exception screen is reachable from the chips under the
+phone, which also let you jump anywhere; ←/→ keys navigate too. It's plain
+HTML/JS (no React) reusing the same Arcade tokens, fonts, and assets, with the QR and
+fingerprint generators ported from `Tab.dc.html` so the visuals match.
+
 ## Viewing
 
 The `.dc.html` format is self-contained: `support.js` bootstraps React 18 + Babel from
