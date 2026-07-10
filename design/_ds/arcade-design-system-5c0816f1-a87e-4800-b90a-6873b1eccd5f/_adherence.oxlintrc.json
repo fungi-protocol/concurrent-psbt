@@ -1,0 +1,232 @@
+{
+  "plugins": [
+    "react",
+    "import"
+  ],
+  "rules": {
+    "react/forbid-elements": [
+      "warn",
+      {
+        "forbid": []
+      }
+    ],
+    "no-restricted-imports": [
+      "warn",
+      {
+        "patterns": [
+          {
+            "group": [
+              "ui_kits/mobile/**"
+            ],
+            "message": "Import design-system components from 'index.js', not component internals."
+          }
+        ]
+      }
+    ],
+    "no-restricted-syntax": [
+      "warn",
+      {
+        "selector": "Literal[value=/#[0-9a-fA-F]{3,8}\\b/]",
+        "message": "Raw hex color — use a design-system color token via var()."
+      },
+      {
+        "selector": "Literal[value=/\\b\\d+px\\b/]",
+        "message": "Raw px value — use a design-system spacing token via var()."
+      },
+      {
+        "selector": "Literal[value=/font-family\\s*:\\s*(?!['\\\"]?(?:Cash Sans|Cash Sans Mono|CashMarket))/i]",
+        "message": "Font not provided by the design system. Available: Cash Sans, Cash Sans Mono, CashMarket."
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": [
+        "**/index.js"
+      ],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    }
+  ],
+  "x-omelette": {
+    "components": {},
+    "tokens": [
+      "--accent",
+      "--accent-hover",
+      "--accent-pressed",
+      "--accent-subtle",
+      "--arcade-green",
+      "--arcade-green-bright",
+      "--arcade-ink",
+      "--arcade-lime",
+      "--arcade-orange",
+      "--arcade-purple",
+      "--arcade-red",
+      "--arcade-sky",
+      "--bg-app",
+      "--bg-hover",
+      "--bg-inset",
+      "--bg-inverse",
+      "--bg-pressed",
+      "--bg-subtle",
+      "--bg-surface",
+      "--black",
+      "--border-base",
+      "--border-default",
+      "--border-focus",
+      "--border-strong",
+      "--border-subtle",
+      "--border-thick",
+      "--border-thin",
+      "--danger",
+      "--danger-subtle",
+      "--dur-base",
+      "--dur-fast",
+      "--dur-slow",
+      "--ease-in",
+      "--ease-out",
+      "--ease-std",
+      "--fg-inverse",
+      "--fg-link",
+      "--fg-on-accent",
+      "--fg-primary",
+      "--fg-secondary",
+      "--fg-tertiary",
+      "--font-market",
+      "--font-mono",
+      "--font-sans",
+      "--gray-100",
+      "--gray-1000",
+      "--gray-150",
+      "--gray-200",
+      "--gray-300",
+      "--gray-400",
+      "--gray-50",
+      "--gray-500",
+      "--gray-600",
+      "--gray-700",
+      "--gray-800",
+      "--gray-900",
+      "--gray-950",
+      "--info",
+      "--radius-2xl",
+      "--radius-3xl",
+      "--radius-lg",
+      "--radius-md",
+      "--radius-pill",
+      "--radius-sm",
+      "--radius-xl",
+      "--radius-xs",
+      "--shadow-lg",
+      "--shadow-md",
+      "--shadow-sheet",
+      "--shadow-sm",
+      "--space-12",
+      "--space-16",
+      "--space-2",
+      "--space-20",
+      "--space-24",
+      "--space-32",
+      "--space-4",
+      "--space-40",
+      "--space-48",
+      "--space-64",
+      "--space-8",
+      "--success",
+      "--warning",
+      "--white"
+    ],
+    "tokenKinds": {
+      "--arcade-green": "color",
+      "--arcade-green-bright": "color",
+      "--arcade-lime": "color",
+      "--arcade-sky": "color",
+      "--arcade-purple": "color",
+      "--arcade-red": "color",
+      "--arcade-orange": "color",
+      "--arcade-ink": "color",
+      "--black": "color",
+      "--gray-1000": "color",
+      "--gray-950": "color",
+      "--gray-900": "color",
+      "--gray-800": "color",
+      "--gray-700": "color",
+      "--gray-600": "color",
+      "--gray-500": "color",
+      "--gray-400": "color",
+      "--gray-300": "color",
+      "--gray-200": "color",
+      "--gray-150": "color",
+      "--gray-100": "color",
+      "--gray-50": "color",
+      "--white": "color",
+      "--bg-app": "color",
+      "--bg-surface": "color",
+      "--bg-subtle": "color",
+      "--bg-inset": "color",
+      "--bg-hover": "color",
+      "--bg-pressed": "color",
+      "--bg-inverse": "color",
+      "--fg-primary": "color",
+      "--fg-secondary": "color",
+      "--fg-tertiary": "color",
+      "--fg-on-accent": "color",
+      "--fg-inverse": "color",
+      "--fg-link": "color",
+      "--border-default": "color",
+      "--border-subtle": "color",
+      "--border-strong": "color",
+      "--border-focus": "color",
+      "--accent": "color",
+      "--accent-hover": "color",
+      "--accent-pressed": "color",
+      "--accent-subtle": "color",
+      "--success": "color",
+      "--info": "color",
+      "--warning": "color",
+      "--danger": "color",
+      "--danger-subtle": "color",
+      "--radius-xs": "radius",
+      "--radius-sm": "radius",
+      "--radius-md": "radius",
+      "--radius-lg": "radius",
+      "--radius-xl": "radius",
+      "--radius-2xl": "radius",
+      "--radius-3xl": "radius",
+      "--radius-pill": "radius",
+      "--border-thin": "spacing",
+      "--border-base": "spacing",
+      "--border-thick": "spacing",
+      "--space-2": "spacing",
+      "--space-4": "spacing",
+      "--space-8": "spacing",
+      "--space-12": "spacing",
+      "--space-16": "spacing",
+      "--space-20": "spacing",
+      "--space-24": "spacing",
+      "--space-32": "spacing",
+      "--space-40": "spacing",
+      "--space-48": "spacing",
+      "--space-64": "spacing",
+      "--shadow-sm": "shadow",
+      "--shadow-md": "shadow",
+      "--shadow-lg": "shadow",
+      "--shadow-sheet": "shadow",
+      "--ease-out": "other",
+      "--ease-in": "other",
+      "--ease-std": "other",
+      "--dur-fast": "other",
+      "--dur-base": "other",
+      "--dur-slow": "other",
+      "--font-sans": "font",
+      "--font-market": "font",
+      "--font-mono": "font"
+    },
+    "fontFamilies": [
+      "Cash Sans",
+      "Cash Sans Mono",
+      "CashMarket"
+    ]
+  }
+}
