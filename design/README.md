@@ -14,8 +14,10 @@ device chrome); on desktop it presents as a centered phone-sized shell. The flow
 Join → Invite (the table fills in live) → Live tab → Chip in — your only tap — then
 the chips land and the tab settles itself… interrupted once by the scripted mismatch
 moment (Dev's share changes → "Take a fresh look" → re-confirm) before it settles to
-Paid. Plain HTML/JS (no React) on the same Arcade tokens, fonts, and assets, with the
-QR and fingerprint generators ported from `tab.dc.html` so the visuals match.
+Paid. Plain HTML/JS (no React), fully self-contained and free of Square assets: it uses
+open-source Inter + IBM Plex Mono (Google Fonts) and inline Lucide icons (ISC license)
+instead of the Arcade design system, so it can be shared or hosted anywhere. The QR and
+fingerprint generators are ported from `tab.dc.html` so the visuals match.
 
 ## Viewing
 

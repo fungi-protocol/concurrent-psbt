@@ -7,13 +7,15 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#FBF7EF">
 <title>Tab</title>
-<link rel="stylesheet" href="_ds/arcade-design-system-5c0816f1-a87e-4800-b90a-6873b1eccd5f/colors_and_type.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   html,body{margin:0;height:100%}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   body{
     background:#FBF7EF;
-    font-family:"Cash Sans",ui-sans-serif,system-ui,sans-serif;
+    font-family:"Inter",ui-sans-serif,system-ui,sans-serif;
     -webkit-font-smoothing:antialiased;
     overscroll-behavior:none;
   }
@@ -53,7 +55,7 @@
 
   .btn{
     display:block;width:100%;height:52px;border:0;border-radius:9999px;cursor:pointer;
-    font:500 16px/52px "CashMarket","Cash Sans",sans-serif;letter-spacing:.005em;text-align:center;
+    font:500 16px/52px "Inter",sans-serif;letter-spacing:.005em;text-align:center;
     transition:transform 120ms cubic-bezier(0.4,0,0.2,1),background 120ms;
   }
   .btn:active{transform:scale(.98)}
@@ -61,119 +63,119 @@
   .btn-prominent:active{background:#00B843}
   .btn-standard{background:#F0EADF;color:#211E17}
   .btn-standard:active{background:#ECE3CE}
-  .footnote{text-align:center;font:500 15px/1.35 "Cash Sans";color:#8A8069}
+  .footnote{text-align:center;font:500 15px/1.35 "Inter";color:#8A8069}
 
   .pill{display:inline-flex;align-items:center;gap:8px;border-radius:9999px}
 
   /* ---------- 1 · join ---------- */
-  .scan-badge{align-self:flex-start;font:500 12px/1 "Cash Sans";letter-spacing:.06em;text-transform:uppercase;color:#00A63C;background:#E4F9ED;padding:8px 12px;border-radius:9999px}
+  .scan-badge{align-self:flex-start;font:500 12px/1 "Inter";letter-spacing:.06em;text-transform:uppercase;color:#00A63C;background:#E4F9ED;padding:8px 12px;border-radius:9999px}
   .merchant{margin-top:24px;display:flex;align-items:center;gap:16px}
   .merchant .glyph{width:66px;height:66px;border-radius:20px;background:#211E17;display:flex;align-items:center;justify-content:center;flex:none}
   .merchant .glyph img{filter:brightness(0) invert(1)}
-  .merchant h2{font:500 27px/1.05 "Cash Sans";color:#211E17;letter-spacing:-.01em;margin:0}
-  .merchant .loc{display:flex;align-items:center;gap:4px;margin-top:6px;color:#8A8069;font:400 14px/1 "Cash Sans"}
+  .merchant h2{font:500 27px/1.05 "Inter";color:#211E17;letter-spacing:-.01em;margin:0}
+  .merchant .loc{display:flex;align-items:center;gap:4px;margin-top:6px;color:#8A8069;font:400 14px/1 "Inter"}
   .merchant .loc img{opacity:.5}
   .bill{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:280px}
-  .bill .label{font:400 14px/1 "Cash Sans";color:#8A8069;margin-bottom:10px}
+  .bill .label{font:400 14px/1 "Inter";color:#8A8069;margin-bottom:10px}
   .amount{display:flex;align-items:baseline;justify-content:center}
-  .amount .cur{font:400 40px/1 "Cash Sans";color:#A79A80}
-  .amount .int{font:400 74px/1 "Cash Sans";color:#211E17;letter-spacing:-.02em}
-  .amount .dec{font:400 32px/1 "Cash Sans";color:#A79A80}
-  .btc{margin-top:10px;font:400 15px/1 "Cash Sans Mono";color:#B4855A}
-  .table-pill{margin-top:22px;background:#F0EADF;padding:9px 16px;font:500 14px/1 "Cash Sans";color:#4A4436}
+  .amount .cur{font:400 40px/1 "Inter";color:#A79A80}
+  .amount .int{font:400 74px/1 "Inter";color:#211E17;letter-spacing:-.02em}
+  .amount .dec{font:400 32px/1 "Inter";color:#A79A80}
+  .btc{margin-top:10px;font:400 15px/1 "IBM Plex Mono";color:#B4855A}
+  .table-pill{margin-top:22px;background:#F0EADF;padding:9px 16px;font:500 14px/1 "Inter";color:#4A4436}
 
   /* ---------- 2 · invite ---------- */
-  .title{text-align:center;font:500 20px/1.2 "Cash Sans";color:#211E17}
-  .subtitle{text-align:center;font:400 15px/1.4 "Cash Sans";color:#8A8069;margin-top:6px}
+  .title{text-align:center;font:500 20px/1.2 "Inter";color:#211E17}
+  .subtitle{text-align:center;font:400 15px/1.4 "Inter";color:#8A8069;margin-top:6px}
   .qr-card{margin:22px auto 0;width:206px;height:206px;flex:none;background:#fff;border-radius:26px;box-shadow:0 6px 20px rgba(60,45,20,.10);border:1px solid rgba(40,30,10,.05);display:flex;align-items:center;justify-content:center}
-  .tap-pill{border:1.5px solid #E3D9C4;padding:11px 18px;font:500 15px/1 "Cash Sans";color:#4A4436}
+  .tap-pill{border:1.5px solid #E3D9C4;padding:11px 18px;font:500 15px/1 "Inter";color:#4A4436}
   .tap-pill .phones{display:flex;gap:3px}
   .tap-pill .phones span{width:11px;height:16px;border:1.5px solid #7A7057;border-radius:3px}
-  .lock-note{display:flex;align-items:center;gap:6px;font:400 12.5px/1.3 "Cash Sans";color:#B4855A;text-align:center;padding:0 8px}
+  .lock-note{display:flex;align-items:center;gap:6px;font:400 12.5px/1.3 "Inter";color:#B4855A;text-align:center;padding:0 8px}
   .lock-note img{opacity:.6;flex:none}
   .here-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
-  .here-row .lhs{font:500 15px/1 "Cash Sans";color:#211E17}
-  .here-row .rhs{font:500 14px/1 "Cash Sans";color:#00A63C}
+  .here-row .lhs{font:500 15px/1 "Inter";color:#211E17}
+  .here-row .rhs{font:500 14px/1 "Inter";color:#00A63C}
   .avatars{display:flex;gap:10px}
-  .avatar{width:44px;height:44px;border-radius:50%;color:#fff;font:600 17px/1 "Cash Sans";display:flex;align-items:center;justify-content:center;flex:none}
+  .avatar{width:44px;height:44px;border-radius:50%;color:#fff;font:600 17px/1 "Inter";display:flex;align-items:center;justify-content:center;flex:none}
   .avatar.in{animation:popIn .5s cubic-bezier(0.22,1,0.36,1) both}
   .avatar.empty{border:2px dashed #C9BFA8;background:none}
 
   /* ---------- 3 · live tab ---------- */
-  .live-head{text-align:center;font:400 14px/1 "Cash Sans";color:#8A8069}
-  .sync-pill{align-self:center;margin-top:9px;background:#E4F9ED;padding:6px 13px;font:500 12px/1 "Cash Sans";color:#0A8F3C}
+  .live-head{text-align:center;font:400 14px/1 "Inter";color:#8A8069}
+  .sync-pill{align-self:center;margin-top:9px;background:#E4F9ED;padding:6px 13px;font:500 12px/1 "Inter";color:#0A8F3C}
   .sync-pill .dot{width:7px;height:7px;border-radius:50%;background:#00D64F;box-shadow:0 0 0 3px rgba(0,214,79,.22)}
   .ring-wrap{position:relative;width:236px;height:236px;margin:14px auto 0;flex:none}
   .ring-wrap svg{position:absolute;inset:0;transform:rotate(-90deg)}
   .ring-wrap .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
-  .ring-wrap .center .cap{font:400 13px/1 "Cash Sans";color:#8A8069;margin-bottom:4px}
+  .ring-wrap .center .cap{font:400 13px/1 "Inter";color:#8A8069;margin-bottom:4px}
   .ring-amt{display:flex;align-items:baseline}
-  .ring-amt .cur{font:400 26px/1 "Cash Sans";color:#8A8069}
-  .ring-amt .val{font:400 46px/1 "Cash Sans";color:#211E17;letter-spacing:-.02em}
-  .ring-wrap .center .of{font:400 14px/1 "Cash Sans";color:#8A8069;margin-top:6px;white-space:nowrap}
+  .ring-amt .cur{font:400 26px/1 "Inter";color:#8A8069}
+  .ring-amt .val{font:400 46px/1 "Inter";color:#211E17;letter-spacing:-.02em}
+  .ring-wrap .center .of{font:400 14px/1 "Inter";color:#8A8069;margin-top:6px;white-space:nowrap}
   #ring-fg{transition:stroke-dashoffset 480ms cubic-bezier(0.22,1,0.36,1)}
   .people{margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:9px}
   .person{display:flex;align-items:center;gap:9px;background:#fff;border:1px solid rgba(40,30,10,.05);border-radius:14px;padding:8px 10px;transition:opacity .5s}
   .person.out{opacity:.5}
-  .person .face{width:30px;height:30px;border-radius:50%;color:#fff;font:600 13px/1 "Cash Sans";display:flex;align-items:center;justify-content:center;flex:none}
+  .person .face{width:30px;height:30px;border-radius:50%;color:#fff;font:600 13px/1 "Inter";display:flex;align-items:center;justify-content:center;flex:none}
   .person .who{min-width:0;flex:1}
-  .person .nm{font:500 14px/1 "Cash Sans";color:#211E17}
-  .person .st{font:500 12px/1 "Cash Sans";margin-top:3px;color:#A79A80}
+  .person .nm{font:500 14px/1 "Inter";color:#211E17}
+  .person .st{font:500 12px/1 "Inter";margin-top:3px;color:#A79A80}
   .person.in .st{color:#0A8F3C}
-  .settling{display:none;align-items:center;justify-content:center;gap:9px;height:52px;font:500 15px/1 "Cash Sans";color:#0A8F3C;background:#E4F9ED;border-radius:9999px}
+  .settling{display:none;align-items:center;justify-content:center;gap:9px;height:52px;font:500 15px/1 "Inter";color:#0A8F3C;background:#E4F9ED;border-radius:9999px}
   .settling .dot{width:8px;height:8px;border-radius:50%;background:#00D64F;animation:breathe 1s ease-in-out infinite}
 
   /* ---------- 4 · chip in ---------- */
   .segmented{margin:20px auto 0;display:flex;background:#F0EADF;border-radius:9999px;padding:4px;width:100%;max-width:280px;flex:none}
-  .segmented button{flex:1;border:0;background:none;color:#A79A80;font:500 15px/1 "Cash Sans";padding:11px 0;border-radius:9999px;cursor:pointer}
+  .segmented button{flex:1;border:0;background:none;color:#A79A80;font:500 15px/1 "Inter";padding:11px 0;border-radius:9999px;cursor:pointer}
   .segmented button.on{background:#fff;color:#211E17;box-shadow:0 1px 3px rgba(60,45,20,.12)}
   .share{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:170px}
-  .share .basis{margin-top:10px;font:400 14px/1 "Cash Sans";color:#8A8069}
+  .share .basis{margin-top:10px;font:400 14px/1 "Inter";color:#8A8069}
   .breakdown{background:#fff;border:1px solid rgba(40,30,10,.05);border-radius:18px;padding:18px 18px 6px;margin-bottom:6px;flex:none}
   .breakdown .src{display:flex;justify-content:space-between;align-items:center;padding-bottom:12px;border-bottom:1px solid #F0EADF;margin-bottom:12px}
-  .breakdown .src .lhs{display:flex;align-items:center;gap:8px;font:500 15px/1 "Cash Sans";color:#211E17}
-  .breakdown .src .rhs{font:400 13px/1 "Cash Sans";color:#8A8069}
+  .breakdown .src .lhs{display:flex;align-items:center;gap:8px;font:500 15px/1 "Inter";color:#211E17}
+  .breakdown .src .rhs{font:400 13px/1 "Inter";color:#8A8069}
   .breakdown .row{display:flex;justify-content:space-between;padding-bottom:12px}
-  .breakdown .row .k{font:400 15px/1 "Cash Sans";color:#8A8069}
-  .breakdown .row .v{font:500 15px/1 "Cash Sans Mono";color:#211E17}
+  .breakdown .row .k{font:400 15px/1 "Inter";color:#8A8069}
+  .breakdown .row .v{font:500 15px/1 "IBM Plex Mono";color:#211E17}
   .breakdown .total{border-top:1.5px dashed rgba(40,30,10,.16);display:flex;justify-content:space-between;padding:12px 0}
-  .breakdown .total .k{font:500 16px/1 "Cash Sans";color:#211E17}
-  .breakdown .total .v{font:500 16px/1 "Cash Sans Mono";color:#211E17}
-  .changed-note{display:none;align-self:center;margin-top:14px;font:500 13px/1 "Cash Sans";color:#B06C10;background:#FBEFD6;padding:9px 14px;border-radius:9999px}
+  .breakdown .total .k{font:500 16px/1 "Inter";color:#211E17}
+  .breakdown .total .v{font:500 16px/1 "IBM Plex Mono";color:#211E17}
+  .changed-note{display:none;align-self:center;margin-top:14px;font:500 13px/1 "Inter";color:#B06C10;background:#FBEFD6;padding:9px 14px;border-radius:9999px}
 
   /* ---------- 5 · paid ---------- */
   .paid-hero{display:flex;flex-direction:column;align-items:center;flex:none}
-  .paid-hero .smiley{position:relative;width:92px;height:92px}
+  .paid-hero .smiley{position:relative;width:92px;height:92px;background:#E4F9ED;border-radius:50%;display:flex;align-items:center;justify-content:center}
   .paid-hero .check{position:absolute;bottom:-2px;right:-2px;width:34px;height:34px;border-radius:50%;background:#00D64F;border:3px solid #FBF7EF;display:flex;align-items:center;justify-content:center;animation:popIn .5s cubic-bezier(0.22,1,0.36,1) .2s both}
   .paid-hero .check img{filter:brightness(0) invert(1)}
-  .paid-hero h2{font:500 27px/1.1 "Cash Sans";color:#211E17;margin:14px 0 0}
-  .paid-hero .sub{text-align:center;font:400 15px/1.4 "Cash Sans";color:#8A8069;margin-top:8px}
+  .paid-hero h2{font:500 27px/1.1 "Inter";color:#211E17;margin:14px 0 0}
+  .paid-hero .sub{text-align:center;font:400 15px/1.4 "Inter";color:#8A8069;margin-top:8px}
   .paid-hero .sub b{color:#211E17}
   .receipt{background:#fff;border:1px solid rgba(40,30,10,.05);border-radius:18px;padding:6px 16px;margin-top:18px;flex:none}
   .receipt .line{display:flex;align-items:center;justify-content:space-between;padding:9px 0}
   .receipt .line + .line{border-top:1px solid #F0EADF}
   .receipt .line .lhs{display:flex;align-items:center;gap:9px}
-  .receipt .line .face{width:24px;height:24px;border-radius:50%;color:#fff;font:600 11px/1 "Cash Sans";display:flex;align-items:center;justify-content:center}
-  .receipt .line .nm{font:400 15px/1 "Cash Sans";color:#4A4436}
-  .receipt .line .v{font:500 14px/1 "Cash Sans Mono";color:#211E17}
+  .receipt .line .face{width:24px;height:24px;border-radius:50%;color:#fff;font:600 11px/1 "Inter";display:flex;align-items:center;justify-content:center}
+  .receipt .line .nm{font:400 15px/1 "Inter";color:#4A4436}
+  .receipt .line .v{font:500 14px/1 "IBM Plex Mono";color:#211E17}
   .receipt .grand{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-top:1.5px dashed rgba(40,30,10,.16)}
-  .receipt .grand .k{font:500 15px/1 "Cash Sans";color:#211E17}
-  .receipt .grand .v{font:500 15px/1 "Cash Sans Mono";color:#211E17}
+  .receipt .grand .k{font:500 15px/1 "Inter";color:#211E17}
+  .receipt .grand .v{font:500 15px/1 "IBM Plex Mono";color:#211E17}
 
   /* ---------- ! mismatch ---------- */
-  .hold-pill{align-self:center;font:500 13px/1 "Cash Sans";color:#B06C10;background:#FBEFD6;padding:9px 14px}
+  .hold-pill{align-self:center;font:500 13px/1 "Inter";color:#B06C10;background:#FBEFD6;padding:9px 14px}
   .hold-pill img{opacity:.7}
   .big-print{margin:18px auto 0;width:172px;height:172px;flex:none;border-radius:28px;overflow:hidden;box-shadow:0 8px 26px rgba(120,80,10,.16),0 0 0 5px #fff,0 0 0 7px #FBEFD6}
-  .mm-title{text-align:center;font:500 23px/1.25 "Cash Sans";color:#211E17;margin-top:20px}
-  .mm-sub{text-align:center;font:400 15px/1.45 "Cash Sans";color:#8A8069;margin-top:10px}
+  .mm-title{text-align:center;font:500 23px/1.25 "Inter";color:#211E17;margin-top:20px}
+  .mm-sub{text-align:center;font:400 15px/1.45 "Inter";color:#8A8069;margin-top:10px}
   .tiles{display:flex;justify-content:space-between;padding:18px 4px 10px;margin-top:auto}
   .tile-col{display:flex;flex-direction:column;align-items:center;gap:6px}
   .tile-col .t{position:relative;width:44px;height:44px;border-radius:12px;overflow:hidden;box-shadow:0 0 0 2px #E4F9ED}
   .tile-col .t .badge{position:absolute;bottom:-3px;right:-3px;width:18px;height:18px;border-radius:50%;background:#00D64F;border:2px solid #FBF7EF;display:flex;align-items:center;justify-content:center}
   .tile-col .t .badge img{filter:brightness(0) invert(1)}
-  .tile-col .lbl{font:500 11px/1 "Cash Sans";color:#8A8069}
+  .tile-col .lbl{font:500 11px/1 "Inter";color:#8A8069}
   .tile-col.bad .t{box-shadow:0 0 0 2.5px #E0A020;animation:breathe 1.6s ease-in-out infinite}
-  .tile-col.bad .t .badge{background:#E0A020;color:#fff;font:700 12px/1 "Cash Sans"}
+  .tile-col.bad .t .badge{background:#E0A020;color:#fff;font:700 12px/1 "Inter"}
   .tile-col.bad .lbl{font-weight:600;color:#B06C10}
 </style>
 </head>
@@ -185,10 +187,10 @@
     <div class="body">
       <div class="scan-badge">Scanned from the receipt</div>
       <div class="merchant">
-        <div class="glyph"><img src="assets/illustrations/storefront.svg" width="52" height="52"></div>
+        <div class="glyph"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0ibTIgNyA0LjQxLTQuNDFBMiAyIDAgMCAxIDcuODMgMmg4LjM0YTIgMiAwIDAgMSAxLjQyLjU5TDIyIDciLz48cGF0aCBkPSJNNCAxMnY4YTIgMiAwIDAgMCAyIDJoMTJhMiAyIDAgMCAwIDItMnYtOCIvPjxwYXRoIGQ9Ik0xNSAyMnYtNGEyIDIgMCAwIDAtMi0yaC0yYTIgMiAwIDAgMC0yIDJ2NCIvPjxwYXRoIGQ9Ik0yIDdoMjAiLz48cGF0aCBkPSJNMjIgN3YzYTIgMiAwIDAgMS0yIDIgMi43IDIuNyAwIDAgMS0xLjU5LS42My43LjcgMCAwIDAtLjgyIDBBMi43IDIuNyAwIDAgMSAxNiAxMmEyLjcgMi43IDAgMCAxLTEuNTktLjYzLjcuNyAwIDAgMC0uODIgMEEyLjcgMi43IDAgMCAxIDEyIDEyYTIuNyAyLjcgMCAwIDEtMS41OS0uNjMuNy43IDAgMCAwLS44MiAwQTIuNyAyLjcgMCAwIDEgOCAxMmEyLjcgMi43IDAgMCAxLTEuNTktLjYzLjcuNyAwIDAgMC0uODIgMEEyLjcgMi43IDAgMCAxIDQgMTJhMiAyIDAgMCAxLTItMloiLz48L3N2Zz4=" width="52" height="52"></div>
         <div>
           <h2>Osteria Lupa</h2>
-          <div class="loc"><img src="assets/icons/location24.svg" width="15" height="15">Grand St · New York</div>
+          <div class="loc"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTIwIDEwYzAgNi04IDEyLTggMTJzLTgtNi04LTEyYTggOCAwIDAgMSAxNiAwWiIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTAiIHI9IjMiLz48L3N2Zz4=" width="15" height="15">Grand St · New York</div>
         </div>
       </div>
       <div class="bill">
@@ -212,7 +214,7 @@
       <div class="qr-card" id="qr-slot"></div>
       <div style="margin:18px 0 0;display:flex;flex-direction:column;align-items:center;gap:12px">
         <div class="pill tap-pill"><span class="phones"><span></span><span></span></span>or tap two phones together</div>
-        <div class="lock-note"><img src="assets/icons/lockLocked24.svg" width="14" height="14">Connects phone-to-phone — nothing goes online until you all pay</div>
+        <div class="lock-note"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHJlY3Qgd2lkdGg9IjE4IiBoZWlnaHQ9IjExIiB4PSIzIiB5PSIxMSIgcng9IjIiIHJ5PSIyIi8+PHBhdGggZD0iTTcgMTFWN2E1IDUgMCAwIDEgMTAgMHY0Ii8+PC9zdmc+" width="14" height="14">Connects phone-to-phone — nothing goes online until you all pay</div>
       </div>
       <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;padding:18px 0 10px">
         <div class="here-row"><span class="lhs">Here now</span><span class="rhs" id="here-count">4 of 6 here</span></div>
@@ -264,7 +266,7 @@
       <div class="pill changed-note" id="changed-note">Dev’s share changed — this is the fresh picture</div>
       <div class="breakdown" style="margin-top:14px">
         <div class="src">
-          <span class="lhs"><img src="assets/icons/currencyBtc24.svg" width="18" height="18">From your Bitcoin</span>
+          <span class="lhs"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTExLjc2NyAxOS4wODljNC45MjQuODY4IDYuMTQtNi4wMjUgMS4yMTYtNi44OTRtLTEuMjE2IDYuODk0TDUuODYgMTguMDQ3bTUuOTA4IDEuMDQyLS4zNDcgMS45N20xLjU2My04Ljg2NGM0LjkyNC44NjkgNi4xNC02LjAyNSAxLjIxNS02Ljg5M20tMS4yMTUgNi44OTMtMy45NC0uNjk0bTUuMTU1LTYuMkw4LjI5IDQuMjZtNS45MDggMS4wNDIuMzQ4LTEuOTdNNy40OCAyMC4zNjRsMy4xMjYtMTcuNzI3Ii8+PC9zdmc+" width="18" height="18">From your Bitcoin</span>
           <span class="rhs">$312.40 available</span>
         </div>
         <div class="row"><span class="k">Your part of the bill</span><span class="v">$35.68</span></div>
@@ -283,8 +285,8 @@
     <div class="body" style="padding-left:26px;padding-right:26px">
       <div class="paid-hero">
         <div class="smiley">
-          <img src="assets/illustrations/cash-smiley.svg" width="92" height="92">
-          <div class="check"><img src="assets/icons/check24.svg" width="18" height="18"></div>
+          <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDBBNjNDIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTUuOCAxMS4zIDIgMjJsMTAuNy0zLjc5Ii8+PHBhdGggZD0iTTQgM2guMDEiLz48cGF0aCBkPSJNMjIgOGguMDEiLz48cGF0aCBkPSJNMTUgMmguMDEiLz48cGF0aCBkPSJNMjIgMjBoLjAxIi8+PHBhdGggZD0ibTIyIDItMi4yNC43NWEyLjkgMi45IDAgMCAwLTEuOTYgMy4xMmMuMS44Ni0uNTcgMS42My0xLjQ1IDEuNjNoLS4zOGMtLjg2IDAtMS42LjYtMS43NiAxLjQ0TDE0IDEwIi8+PHBhdGggZD0ibTIyIDEzLS44Mi0uMzNjLS44Ni0uMzQtMS44Mi4yLTEuOTggMS4xMWMtLjExLjctLjcyIDEuMjItMS40MyAxLjIySDE3Ii8+PHBhdGggZD0ibTExIDIgLjMzLjgyYy4zNC44Ni0uMiAxLjgyLTEuMTEgMS45OEM5LjUyIDQuOSA5IDUuNTIgOSA2LjIzVjciLz48cGF0aCBkPSJNMTEgMTNjMS45MyAxLjkzIDIuODMgNC4xNyAyIDUtLjgzLjgzLTMuMDctLjA3LTUtMi0xLjkzLTEuOTMtMi44My00LjE3LTItNSAuODMtLjgzIDMuMDcuMDcgNSAyWiIvPjwvc3ZnPg==" width="44" height="44">
+          <div class="check"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTIwIDYgOSAxN2wtNS01Ii8+PC9zdmc+" width="18" height="18"></div>
         </div>
         <h2>Paid!</h2>
         <div class="sub">Osteria Lupa got <b>one</b> payment<br>of $214.50 from the whole table.</div>
@@ -299,7 +301,7 @@
   <!-- ============ ! MISMATCH (appears only if the tab changes) ============ -->
   <section class="screen" data-screen="mismatch">
     <div class="body">
-      <div class="pill hold-pill"><img src="assets/icons/refresh24.svg" width="16" height="16">Hold on a sec</div>
+      <div class="pill hold-pill"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTMgMTJhOSA5IDAgMCAxIDktOSA5Ljc1IDkuNzUgMCAwIDEgNi43NCAyLjc0TDIxIDgiLz48cGF0aCBkPSJNMjEgM3Y1aC01Ii8+PHBhdGggZD0iTTIxIDEyYTkgOSAwIDAgMS05IDkgOS43NSA5Ljc1IDAgMCAxLTYuNzQtMi43NEwzIDE2Ii8+PHBhdGggZD0iTTggMTZIM3Y1Ii8+PC9zdmc+" width="16" height="16">Hold on a sec</div>
       <div class="big-print" id="bigprint-slot"></div>
       <div class="mm-title">The tab changed</div>
       <div class="mm-sub">Dev’s share changed after the others were ready, so his picture no longer matches. Take a fresh look before the tab settles.</div>
@@ -395,7 +397,7 @@ FRIENDS.forEach(f=>{
   t.appendChild(makeFingerprint(bad?"osteria-lupa-changed-238.00-v9":"osteria-lupa-final-214.50-v7"));
   const badge=document.createElement("div"); badge.className="badge";
   if(bad){ badge.textContent="!"; }
-  else { const img=document.createElement("img"); img.src="assets/icons/check24.svg"; img.width=11; img.height=11; badge.appendChild(img); }
+  else { const img=document.createElement("img"); img.src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTIwIDYgOSAxN2wtNS01Ii8+PC9zdmc+"; img.width=11; img.height=11; badge.appendChild(img); }
   t.appendChild(badge);
   const lbl=document.createElement("span"); lbl.className="lbl"; lbl.textContent=f.name;
   col.appendChild(t); col.appendChild(lbl);
