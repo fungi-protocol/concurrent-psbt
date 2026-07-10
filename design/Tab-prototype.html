@@ -2,49 +2,54 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tab — clickable prototype</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#FBF7EF">
+<title>Tab</title>
 <link rel="stylesheet" href="_ds/arcade-design-system-5c0816f1-a87e-4800-b90a-6873b1eccd5f/colors_and_type.css">
 <style>
-  html,body{margin:0}
-  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   body{
-    background:#E7DCC6;
+    background:#FBF7EF;
     font-family:"Cash Sans",ui-sans-serif,system-ui,sans-serif;
     -webkit-font-smoothing:antialiased;
-    min-height:100vh;
-    display:flex;flex-direction:column;align-items:center;justify-content:center;
-    padding:40px 20px;gap:22px;
+    overscroll-behavior:none;
   }
-  a{color:#00A63C;text-decoration:none}a:hover{opacity:.8}
+  a{color:#00A63C;text-decoration:none}
+
+  /* ---------- app shell: full screen on mobile, phone-sized card on desktop ---------- */
+  #app{
+    position:fixed;inset:0;background:#FBF7EF;overflow:hidden;
+    touch-action:manipulation;user-select:none;-webkit-user-select:none;
+  }
+  @media (min-width:560px) and (min-height:700px){
+    body{background:#E7DCC6;display:flex;align-items:center;justify-content:center}
+    #app{
+      position:relative;inset:auto;width:390px;height:min(844px,94vh);
+      border-radius:40px;border:1px solid rgba(40,30,10,.06);
+      box-shadow:0 2px 3px rgba(30,25,15,.05),0 34px 64px -22px rgba(60,45,20,.30);
+    }
+  }
 
   @keyframes popIn{0%{transform:scale(0);opacity:0}60%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
   @keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.04)}}
+  @keyframes slideIn{0%{opacity:0;transform:translateX(28px)}100%{opacity:1;transform:translateX(0)}}
   @keyframes fadeUp{0%{opacity:0;transform:translateY(10px)}100%{opacity:1;transform:translateY(0)}}
 
-  .masthead{display:flex;align-items:center;gap:12px}
-  .masthead .mark{width:38px;height:38px;border-radius:11px;background:#211E17;color:#CCFF14;font:700 21px/1 "Cash Sans";display:flex;align-items:center;justify-content:center}
-  .masthead .name{font:700 24px/1 "Cash Sans";color:#211E17;letter-spacing:-.02em}
-  .masthead .sub{font:400 13px/1.3 "Cash Sans";color:#8A8069;margin-top:3px}
-
-  /* ---------- phone frame ---------- */
-  .phone{
-    position:relative;width:390px;height:844px;background:#FBF7EF;border-radius:46px;
-    box-shadow:0 2px 3px rgba(30,25,15,.05),0 34px 64px -22px rgba(60,45,20,.30);
-    border:1px solid rgba(40,30,10,.06);overflow:hidden;flex:none;
-  }
-  .island{position:absolute;top:11px;left:50%;transform:translateX(-50%);width:118px;height:30px;background:#15130e;border-radius:16px;z-index:20}
-  .home{position:absolute;bottom:9px;left:50%;transform:translateX(-50%);width:132px;height:5px;border-radius:3px;background:rgba(20,15,5,.22);z-index:20}
-  .statusbar{height:54px;display:flex;align-items:flex-end;justify-content:space-between;padding:0 30px 6px;font:600 15px/1 "Cash Sans";color:#211E17}
-  .battery{width:26px;height:13px;border:1.5px solid #211E17;border-radius:4px;position:relative;opacity:.85}
-  .battery::after{content:"";position:absolute;inset:2px;right:6px;background:#211E17;border-radius:1px}
-
-  /* screens stack inside the frame below the status bar */
-  .screen{position:absolute;inset:0;display:none;flex-direction:column}
+  .screen{position:absolute;inset:0;display:none;flex-direction:column;background:#FBF7EF}
   .screen.active{display:flex}
-  .screen .body{flex:1;display:flex;flex-direction:column;overflow:hidden}
-  .screen.active .body{animation:fadeUp .28s cubic-bezier(0.22,1,0.36,1) both}
-  .footer{padding:0 24px 30px;display:flex;flex-direction:column;gap:13px}
+  .screen .body{
+    flex:1;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;
+    padding:calc(env(safe-area-inset-top,0px) + 22px) 28px 0;
+  }
+  .screen.active .body{animation:slideIn .3s cubic-bezier(0.22,1,0.36,1) both}
+  .screen.active.back .body{animation:fadeUp .28s cubic-bezier(0.22,1,0.36,1) both}
+  .footer{
+    padding:12px 24px calc(env(safe-area-inset-bottom,0px) + 22px);
+    display:flex;flex-direction:column;gap:13px;flex:none;
+  }
 
   .btn{
     display:block;width:100%;height:52px;border:0;border-radius:9999px;cursor:pointer;
@@ -53,22 +58,22 @@
   }
   .btn:active{transform:scale(.98)}
   .btn-prominent{background:#00D64F;color:#fff}
-  .btn-prominent:hover{background:#00E013}
+  .btn-prominent:active{background:#00B843}
   .btn-standard{background:#F0EADF;color:#211E17}
-  .btn-standard:hover{background:#ECE3CE}
+  .btn-standard:active{background:#ECE3CE}
   .footnote{text-align:center;font:500 15px/1.35 "Cash Sans";color:#8A8069}
 
   .pill{display:inline-flex;align-items:center;gap:8px;border-radius:9999px}
 
   /* ---------- 1 · join ---------- */
   .scan-badge{align-self:flex-start;font:500 12px/1 "Cash Sans";letter-spacing:.06em;text-transform:uppercase;color:#00A63C;background:#E4F9ED;padding:8px 12px;border-radius:9999px}
-  .merchant{margin-top:26px;display:flex;align-items:center;gap:16px}
+  .merchant{margin-top:24px;display:flex;align-items:center;gap:16px}
   .merchant .glyph{width:66px;height:66px;border-radius:20px;background:#211E17;display:flex;align-items:center;justify-content:center;flex:none}
   .merchant .glyph img{filter:brightness(0) invert(1)}
   .merchant h2{font:500 27px/1.05 "Cash Sans";color:#211E17;letter-spacing:-.01em;margin:0}
   .merchant .loc{display:flex;align-items:center;gap:4px;margin-top:6px;color:#8A8069;font:400 14px/1 "Cash Sans"}
   .merchant .loc img{opacity:.5}
-  .bill{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .bill{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:280px}
   .bill .label{font:400 14px/1 "Cash Sans";color:#8A8069;margin-bottom:10px}
   .amount{display:flex;align-items:baseline;justify-content:center}
   .amount .cur{font:400 40px/1 "Cash Sans";color:#A79A80}
@@ -80,7 +85,7 @@
   /* ---------- 2 · invite ---------- */
   .title{text-align:center;font:500 20px/1.2 "Cash Sans";color:#211E17}
   .subtitle{text-align:center;font:400 15px/1.4 "Cash Sans";color:#8A8069;margin-top:6px}
-  .qr-card{margin:24px auto 0;width:212px;height:212px;background:#fff;border-radius:26px;box-shadow:0 6px 20px rgba(60,45,20,.10);border:1px solid rgba(40,30,10,.05);display:flex;align-items:center;justify-content:center}
+  .qr-card{margin:22px auto 0;width:206px;height:206px;flex:none;background:#fff;border-radius:26px;box-shadow:0 6px 20px rgba(60,45,20,.10);border:1px solid rgba(40,30,10,.05);display:flex;align-items:center;justify-content:center}
   .tap-pill{border:1.5px solid #E3D9C4;padding:11px 18px;font:500 15px/1 "Cash Sans";color:#4A4436}
   .tap-pill .phones{display:flex;gap:3px}
   .tap-pill .phones span{width:11px;height:16px;border:1.5px solid #7A7057;border-radius:3px}
@@ -98,16 +103,16 @@
   .live-head{text-align:center;font:400 14px/1 "Cash Sans";color:#8A8069}
   .sync-pill{align-self:center;margin-top:9px;background:#E4F9ED;padding:6px 13px;font:500 12px/1 "Cash Sans";color:#0A8F3C}
   .sync-pill .dot{width:7px;height:7px;border-radius:50%;background:#00D64F;box-shadow:0 0 0 3px rgba(0,214,79,.22)}
-  .ring-wrap{position:relative;width:248px;height:248px;margin:14px auto 0}
+  .ring-wrap{position:relative;width:236px;height:236px;margin:14px auto 0;flex:none}
   .ring-wrap svg{position:absolute;inset:0;transform:rotate(-90deg)}
   .ring-wrap .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
   .ring-wrap .center .cap{font:400 13px/1 "Cash Sans";color:#8A8069;margin-bottom:4px}
   .ring-amt{display:flex;align-items:baseline}
   .ring-amt .cur{font:400 26px/1 "Cash Sans";color:#8A8069}
-  .ring-amt .val{font:400 48px/1 "Cash Sans";color:#211E17;letter-spacing:-.02em}
+  .ring-amt .val{font:400 46px/1 "Cash Sans";color:#211E17;letter-spacing:-.02em}
   .ring-wrap .center .of{font:400 14px/1 "Cash Sans";color:#8A8069;margin-top:6px;white-space:nowrap}
   #ring-fg{transition:stroke-dashoffset 480ms cubic-bezier(0.22,1,0.36,1)}
-  .people{margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .people{margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:9px}
   .person{display:flex;align-items:center;gap:9px;background:#fff;border:1px solid rgba(40,30,10,.05);border-radius:14px;padding:8px 10px;transition:opacity .5s}
   .person.out{opacity:.5}
   .person .face{width:30px;height:30px;border-radius:50%;color:#fff;font:600 13px/1 "Cash Sans";display:flex;align-items:center;justify-content:center;flex:none}
@@ -115,7 +120,7 @@
   .person .nm{font:500 14px/1 "Cash Sans";color:#211E17}
   .person .st{font:500 12px/1 "Cash Sans";margin-top:3px;color:#A79A80}
   .person.in .st{color:#0A8F3C}
-  .match-pill{align-self:center;background:#F0EADF;padding:7px 15px 7px 8px;font:500 13px/1 "Cash Sans";color:#4A4436}
+  .match-pill{align-self:center;margin-top:14px;background:#F0EADF;padding:7px 15px 7px 8px;font:500 13px/1 "Cash Sans";color:#4A4436}
   .match-pill .tile{width:24px;height:24px;border-radius:7px;overflow:hidden;flex:none;box-shadow:0 0 0 1.5px rgba(0,166,60,.3)}
   .match-pill .peek{color:#A79A80;font-weight:400}
   .fills-note{text-align:center;font:400 13px/1.4 "Cash Sans";color:#B4855A;padding:10px 6px 0}
@@ -123,12 +128,12 @@
   .settling .dot{width:8px;height:8px;border-radius:50%;background:#00D64F;animation:breathe 1s ease-in-out infinite}
 
   /* ---------- 4 · chip in ---------- */
-  .segmented{margin:22px auto 0;display:flex;background:#F0EADF;border-radius:9999px;padding:4px;width:100%;max-width:280px}
+  .segmented{margin:20px auto 0;display:flex;background:#F0EADF;border-radius:9999px;padding:4px;width:100%;max-width:280px;flex:none}
   .segmented button{flex:1;border:0;background:none;color:#A79A80;font:500 15px/1 "Cash Sans";padding:11px 0;border-radius:9999px;cursor:pointer}
   .segmented button.on{background:#fff;color:#211E17;box-shadow:0 1px 3px rgba(60,45,20,.12)}
-  .share{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .share{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:170px}
   .share .basis{margin-top:10px;font:400 14px/1 "Cash Sans";color:#8A8069}
-  .breakdown{background:#fff;border:1px solid rgba(40,30,10,.05);border-radius:18px;padding:18px 18px 6px;margin-bottom:6px}
+  .breakdown{background:#fff;border:1px solid rgba(40,30,10,.05);border-radius:18px;padding:18px 18px 6px;margin-bottom:6px;flex:none}
   .breakdown .src{display:flex;justify-content:space-between;align-items:center;padding-bottom:12px;border-bottom:1px solid #F0EADF;margin-bottom:12px}
   .breakdown .src .lhs{display:flex;align-items:center;gap:8px;font:500 15px/1 "Cash Sans";color:#211E17}
   .breakdown .src .rhs{font:400 13px/1 "Cash Sans";color:#8A8069}
@@ -138,36 +143,37 @@
   .breakdown .total{border-top:1.5px dashed rgba(40,30,10,.16);display:flex;justify-content:space-between;padding:12px 0}
   .breakdown .total .k{font:500 16px/1 "Cash Sans";color:#211E17}
   .breakdown .total .v{font:500 16px/1 "Cash Sans Mono";color:#211E17}
+  .changed-note{display:none;align-self:center;margin-top:14px;font:500 13px/1 "Cash Sans";color:#B06C10;background:#FBEFD6;padding:9px 14px;border-radius:9999px}
 
   /* ---------- 5 · paid ---------- */
-  .paid-hero{display:flex;flex-direction:column;align-items:center}
-  .paid-hero .smiley{position:relative;width:96px;height:96px}
+  .paid-hero{display:flex;flex-direction:column;align-items:center;flex:none}
+  .paid-hero .smiley{position:relative;width:92px;height:92px}
   .paid-hero .check{position:absolute;bottom:-2px;right:-2px;width:34px;height:34px;border-radius:50%;background:#00D64F;border:3px solid #FBF7EF;display:flex;align-items:center;justify-content:center;animation:popIn .5s cubic-bezier(0.22,1,0.36,1) .2s both}
   .paid-hero .check img{filter:brightness(0) invert(1)}
-  .paid-hero h2{font:500 27px/1.1 "Cash Sans";color:#211E17;margin:16px 0 0}
+  .paid-hero h2{font:500 27px/1.1 "Cash Sans";color:#211E17;margin:14px 0 0}
   .paid-hero .sub{text-align:center;font:400 15px/1.4 "Cash Sans";color:#8A8069;margin-top:8px}
   .paid-hero .sub b{color:#211E17}
-  .receipt{background:#fff;border:1px solid rgba(40,30,10,.05);border-radius:18px;padding:8px 16px;margin-top:20px}
-  .receipt .line{display:flex;align-items:center;justify-content:space-between;padding:10px 0}
+  .receipt{background:#fff;border:1px solid rgba(40,30,10,.05);border-radius:18px;padding:6px 16px;margin-top:18px;flex:none}
+  .receipt .line{display:flex;align-items:center;justify-content:space-between;padding:9px 0}
   .receipt .line + .line{border-top:1px solid #F0EADF}
   .receipt .line .lhs{display:flex;align-items:center;gap:9px}
   .receipt .line .face{width:24px;height:24px;border-radius:50%;color:#fff;font:600 11px/1 "Cash Sans";display:flex;align-items:center;justify-content:center}
   .receipt .line .nm{font:400 15px/1 "Cash Sans";color:#4A4436}
   .receipt .line .v{font:500 14px/1 "Cash Sans Mono";color:#211E17}
-  .receipt .grand{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-top:1.5px dashed rgba(40,30,10,.16)}
+  .receipt .grand{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-top:1.5px dashed rgba(40,30,10,.16)}
   .receipt .grand .k{font:500 15px/1 "Cash Sans";color:#211E17}
   .receipt .grand .v{font:500 15px/1 "Cash Sans Mono";color:#211E17}
-  .privacy{display:flex;align-items:center;gap:12px;background:#F3EFE2;border-radius:16px;padding:14px;margin-top:14px}
+  .privacy{display:flex;align-items:center;gap:12px;background:#F3EFE2;border-radius:16px;padding:14px;margin-top:14px;flex:none}
   .privacy .txt{font:400 13px/1.4 "Cash Sans";color:#6B6350}
   .privacy .txt b{color:#211E17}
 
-  /* ---------- 6 · mismatch ---------- */
+  /* ---------- ! mismatch ---------- */
   .hold-pill{align-self:center;font:500 13px/1 "Cash Sans";color:#B06C10;background:#FBEFD6;padding:9px 14px}
   .hold-pill img{opacity:.7}
-  .big-print{margin:16px auto 0;width:180px;height:180px;border-radius:28px;overflow:hidden;box-shadow:0 8px 26px rgba(120,80,10,.16),0 0 0 5px #fff,0 0 0 7px #FBEFD6}
-  .mm-title{text-align:center;font:500 23px/1.25 "Cash Sans";color:#211E17;margin-top:22px}
+  .big-print{margin:18px auto 0;width:172px;height:172px;flex:none;border-radius:28px;overflow:hidden;box-shadow:0 8px 26px rgba(120,80,10,.16),0 0 0 5px #fff,0 0 0 7px #FBEFD6}
+  .mm-title{text-align:center;font:500 23px/1.25 "Cash Sans";color:#211E17;margin-top:20px}
   .mm-sub{text-align:center;font:400 15px/1.45 "Cash Sans";color:#8A8069;margin-top:10px}
-  .tiles{display:flex;justify-content:space-between;padding:0 4px 10px}
+  .tiles{display:flex;justify-content:space-between;padding:18px 4px 10px;margin-top:auto}
   .tile-col{display:flex;flex-direction:column;align-items:center;gap:6px}
   .tile-col .t{position:relative;width:44px;height:44px;border-radius:12px;overflow:hidden;box-shadow:0 0 0 2px #E4F9ED}
   .tile-col .t .badge{position:absolute;bottom:-3px;right:-3px;width:18px;height:18px;border-radius:50%;background:#00D64F;border:2px solid #FBF7EF;display:flex;align-items:center;justify-content:center}
@@ -176,39 +182,14 @@
   .tile-col.bad .t{box-shadow:0 0 0 2.5px #E0A020;animation:breathe 1.6s ease-in-out infinite}
   .tile-col.bad .t .badge{background:#E0A020;color:#fff;font:700 12px/1 "Cash Sans"}
   .tile-col.bad .lbl{font-weight:600;color:#B06C10}
-
-  /* ---------- prototype nav ---------- */
-  .proto-nav{display:flex;align-items:center;gap:8px}
-  .proto-nav button{
-    border:0;cursor:pointer;background:rgba(255,255,255,.55);color:#7A7057;
-    font:600 11px/1 "Cash Sans";letter-spacing:.04em;padding:7px 11px;border-radius:9999px;
-    border:1px solid rgba(40,30,10,.08);transition:all 120ms;
-  }
-  .proto-nav button:hover{background:#fff}
-  .proto-nav button.on{background:#211E17;color:#fff;border-color:#211E17}
-  .proto-nav button.warn.on{background:#C77A16;border-color:#C77A16}
-  .proto-nav .restart{color:#00A63C}
-  .hint{font:400 12.5px/1.4 "Cash Sans";color:#8A8069;text-align:center}
 </style>
 </head>
 <body>
-
-<div class="masthead">
-  <div class="mark">t</div>
-  <div>
-    <div class="name">Tab</div>
-    <div class="sub">Clickable prototype — tap the buttons to move through the flow</div>
-  </div>
-</div>
-
-<div class="phone">
-  <div class="island"></div>
-  <div class="home"></div>
+<div id="app">
 
   <!-- ============ 1 JOIN ============ -->
   <section class="screen" data-screen="join">
-    <div class="statusbar"><span>9:41</span><span class="battery"></span></div>
-    <div class="body" style="padding:14px 28px 0">
+    <div class="body">
       <div class="scan-badge">Scanned from the receipt</div>
       <div class="merchant">
         <div class="glyph"><img src="assets/illustrations/storefront.svg" width="52" height="52"></div>
@@ -232,16 +213,15 @@
 
   <!-- ============ 2 INVITE ============ -->
   <section class="screen" data-screen="invite">
-    <div class="statusbar"><span>9:41</span><span class="battery"></span></div>
-    <div class="body" style="padding:6px 28px 0">
+    <div class="body">
       <div class="title">Invite the table</div>
       <div class="subtitle">Everyone scans this to join.<br>The tab opens on their phone, already in sync.</div>
       <div class="qr-card" id="qr-slot"></div>
-      <div style="margin:20px 0 0;display:flex;flex-direction:column;align-items:center;gap:12px">
+      <div style="margin:18px 0 0;display:flex;flex-direction:column;align-items:center;gap:12px">
         <div class="pill tap-pill"><span class="phones"><span></span><span></span></span>or tap two phones together</div>
         <div class="lock-note"><img src="assets/icons/lockLocked24.svg" width="14" height="14">Connects phone-to-phone — nothing goes online until you all pay</div>
       </div>
-      <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;padding-bottom:8px">
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;padding:18px 0 10px">
         <div class="here-row"><span class="lhs">Here now</span><span class="rhs" id="here-count">4 of 6 here</span></div>
         <div class="avatars" id="avatars"></div>
       </div>
@@ -254,14 +234,13 @@
 
   <!-- ============ 3 LIVE TAB ============ -->
   <section class="screen" data-screen="live">
-    <div class="statusbar"><span>9:41</span><span class="battery"></span></div>
-    <div class="body" style="padding:8px 26px 0">
+    <div class="body" style="padding-left:26px;padding-right:26px">
       <div class="live-head">Osteria Lupa · the tab is live</div>
       <div class="pill sync-pill"><span class="dot"></span>6 phones in sync</div>
       <div class="ring-wrap">
-        <svg width="248" height="248" viewBox="0 0 248 248">
-          <circle cx="124" cy="124" r="104" fill="none" stroke="#ECE3CE" stroke-width="15"/>
-          <circle id="ring-fg" cx="124" cy="124" r="104" fill="none" stroke="#00D64F" stroke-width="15" stroke-linecap="round"/>
+        <svg width="236" height="236" viewBox="0 0 236 236">
+          <circle cx="118" cy="118" r="99" fill="none" stroke="#ECE3CE" stroke-width="15"/>
+          <circle id="ring-fg" cx="118" cy="118" r="99" fill="none" stroke="#00D64F" stroke-width="15" stroke-linecap="round"/>
         </svg>
         <div class="center">
           <div class="cap">chipped in</div>
@@ -270,7 +249,6 @@
         </div>
       </div>
       <div class="people" id="people"></div>
-      <div style="flex:1"></div>
       <div class="pill match-pill"><span class="tile" id="tile-slot"></span>Everyone’s picture matches<span class="peek">· peek</span></div>
       <div class="fills-note">Chips land in any order — the tab only fills, it never waits on one person.</div>
     </div>
@@ -282,8 +260,7 @@
 
   <!-- ============ 4 CHIP IN ============ -->
   <section class="screen" data-screen="chipin">
-    <div class="statusbar"><span>9:41</span><span class="battery"></span></div>
-    <div class="body" style="padding:6px 28px 0">
+    <div class="body">
       <div class="title">Your share</div>
       <div class="segmented">
         <button class="on" id="seg-even">Even split</button>
@@ -293,7 +270,8 @@
         <div class="amount"><span class="cur">$</span><span class="int">35</span><span class="dec">.75</span></div>
         <div class="basis">Even split · $214.50 ÷ 6 people</div>
       </div>
-      <div class="breakdown">
+      <div class="pill changed-note" id="changed-note">Dev’s share changed — this is the fresh picture</div>
+      <div class="breakdown" style="margin-top:14px">
         <div class="src">
           <span class="lhs"><img src="assets/icons/currencyBtc24.svg" width="18" height="18">From your Bitcoin</span>
           <span class="rhs">$312.40 available</span>
@@ -304,18 +282,17 @@
       </div>
     </div>
     <div class="footer">
-      <button class="btn btn-prominent" data-go="live-settle">Chip in $35.75</button>
+      <button class="btn btn-prominent" id="chipin-cta" data-go="live-settle">Chip in $35.75</button>
       <div class="footnote" style="font-size:13.5px">Your only tap — the tab settles itself once everyone’s in</div>
     </div>
   </section>
 
   <!-- ============ 5 PAID ============ -->
   <section class="screen" data-screen="paid">
-    <div class="statusbar"><span>9:41</span><span class="battery"></span></div>
-    <div class="body" style="padding:10px 26px 0">
+    <div class="body" style="padding-left:26px;padding-right:26px">
       <div class="paid-hero">
         <div class="smiley">
-          <img src="assets/illustrations/cash-smiley.svg" width="96" height="96">
+          <img src="assets/illustrations/cash-smiley.svg" width="92" height="92">
           <div class="check"><img src="assets/icons/check24.svg" width="18" height="18"></div>
         </div>
         <h2>Paid!</h2>
@@ -332,15 +309,13 @@
     </div>
   </section>
 
-  <!-- ============ ! MISMATCH ============ -->
+  <!-- ============ ! MISMATCH (appears only if the tab changes) ============ -->
   <section class="screen" data-screen="mismatch">
-    <div class="statusbar"><span>9:41</span><span class="battery"></span></div>
-    <div class="body" style="padding:8px 28px 0">
+    <div class="body">
       <div class="pill hold-pill"><img src="assets/icons/refresh24.svg" width="16" height="16">Hold on a sec</div>
       <div class="big-print" id="bigprint-slot"></div>
       <div class="mm-title">The tab changed</div>
       <div class="mm-sub">Dev’s share changed after the others were ready, so his picture no longer matches. Take a fresh look before the tab settles.</div>
-      <div style="flex:1"></div>
       <div class="tiles" id="tiles"></div>
     </div>
     <div class="footer">
@@ -348,18 +323,8 @@
       <div class="footnote">Nothing’s been paid yet</div>
     </div>
   </section>
-</div>
 
-<div class="proto-nav" id="proto-nav">
-  <button data-nav="join">01 Join</button>
-  <button data-nav="invite">02 Invite</button>
-  <button data-nav="live">03 Live tab</button>
-  <button data-nav="chipin">04 Chip in</button>
-  <button data-nav="paid">05 Paid</button>
-  <button data-nav="mismatch" class="warn">! Mismatch</button>
-  <button class="restart" data-nav="join" data-restart>⟲ Restart</button>
 </div>
-<div class="hint">Tap the green buttons in the phone to follow the flow, or jump with the chips above. ←/→ keys work too.</div>
 
 <script>
 /* ---------- seeded generators (ported from Tab.dc.html so the visuals match) ---------- */
@@ -391,20 +356,18 @@ function makeQR(){
   const rnd=prng(hash("lupa-7f3-invite"));
   const N=21, u=4.4, pad=6;
   const size=pad*2+N*u;
-  const svg=el("svg",{width:168,height:168,viewBox:`0 0 ${size} ${size}`});
+  const svg=el("svg",{width:164,height:164,viewBox:`0 0 ${size} ${size}`});
   svg.appendChild(el("rect",{x:0,y:0,width:size,height:size,fill:"#fff"}));
-  const cells=[];
   for(let r=0;r<N;r++) for(let c=0;c<N;c++){
     const inFinder=(r<7&&c<7)||(r<7&&c>=N-7)||(r>=N-7&&c<7);
     if(inFinder) continue;
-    if(rnd()>0.52) cells.push(el("rect",{x:pad+c*u,y:pad+r*u,width:u-0.5,height:u-0.5,rx:1.2,fill:"#211E17"}));
+    if(rnd()>0.52) svg.appendChild(el("rect",{x:pad+c*u,y:pad+r*u,width:u-0.5,height:u-0.5,rx:1.2,fill:"#211E17"}));
   }
   const finder=(gx,gy)=>{
     svg.appendChild(el("rect",{x:gx,y:gy,width:7*u,height:7*u,rx:3,fill:"#211E17"}));
     svg.appendChild(el("rect",{x:gx+u,y:gy+u,width:5*u,height:5*u,rx:2,fill:"#fff"}));
     svg.appendChild(el("rect",{x:gx+2*u,y:gy+2*u,width:3*u,height:3*u,rx:1.5,fill:"#211E17"}));
   };
-  cells.forEach(c=>svg.appendChild(c));
   finder(pad,pad); finder(pad+(N-7)*u,pad); finder(pad,pad+(N-7)*u);
   return svg;
 }
@@ -419,11 +382,15 @@ const FRIENDS=[
   {name:"Priya", initial:"P", color:"#12B76A"},
 ];
 const SHARE=35.75, BILL=214.50;
-const RING_C=2*Math.PI*104;
+const RING_C=2*Math.PI*99;
 
 /* ---------- state ---------- */
-// chipped-in flags by friend index; Ben, Mateo, Cira land before you do
-let chipped;
+// chipped-in flags by friend index; Ben, Cira and Mateo land before you do.
+// mismatchShown: the scripted "Dev's share changed" interruption fires once per run.
+let chipped, mismatchShown;
+function resetRun(){ chipped=[false,true,true,false,true,false]; mismatchShown=false; }
+resetRun();
+
 let timers=[];
 function later(fn,ms){ timers.push(setTimeout(fn,ms)); }
 function clearTimers(){ timers.forEach(clearTimeout); timers=[]; }
@@ -463,7 +430,6 @@ receipt.appendChild(grand);
 function renderInvite(){
   const box=document.getElementById("avatars");
   box.innerHTML="";
-  // A, B, C, M are here; Dev & Priya arrive while you watch
   const initial=[FRIENDS[0],FRIENDS[1],FRIENDS[2],FRIENDS[4]];
   initial.forEach((f,i)=>{
     const a=document.createElement("div");
@@ -473,16 +439,16 @@ function renderInvite(){
   for(let i=0;i<2;i++){ const e=document.createElement("div"); e.className="avatar empty"; box.appendChild(e); }
   document.getElementById("here-count").textContent="4 of 6 here";
   document.getElementById("waiting-note").textContent="Waiting for Dev & Priya…";
-  const arrive=(f,slot,count)=>{
-    const empty=box.querySelectorAll(".avatar.empty")[0];
+  const arrive=(f,count)=>{
+    const empty=box.querySelector(".avatar.empty");
     if(!empty) return;
     const a=document.createElement("div");
     a.className="avatar in"; a.style.background=f.color; a.textContent=f.initial;
     box.replaceChild(a,empty);
     document.getElementById("here-count").textContent=count+" of 6 here";
   };
-  later(()=>{ arrive(FRIENDS[3],4,5); document.getElementById("waiting-note").textContent="Waiting for Priya…"; },1800);
-  later(()=>{ arrive(FRIENDS[5],5,6); document.getElementById("waiting-note").textContent="Everyone’s here"; },3200);
+  later(()=>{ arrive(FRIENDS[3],5); document.getElementById("waiting-note").textContent="Waiting for Priya…"; },1800);
+  later(()=>{ arrive(FRIENDS[5],6); document.getElementById("waiting-note").textContent="Everyone’s here"; },3200);
 }
 
 /* ---------- live screen ---------- */
@@ -509,19 +475,28 @@ function renderRing(animate){
   document.getElementById("ring-count").textContent=n+" of 6";
 }
 function land(i){ chipped[i]=true; renderPeople(); renderRing(true); }
+function setSettling(txt){ document.getElementById("settling-txt").textContent=txt; }
 
 function renderLive(settle){
   const cta=document.getElementById("chip-cta");
   const settling=document.getElementById("settling");
   renderPeople(); renderRing(false);
   if(settle){
-    // you just chipped in from screen 4: your chip lands, the stragglers follow,
-    // and the tab settles itself — no confirm screen
+    // your only tap already happened — chips land, then the tab settles itself
     cta.style.display="none"; settling.style.display="flex";
-    later(()=>land(0),350);
-    later(()=>land(2),1300);
-    later(()=>{ land(5); document.getElementById("settling-txt").textContent="Everyone’s in — settling…"; },2100);
-    later(()=>go("paid"),3400);
+    setSettling("You’re in — the tab settles itself");
+    if(!mismatchShown){
+      // first attempt: Priya lands, then Dev edits his share and the pictures stop matching
+      mismatchShown=true;
+      later(()=>land(0),350);
+      later(()=>land(5),1400);
+      later(()=>go("mismatch"),2600);
+    } else {
+      // fresh look confirmed: the last chip lands and it settles for real
+      later(()=>land(0),350);
+      later(()=>{ land(3); setSettling("Everyone’s in — settling…"); },1500);
+      later(()=>go("paid"),2900);
+    }
   } else if(chipped[0]){
     cta.style.display="none"; settling.style.display="flex";
   } else {
@@ -529,35 +504,31 @@ function renderLive(settle){
   }
 }
 
-/* ---------- segmented control (visual toggle) ---------- */
+/* ---------- chip-in screen ---------- */
 const segEven=document.getElementById("seg-even"), segCustom=document.getElementById("seg-custom");
 segEven.onclick=()=>{ segEven.classList.add("on"); segCustom.classList.remove("on"); };
 segCustom.onclick=()=>{ segCustom.classList.add("on"); segEven.classList.remove("on"); };
 
+function renderChipin(){
+  const fresh=mismatchShown&&!chipped[3];
+  document.getElementById("changed-note").style.display=fresh?"inline-flex":"none";
+  document.getElementById("chipin-cta").textContent=fresh?"Looks right — chip in $35.75":"Chip in $35.75";
+  if(fresh) chipped[0]=false; // re-confirming against the new picture
+}
+
 /* ---------- router ---------- */
-const ORDER=["join","invite","live","chipin","paid","mismatch"];
-let current="join";
-function go(name,opts){
+function go(name){
   clearTimers();
   let target=name, settle=false;
   if(name==="live-settle"){ target="live"; settle=true; }
-  if(name==="join"){ chipped=[false,true,true,false,true,false]; } // fresh tab: Ben, Cira, Mateo already in when the tab opens
-  current=target;
+  if(name==="join") resetRun();
   document.querySelectorAll(".screen").forEach(s=>s.classList.toggle("active",s.dataset.screen===target));
-  document.querySelectorAll("#proto-nav button[data-nav]").forEach(b=>b.classList.toggle("on",b.dataset.nav===target&&!b.hasAttribute("data-restart")));
   if(target==="invite") renderInvite();
   if(target==="live") renderLive(settle);
-  if(target==="paid"){ chipped=[true,true,true,true,true,true]; }
+  if(target==="chipin") renderChipin();
+  if(target==="paid") chipped=[true,true,true,true,true,true];
 }
-chipped=[false,true,true,false,true,false];
-
 document.querySelectorAll("[data-go]").forEach(b=>b.addEventListener("click",()=>go(b.dataset.go)));
-document.querySelectorAll("#proto-nav button").forEach(b=>b.addEventListener("click",()=>go(b.dataset.nav)));
-document.addEventListener("keydown",e=>{
-  const i=ORDER.indexOf(current);
-  if(e.key==="ArrowRight"&&i<ORDER.length-1) go(ORDER[i+1]);
-  if(e.key==="ArrowLeft"&&i>0) go(ORDER[i-1]);
-});
 
 go("join");
 </script>

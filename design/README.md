@@ -8,12 +8,14 @@ paired with a plain-language explanation plus an "under the hood" note mapping t
 the concurrent-PSBT mechanics (unordered drafts, CRDT-style merging, unique-ID conflict
 surfacing, canonical sort before broadcast).
 
-`Tab-prototype.html` is the screens-only, clickable version: one phone frame you tap
-through — Join → Invite (the table fills in) → Live tab → Chip in → the tab settles
-itself → Paid. The mismatch exception screen is reachable from the chips under the
-phone, which also let you jump anywhere; ←/→ keys navigate too. It's plain
-HTML/JS (no React) reusing the same Arcade tokens, fonts, and assets, with the QR and
-fingerprint generators ported from `Tab.dc.html` so the visuals match.
+`Tab-prototype.html` is the screens-only, clickable version — a mobile-first app you
+tap through as if it were real. On a phone it fills the screen (safe-area aware, no
+device chrome); on desktop it presents as a centered phone-sized shell. The flow:
+Join → Invite (the table fills in live) → Live tab → Chip in — your only tap — then
+the chips land and the tab settles itself… interrupted once by the scripted mismatch
+moment (Dev's share changes → "Take a fresh look" → re-confirm) before it settles to
+Paid. Plain HTML/JS (no React) on the same Arcade tokens, fonts, and assets, with the
+QR and fingerprint generators ported from `Tab.dc.html` so the visuals match.
 
 ## Viewing
 
