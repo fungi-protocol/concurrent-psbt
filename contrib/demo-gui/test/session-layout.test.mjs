@@ -4,6 +4,32 @@ import { readFileSync } from "node:fs";
 
 const html = readFileSync(new URL("../session.html", import.meta.url), "utf8");
 const app = readFileSync(new URL("../src/session/app.ts", import.meta.url), "utf8");
+const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+
+test("the primary objects share one bounded spatial workbench", () => {
+  const workbenchStart = html.indexOf('id="spatialWorkbench"');
+  const workbenchEnd = html.indexOf("</main>", workbenchStart);
+  const utilities = html.indexOf('id="sessionUtilities"');
+
+  assert.ok(workbenchStart >= 0, "the spatial workbench is present");
+  assert.ok(workbenchEnd > workbenchStart, "the spatial workbench is bounded");
+  const workbench = html.slice(workbenchStart, workbenchEnd);
+  assert.ok(
+    workbench.indexOf('data-spatial-region="peers"') <
+      workbench.indexOf('data-spatial-region="sessions"'),
+    "peers are above sessions inside the workbench",
+  );
+  assert.ok(
+    workbench.indexOf('data-spatial-region="sessions"') <
+      workbench.indexOf('data-spatial-region="me"'),
+    "sessions are above the Me workspace inside the workbench",
+  );
+  assert.ok(utilities > workbenchEnd, "secondary utilities follow the workbench");
+  assert.match(
+    styles,
+    /\.session-spatial-workbench\s*\{[\s\S]*?grid-template-rows:\s*auto\s+minmax\([^;]+\)\s+auto;/,
+  );
+});
 
 test("the real shell keeps peers above sessions and the Me workspace", () => {
   const peers = html.indexOf('data-spatial-region="peers"');
