@@ -3904,7 +3904,6 @@ name = "transport-iroh"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "futures",
  "iroh",
  "iroh-blobs",
  "iroh-docs",

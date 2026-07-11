@@ -3,46 +3,15 @@ name = "transport-iroh"
 version.workspace = true
 edition = "2024"
 
-# ALL external-network dependency usage lives behind the `iroh` cargo feature
-# (named after the transport), mirroring how crates/ptj gates iroh-sync. With
-# the feature OFF the crate compiles as a skeleton against transport-core only
-# (bitcoin/std) and every constructor returns a clear "built without iroh"
-# error. With it ON the iroh/iroh-docs/iroh-blobs/iroh-gossip + tokio stack is
-# pulled in and the AttributableChannel is fully real.
-[features]
-default = []
-iroh = [
-    "dep:iroh",
-    "dep:iroh-blobs",
-    "dep:iroh-docs",
-    "dep:iroh-gossip",
-    "dep:n0-future",
-    "dep:tokio",
-]
-
 [dependencies]
-# The layer-0 hub. It re-exports the pinned bitcoin crate and owns the ASYNC
-# channel traits we implement, SenderId, the Message envelope, framing, the
-# Transport seam, and Error/Result. No SDK; async only via the seam.
 transport-core = { path = "../transport-core" }
-# Desugars the async `AttributableChannel` impl (both the real and the skeleton
-# arms) to boxed futures so `IrohChannel` stays dyn-compatible. No runtime.
 async-trait = "0.1"
-
-# External-network stack — optional, gated behind `iroh`. Version pins match the
-# already-resolved tree (iroh 1, iroh-docs 0.101, iroh-blobs 0.103,
-# iroh-gossip 0.101), identical to crates/ptj so Cargo.lock unifies them.
-iroh = { version = "1", default-features = false, features = ["tls-ring"], optional = true }
-iroh-blobs = { version = "0.103", default-features = false, optional = true }
-iroh-docs = { version = "0.101.0", default-features = false, optional = true }
-iroh-gossip = { version = "0.101.0", default-features = false, features = ["net"], optional = true }
-n0-future = { version = "0.3.1", optional = true }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"], optional = true }
-
-[dev-dependencies]
-# `futures::executor::block_on` drives the async, feature-off skeleton test
-# (which has no tokio) to completion. Dev-only, runtime-free.
-futures = "0.3"
+iroh = { version = "1", default-features = false, features = ["tls-ring"] }
+iroh-blobs = { version = "0.103", default-features = false }
+iroh-docs = { version = "0.101.0", default-features = false }
+iroh-gossip = { version = "0.101.0", default-features = false, features = ["net"] }
+n0-future = "0.3.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [lints]
 workspace = true
