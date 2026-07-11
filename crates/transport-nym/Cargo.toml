@@ -5,11 +5,17 @@ edition = "2024"
 
 [workspace]
 
+[features]
+capnp = ["dep:transport-plugin-api", "dep:futures", "dep:tokio-util", "tokio/rt", "tokio/io-std", "tokio/io-util", "tokio/sync"]
+
 [dependencies]
 async-trait = "0.1"
+futures = { version = "0.3.32", optional = true }
 nym-sdk = "1.21.2"
 tokio = { version = "1.52.3", features = ["time"] }
+tokio-util = { version = "0.7.18", features = ["compat"], optional = true }
 transport-core = { path = "../transport-core" }
+transport-plugin-api = { path = "../transport-plugin-api", optional = true }
 
 [lints.rust]
 unexpected_cfgs = { level = "deny", check-cfg = ['cfg(coverage_nightly)'] }

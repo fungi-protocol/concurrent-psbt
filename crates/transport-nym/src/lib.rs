@@ -12,6 +12,10 @@ use async_trait::async_trait;
 use nym_sdk::mixnet::{self, MixnetClient, MixnetMessageSender, Recipient};
 use transport_core::{AnonymousChannel, Error, Result};
 
+/// Cap'n Proto stdio adapter for running this transport out of process.
+#[cfg(feature = "capnp")]
+pub mod capnp;
+
 /// A peer's Nym recipient address.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NymAddress(pub String);
@@ -77,11 +81,8 @@ impl AnonymousChannel for NymTransport {
 
     async fn recv(&mut self) -> Result<Vec<Vec<u8>>> {
         let mut messages = Vec::new();
-        while let Ok(Some(batch)) = tokio::time::timeout(
-            Duration::from_millis(50),
-            self.client.wait_for_messages(),
-        )
-        .await
+        while let Ok(Some(batch)) =
+            tokio::time::timeout(Duration::from_millis(50), self.client.wait_for_messages()).await
         {
             messages.extend(batch.into_iter().map(|message| message.message));
         }
