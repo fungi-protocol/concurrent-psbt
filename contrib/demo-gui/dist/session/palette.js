@@ -49,9 +49,8 @@ export function groupColorKey(group) {
 export function descriptorColorKey(descriptor) {
     return `descriptor:${descriptor.normalized ?? descriptor.descriptor}`;
 }
-// Peer cards are pseudo-descriptor identities, keyed by name so provenance
-// groups (`peer:<name>`, display.ts cardGroups) share the peer's color once
-// the provenance seam supplies peer attributions.
+// Peer card color follows the immutable ephemeral transport address. A local
+// display-label edit must never change color or imply a new peer.
 export function peerColorKey(peer) {
-    return `peer:${peer.name}`;
+    return `peer:${peer.transport}:${peer.identity}`;
 }

@@ -2614,3 +2614,83 @@ img.session-lifehash {
   display: block;
   font-size: 12px;
 }
+
+/* Spatial shell: ephemeral peers on top, shared sessions beneath them, then
+   the Me/local-only workspace in the main canvas. */
+.session-spatial-shelf {
+  margin: 12px 14px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.session-peer-shelf {
+  border-top: 4px solid var(--ink);
+}
+
+.session-session-shelf {
+  border-top: 4px solid var(--green);
+}
+
+.session-shelf-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.session-peer-shelf-list,
+.session-session-shelf-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px;
+}
+
+.session-peer-card,
+.session-shelf-card {
+  margin: 0;
+}
+
+/* One shared Add surface for fast universal paste and manual palettes. */
+.session-add-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: flex-end;
+  background: rgba(20, 24, 28, 0.38);
+}
+
+.session-add-drawer[hidden] {
+  display: none;
+}
+
+.session-add-drawer-card {
+  width: 100%;
+  max-height: min(78vh, 720px);
+  overflow: auto;
+  padding: 18px max(18px, calc((100vw - 1180px) / 2));
+  border-top: 1px solid var(--line);
+  border-radius: 18px 18px 0 0;
+  background: var(--surface);
+  box-shadow: 0 -12px 40px rgba(20, 24, 28, 0.24);
+}
+
+.session-add-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(260px, 2fr);
+  gap: 18px;
+}
+
+@media (max-width: 760px) {
+  .session-spatial-shelf {
+    margin-inline: 8px;
+  }
+
+  .session-add-grid {
+    grid-template-columns: 1fr;
+  }
+}

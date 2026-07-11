@@ -208,15 +208,27 @@ export function mintPeer(
   name: string,
   transport: PeerObject["transport"],
   identity: string,
-): { state: ObjectsState; peer: PeerObject } {
+): { state: ObjectsState; peer: PeerObject; created: boolean } {
+  const normalizedIdentity = identity.trim();
+  const existing = normalizedIdentity
+    ? state.peers.find(
+        (peer) => peer.transport === transport && peer.identity === normalizedIdentity,
+      )
+    : undefined;
+  if (existing) return { state, peer: existing, created: false };
+
   const next = nextKey(state, "peer");
   const peer: PeerObject = {
     key: next.key,
     name: name.trim() || next.key,
     transport,
-    identity: identity.trim(),
+    identity: normalizedIdentity,
   };
-  return { state: { ...next.state, peers: [...next.state.peers, peer] }, peer };
+  return {
+    state: { ...next.state, peers: [...next.state.peers, peer] },
+    peer,
+    created: true,
+  };
 }
 
 export function mintPayment(
