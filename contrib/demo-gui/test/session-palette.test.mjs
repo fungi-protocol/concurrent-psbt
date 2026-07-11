@@ -46,7 +46,7 @@ test("groupColorKey: descriptor identity where derivable, else neutral", () => {
   assert.equal(groupColorKey({ kind: "unattributed", key: "unattributed" }), null);
 });
 
-test("descriptor and peer keys: textual identity, shared peer key space", () => {
+test("descriptor and peer keys follow immutable identity rather than mutable labels", () => {
   // The normalized public form wins once enrichment lands, so re-pasting
   // the same descriptor (or its private form) keeps the color.
   assert.equal(
@@ -57,7 +57,12 @@ test("descriptor and peer keys: textual identity, shared peer key space", () => 
     descriptorColorKey({ descriptor: "wpkh(xpub...)", normalized: null }),
     "descriptor:wpkh(xpub...)",
   );
-  // Peers share the provenance groups' key space (`peer:<name>`), so a peer
-  // card and the rows it contributed wear the same color.
-  assert.equal(peerColorKey({ name: "alice" }), "peer:alice");
+  const original = peerColorKey({ name: "alice", transport: "nostr", identity: "npub1alice" });
+  const relabeled = peerColorKey({ name: "lunch coordinator", transport: "nostr", identity: "npub1alice" });
+  assert.equal(original, "peer:nostr:npub1alice");
+  assert.equal(relabeled, original);
+  assert.notEqual(
+    peerColorKey({ name: "alice", transport: "iroh", identity: "npub1alice" }),
+    original,
+  );
 });

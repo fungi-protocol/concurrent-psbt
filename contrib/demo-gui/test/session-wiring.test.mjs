@@ -106,6 +106,27 @@ test("minting sessions, peers, payments, utxos, and descriptors is grow-only", (
   assert.equal(peerByKey(state, "nope"), null);
 });
 
+test("adding an ephemeral peer deduplicates the exact transport address without side effects", () => {
+  let state = emptyObjects();
+  state = mintSession(state, "lunch", "local").state;
+
+  const first = mintPeer(state, "Alice", "nostr", " npub1alice ");
+  assert.equal(first.created, true);
+  assert.equal(first.peer.identity, "npub1alice");
+
+  const repeated = mintPeer(first.state, "renamed by a duplicate paste", "nostr", "npub1alice");
+  assert.equal(repeated.created, false);
+  assert.equal(repeated.peer.key, first.peer.key);
+  assert.equal(repeated.peer.name, "Alice");
+  assert.strictEqual(repeated.state, first.state);
+  assert.deepEqual(repeated.state.sessions, state.sessions);
+  assert.deepEqual(repeated.state.bridges, []);
+
+  const distinctTransport = mintPeer(repeated.state, "Alice over iroh", "iroh", "npub1alice");
+  assert.equal(distinctTransport.created, true);
+  assert.equal(distinctTransport.state.peers.length, 2);
+});
+
 test("session membership: add fragment/peer, deduplicate, drop removed fragments", () => {
   let state = emptyObjects();
   state = mintSession(state, "s", "local").state;
