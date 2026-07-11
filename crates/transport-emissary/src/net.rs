@@ -1,134 +1,138 @@
-//! The real I2P streaming path (compiled only with the `emissary` feature).
+//! Embedded I2P stream backend.
 //!
-//! emissary-core is an EMBEDDED I2P router: it runs inside our process, exactly
-//! like transport-arti's in-process Tor client. There is no external i2pd/Java
-//! router and no SAMv3 bridge — we build the router here, let it warm up its
-//! tunnels, and open a stream to the peer through its own API.
-//!
-//! The router is async; to keep this crate's synchronous `AnonymousChannel`
-//! contract we own a small tokio runtime and `block_on` it (the same shape
-//! transport-arti uses for arti-client). Once a stream is open it is just
-//! bytes: we put transport-core length-prefixed frames on it, one framed
-//! [`Message`] envelope per record.
-//!
-//! [`Message`]: transport_core::Message
-//!
-//! Flow (embedded router, in-process):
-//!   1. Build the router from `state_dir` (persisted destination keys + netdb)
-//!      and start it on our runtime; wait for tunnels to build.
-//!   2. Take a streaming session from the router — this yields our own local
-//!      destination and lets us dial peers.
-//!   3. Connect a stream to the peer destination; from there it is a raw
-//!      bidirectional byte pipe we frame over.
-//!
-//! GROUNDING CAVEAT: the exact emissary-core embedded API (router builder,
-//! streaming-session, connect) is coded against the documented surface and is
-//! NOT yet compiled here — like transport-arti's inbound path, the concrete
-//! type/method names may shift across emissary-core releases and will need a
-//! version bump/rename when the main loop compiles the `emissary` feature. The
-//! framing (transport-core `frame`/`deframe`) and the pull/drain shape are
-//! stable and SDK-independent. This module keeps zero privacy/threat-model
-//! reasoning: anonymity is a property of the embedded I2P router, not of this
-//! code. We only move opaque bytes.
+//! An actor thread keeps the Emissary router, Yosemite session, and stream on
+//! one Tokio runtime. Yosemite connects to the embedded router's loopback SAM
+//! listener; channel calls cross the actor boundary with Tokio channels.
 
-use std::sync::Arc;
+use std::path::Path;
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::runtime::Runtime;
-use tokio::sync::Mutex;
+use emissary_core::router::Router;
+use emissary_core::runtime::Runtime as _;
+use emissary_core::{Config, Ntcp2Config, SamConfig};
+use emissary_util::runtime::tokio::Runtime as TokioRuntime;
+use rand::Rng as _;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::sync::{mpsc, oneshot};
+use yosemite::{DestinationKind, RouterApi, Session, SessionOptions, style};
 
-use transport_core::{deframe, frame, Error, Result};
+use transport_core::{Error, Result, deframe, frame};
 
-/// A connected I2P stream backed by an embedded emissary-core router.
-///
-/// Holds the owned runtime and the router handle alive for the lifetime of the
-/// stream (dropping the router tears down its tunnels), plus the async stream
-/// and a receive buffer for reassembling framed records that arrive in pieces.
-pub struct I2pStream {
-    /// Owned runtime we `block_on`; keeps the embedded router driven.
-    rt: Runtime,
-    /// The embedded router handle. Kept alive so its tunnels stay up; the async
-    /// stream below borrows the network it provides.
-    _router: Arc<emissary_core::Router>,
-    /// The connected I2P stream to the peer (an async duplex byte pipe).
-    stream: Arc<Mutex<emissary_core::streaming::Stream>>,
-    /// Bytes read off the stream but not yet formed into a complete frame.
-    /// `drain_framed` pulls whole records out of here; partial tails remain.
+const DESTINATION_KEY_FILE: &str = "destination.key";
+const POLL_WINDOW: Duration = Duration::from_millis(50);
+
+enum Request {
+    Send {
+        framed: Vec<u8>,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    Drain {
+        reply: oneshot::Sender<Result<Vec<Vec<u8>>>>,
+    },
+}
+
+struct Actor {
+    _session: Session<style::Stream>,
+    stream: yosemite::Stream,
     rx: Vec<u8>,
 }
 
-impl I2pStream {
-    /// Start the embedded router and connect a stream to the peer named in
-    /// `config`. Returns a ready-to-frame byte stream.
-    pub fn connect(config: &crate::EmissaryConfig) -> Result<Self> {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(Error::from)?;
+async fn load_or_generate_destination(
+    state_dir: &str,
+    sam_port: u16,
+) -> std::result::Result<DestinationKind, String> {
+    let path = Path::new(state_dir).join(DESTINATION_KEY_FILE);
+    if let Ok(private_key) = std::fs::read_to_string(&path) {
+        return Ok(DestinationKind::Persistent { private_key });
+    }
 
-        let (router, stream) = rt.block_on(async {
-            // 1. Build + start the embedded router (persisted state in state_dir).
-            let router = emissary_core::Router::builder()
-                .with_state_dir(&config.state_dir)
-                .build()
+    let (_destination, private_key) = RouterApi::new(sam_port)
+        .generate_destination()
+        .await
+        .map_err(|error| format!("generating destination: {error}"))?;
+    std::fs::create_dir_all(state_dir)
+        .map_err(|error| format!("creating state dir {state_dir}: {error}"))?;
+    std::fs::write(&path, &private_key)
+        .map_err(|error| format!("persisting destination key: {error}"))?;
+    Ok(DestinationKind::Persistent { private_key })
+}
+
+impl Actor {
+    async fn bootstrap(config: &crate::EmissaryConfig) -> std::result::Result<Self, String> {
+        let router_config = Config {
+            ntcp2: Some(Ntcp2Config {
+                port: 0u16,
+                ipv4_host: None,
+                ipv6_host: None,
+                ipv4: true,
+                ipv6: false,
+                publish: false,
+                ml_kem: None,
+                disable_pq: false,
+                iv: {
+                    let mut iv = [0u8; 16];
+                    TokioRuntime::rng().fill_bytes(&mut iv);
+                    iv
+                },
+                key: {
+                    let mut key = [0u8; 32];
+                    TokioRuntime::rng().fill_bytes(&mut key);
+                    key
+                },
+            }),
+            samv3_config: Some(SamConfig {
+                tcp_port: 0u16,
+                udp_port: 0u16,
+                host: "127.0.0.1".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        let (router, _events, _router_info) =
+            Router::<TokioRuntime>::new(router_config, None, None)
                 .await
-                .map_err(|e| Error::new(format!("transport-emissary: router build failed: {e}")))?;
-            let router = Arc::new(router);
+                .map_err(|error| format!("router build failed: {error}"))?;
+        let sam_tcp = router
+            .protocol_address_info()
+            .sam_tcp
+            .ok_or_else(|| "router exposed no SAM listener".to_string())?;
+        tokio::spawn(router);
 
-            // Wait for tunnels to build before we can stream (cold start is slow;
-            // this is the I2P analogue of arti's descriptor-publish wait).
-            router
-                .wait_for_tunnels(Duration::from_secs(60))
-                .await
-                .map_err(|e| {
-                    Error::new(format!("transport-emissary: tunnels not ready: {e}"))
-                })?;
+        let destination = load_or_generate_destination(&config.state_dir, sam_tcp.port()).await?;
+        let mut session = Session::<style::Stream>::new(SessionOptions {
+            nickname: config.session_label.clone(),
+            samv3_tcp_port: sam_tcp.port(),
+            destination,
+            ..Default::default()
+        })
+        .await
+        .map_err(|error| format!("streaming session failed: {error}"))?;
 
-            // 2 & 3. Take a streaming session and dial the peer destination.
-            let session = router.streaming_session(&config.session_label).await.map_err(|e| {
-                Error::new(format!("transport-emissary: streaming session failed: {e}"))
-            })?;
-            let stream = session
-                .connect(&config.peer_destination)
-                .await
-                .map_err(|e| {
-                    Error::new(format!(
-                        "transport-emissary: cannot reach peer {}: {e}",
-                        config.peer_destination
-                    ))
-                })?;
-            Ok::<_, Error>((router, Arc::new(Mutex::new(stream))))
-        })?;
+        let stream = session
+            .connect(&config.peer_destination)
+            .await
+            .map_err(|error| format!("cannot reach peer {}: {error}", config.peer_destination))?;
 
-        Ok(I2pStream {
-            rt,
-            _router: router,
+        Ok(Actor {
+            _session: session,
             stream,
             rx: Vec::new(),
         })
     }
 
-    /// Write one message as a single length-prefixed frame onto the stream.
-    pub fn send_framed(&mut self, message: &[u8]) -> Result<()> {
-        // transport-core buffer framing: u32 BE length prefix + value (enforces
-        // the 16 MiB MAX_FRAME_LEN cap). We write the framed bytes to the async
-        // stream under our owned runtime.
-        let framed = frame(message);
-        let stream = Arc::clone(&self.stream);
-        self.rt.block_on(async move {
-            let mut s = stream.lock().await;
-            s.write_all(&framed).await.map_err(Error::from)?;
-            s.flush().await.map_err(Error::from)
-        })
+    async fn handle_send(&mut self, framed: Vec<u8>) -> Result<()> {
+        self.stream.write_all(&framed).await.map_err(Error::from)?;
+        self.stream.flush().await.map_err(Error::from)
     }
 
-    /// Read whatever bytes are currently available and return every complete
-    /// framed record among them (bare bytes — no sender identity). Partial
-    /// tails are retained in `rx` for the next call. Returns an empty vec when
-    /// nothing new has arrived (a timed-out read is not an error).
-    pub fn drain_framed(&mut self) -> Result<Vec<Vec<u8>>> {
-        self.fill_from_stream()?;
+    async fn handle_drain(&mut self) -> Result<Vec<Vec<u8>>> {
+        let mut buf = [0u8; 8192];
+        match tokio::time::timeout(POLL_WINDOW, self.stream.read(&mut buf)).await {
+            Ok(Ok(0)) => {}
+            Ok(Ok(n)) => self.rx.extend_from_slice(&buf[..n]),
+            Ok(Err(error)) => return Err(Error::from(error)),
+            Err(_elapsed) => {}
+        }
 
         let mut out = Vec::new();
         while let Some(record) = deframe(&mut self.rx)? {
@@ -137,24 +141,101 @@ impl I2pStream {
         Ok(out)
     }
 
-    /// Pull any currently-available bytes off the stream into `rx`. A short read
-    /// timeout means "nothing new right now" and is not an error — this is
-    /// polling, matching the pull cadence transport-core's channels expect.
-    fn fill_from_stream(&mut self) -> Result<()> {
-        let stream = Arc::clone(&self.stream);
-        let chunk = self.rt.block_on(async move {
-            let mut s = stream.lock().await;
-            let mut buf = [0u8; 8192];
-            // Bounded wait: a read that does not complete within the poll window
-            // yields nothing, rather than blocking the drain indefinitely.
-            match tokio::time::timeout(Duration::from_millis(50), s.read(&mut buf)).await {
-                Ok(Ok(0)) => Ok::<_, Error>(Vec::new()), // peer closed
-                Ok(Ok(n)) => Ok(buf[..n].to_vec()),
-                Ok(Err(e)) => Err(Error::from(e)),
-                Err(_elapsed) => Ok(Vec::new()), // nothing available in the window
+    async fn run(mut self, mut requests: mpsc::Receiver<Request>) {
+        while let Some(request) = requests.recv().await {
+            match request {
+                Request::Send { framed, reply } => {
+                    let _ = reply.send(self.handle_send(framed).await);
+                }
+                Request::Drain { reply } => {
+                    let _ = reply.send(self.handle_drain().await);
+                }
             }
-        })?;
-        self.rx.extend_from_slice(&chunk);
-        Ok(())
+        }
+    }
+}
+
+/// Handle for a stream owned by the embedded-router actor.
+pub struct I2pStream {
+    requests: mpsc::Sender<Request>,
+    _actor: std::thread::JoinHandle<()>,
+}
+
+impl I2pStream {
+    /// Start the embedded router and connect an outbound stream.
+    pub fn connect(config: &crate::EmissaryConfig) -> Result<Self> {
+        let config = config.clone();
+        let (request_tx, request_rx) = mpsc::channel::<Request>(32);
+        let (boot_tx, boot_rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
+
+        let actor = std::thread::Builder::new()
+            .name("transport-emissary-actor".to_string())
+            .spawn(move || {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(rt) => rt,
+                    Err(error) => {
+                        let _ = boot_tx.send(Err(format!("building tokio runtime: {error}")));
+                        return;
+                    }
+                };
+                rt.block_on(async move {
+                    match Actor::bootstrap(&config).await {
+                        Ok(actor) => {
+                            if boot_tx.send(Ok(())).is_err() {
+                                return;
+                            }
+                            actor.run(request_rx).await;
+                        }
+                        Err(message) => {
+                            let _ = boot_tx.send(Err(message));
+                        }
+                    }
+                });
+            })
+            .map_err(|error| {
+                Error::new(format!(
+                    "transport-emissary: spawning actor thread: {error}"
+                ))
+            })?;
+
+        boot_rx
+            .recv()
+            .map_err(|_| Error::new("transport-emissary: actor exited during bootstrap"))?
+            .map_err(|message| Error::new(format!("transport-emissary: {message}")))?;
+
+        Ok(I2pStream {
+            requests: request_tx,
+            _actor: actor,
+        })
+    }
+
+    /// Write one length-prefixed message to the stream.
+    pub async fn send_framed(&mut self, message: &[u8]) -> Result<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.requests
+            .send(Request::Send {
+                framed: frame(message),
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| Error::new("transport-emissary send: actor is gone"))?;
+        reply_rx
+            .await
+            .map_err(|_| Error::new("transport-emissary send: actor dropped the reply"))?
+    }
+
+    /// Return every complete framed message currently available.
+    pub async fn drain_framed(&mut self) -> Result<Vec<Vec<u8>>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.requests
+            .send(Request::Drain { reply: reply_tx })
+            .await
+            .map_err(|_| Error::new("transport-emissary recv: actor is gone"))?;
+        reply_rx
+            .await
+            .map_err(|_| Error::new("transport-emissary recv: actor dropped the reply"))?
     }
 }
