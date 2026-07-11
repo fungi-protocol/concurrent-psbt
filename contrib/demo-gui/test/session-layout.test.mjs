@@ -33,9 +33,13 @@ test("peer cards preserve bridging while Pair stays visibly unavailable", () => 
 });
 
 test("session shelf cards retain transport, members, and explicit sync", () => {
-  assert.match(app, /sessionObject\.transport/);
-  assert.match(app, /sessionObject\.fragmentKeys\.join\(", "\)/);
-  assert.match(app, /button\("Sync now"/);
+  const start = app.indexOf("function renderSessionShelf");
+  const end = app.indexOf("function unavailablePairButton", start);
+  assert.ok(start >= 0 && end > start, "session-shelf renderer is present");
+  const sessionShelf = app.slice(start, end);
+  assert.match(sessionShelf, /sessionObject\.transport/);
+  assert.match(sessionShelf, /sessionObject\.fragmentKeys\.join\(", "\)/);
+  assert.match(sessionShelf, /button\("Sync now"/);
 });
 
 test("one shared bottom Add drawer owns quick paste and manual peer creation", () => {

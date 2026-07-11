@@ -714,7 +714,7 @@ test("bridging wires the sessions of any member to every member", () => {
   assert.deepEqual(sessionByKey(again, "session-1").peerKeys, ["peer-2", "peer-3"]);
 });
 
-test("peer-bridge verdicts: bridgeable, already bridged, and group-aware session sync", () => {
+test("peer bridges remain reachable while session pairing is unbacked", () => {
   let state = emptyObjects();
   state = mintSession(state, "s", "iroh").state; // session-1
   state = mintPeer(state, "alice", "iroh", "doc-a").state; // peer-2
@@ -756,8 +756,8 @@ test("peer-bridge verdicts: bridgeable, already bridged, and group-aware session
   state = addBridge(state, "peer-6", "peer-7");
   const blankGroup = wireVerdict(ref("peer", "peer-6"), ref("session", "session-1"), state);
   assert.equal(blankGroup.allowed, false);
-  assert.equal(blankGroup.backed, true);
-  assert.match(blankGroup.reason, /no bridged peer has a usable transport identity/);
+  assert.equal(blankGroup.backed, false);
+  assert.equal(blankGroup.needs, "ptj session pairing adapter");
 
   assert.equal(peerUsableForSync(peerByKey(state, "peer-2")), true);
   assert.equal(peerUsableForSync(peerByKey(state, "peer-3")), false);

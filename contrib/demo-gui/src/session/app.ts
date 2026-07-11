@@ -70,7 +70,6 @@ import {
   actionState,
   addBridge,
   addFragmentToSession,
-  addPeerToSession,
   applyTxOutputs,
   beginWire,
   bridgeGroupContaining,
@@ -592,24 +591,6 @@ async function executeWire(
         const fragmentKey = source.kind === "fragment" ? source.key : target.key;
         objects = addFragmentToSession(objects, sessionKey, fragmentKey);
         logEvent(`wired ${fragmentKey} into ${sessionKey}`);
-        break;
-      }
-      case "peer-into-session": {
-        const sessionKey = source.kind === "session" ? source.key : target.key;
-        const peerKey = source.kind === "peer" ? source.key : target.key;
-        // A bridged peer stands for its whole group: the session is wired
-        // to EVERY member (the Q3 equivalence), and the broadcast goes
-        // through the existing per-member sync where a transport exists.
-        const group = bridgeGroupContaining(objects, peerKey);
-        for (const memberKey of group) {
-          objects = addPeerToSession(objects, sessionKey, memberKey);
-        }
-        logEvent(
-          group.length > 1
-            ? `wired bridge group [${group.join(", ")}] into ${sessionKey}; broadcasting`
-            : `wired ${peerKey} into ${sessionKey}; syncing`,
-        );
-        await broadcastSessionToPeers(sessionKey, group);
         break;
       }
       case "attach-payment": {
@@ -1468,10 +1449,14 @@ function renderSessionShelf(): void {
       badge("session", "session-badge"),
       span(
         "item-meta",
-        `${sessionObject.fragmentKeys.length} fragment(s) · ${sessionObject.peerKeys.length} peer(s)`,
+        `${sessionObject.transport} · ${sessionObject.fragmentKeys.length} fragment(s) · ` +
+          `${sessionObject.peerKeys.length} peer(s)`,
       ),
     );
     item.append(head);
+    if (sessionObject.fragmentKeys.length) {
+      item.append(span("item-meta", sessionObject.fragmentKeys.join(", ")));
+    }
     const actions = document.createElement("div");
     actions.className = "session-card-actions";
     actions.append(
@@ -1480,6 +1465,9 @@ function renderSessionShelf(): void {
         render();
       }),
       ...wireButtonNodes(ref, "Publish a fragment to this session."),
+      button("Sync now", "Sync this session's fragments over its transport", () => {
+        void syncSessionOverPeer(sessionObject.key, null);
+      }),
     );
     item.append(actions);
     list.append(item);
@@ -1652,6 +1640,7 @@ function renderPeerCard(peer: PeerObject): HTMLLIElement {
   // The Tableau color follows the immutable transport address, never the
   // editable local label and never a fabricated group fingerprint.
   colorizeIdentity(item, peerColorKey(peer));
+  decorateWireTarget(item, { kind: "peer", key: peer.key });
   const head = document.createElement("div");
   head.className = "session-fragment-row";
   head.append(
@@ -1667,6 +1656,7 @@ function renderPeerCard(peer: PeerObject): HTMLLIElement {
   actions.className = "session-card-actions";
   actions.append(
     button("Copy id", "Copy the full transport identity", () => copyText(peer.identity, `${peer.key} identity`)),
+    ...wireButtonNodes({ kind: "peer", key: peer.key }, "Bridge this peer with another peer."),
     unavailablePairButton(),
   );
   item.append(actions);
@@ -1679,6 +1669,7 @@ function renderPeerCard(peer: PeerObject): HTMLLIElement {
 function renderBridgeGroupCard(members: PeerObject[]): HTMLLIElement {
   const item = document.createElement("li");
   item.className = "list-item session-card session-bridge-group";
+  decorateWireTarget(item, { kind: "peer", key: members[0].key });
   const head = document.createElement("div");
   head.className = "session-fragment-row";
   head.append(
@@ -1718,7 +1709,13 @@ function renderBridgeGroupCard(members: PeerObject[]): HTMLLIElement {
   }
   const actions = document.createElement("div");
   actions.className = "session-card-actions";
-  actions.append(unavailablePairButton());
+  actions.append(
+    ...wireButtonNodes(
+      { kind: "peer", key: members[0].key },
+      "Bridge this peer group with another peer.",
+    ),
+    unavailablePairButton(),
+  );
   item.append(actions);
   return item;
 }
@@ -2665,27 +2662,6 @@ async function syncSessionOverPeer(sessionKey: string, peerKey: string | null): 
     return;
   }
   await runSyncRequest(members, `session ${sessionObject.name} (${members.length} fragment(s))`);
-}
-
-// Broadcast semantics for a bridged peer group (Q3): every member receives
-// every broadcast. Today's transport reality: members with a configured
-// transport sync one by one through the existing /api/sync (sequential —
-// the sync form is shared state); members without one are honestly marked
-// pending-backend instead of being silently skipped.
-async function broadcastSessionToPeers(sessionKey: string, peerKeys: string[]): Promise<void> {
-  for (const memberKey of peerKeys) {
-    const member = peerByKey(objects, memberKey);
-    if (!member) continue;
-    if (peerUsableForSync(member)) {
-      await syncSessionOverPeer(sessionKey, memberKey);
-    } else {
-      logEvent(
-        `broadcast to ${member.name} (${member.transport}) is pending-backend: ` +
-          "no usable transport behind /api/sync yet — the member stays wired and " +
-          "receives the session when its transport lands",
-      );
-    }
-  }
 }
 
 // --- negotiation panel -----------------------------------------------------------
