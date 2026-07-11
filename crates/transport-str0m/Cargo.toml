@@ -1,0 +1,57 @@
+[package]
+name = "transport-str0m"
+version.workspace = true
+edition = "2024"
+
+# transport-str0m: a WebRTC data-channel backend built on str0m (a sans-IO
+# WebRTC implementation), an ANONYMOUS transport. Received messages are
+# delivered as BARE opaque bytes (no sender identity) — a WebRTC data channel is
+# a DTLS-encrypted byte pipe with no peer identity the transport surfaces, so
+# this crate implements AnonymousChannel only. This is the PRIMARY rust-side
+# WebRTC transport for the native/tauri end-to-end path (str0m is sans-IO, so it
+# needs NO async runtime — the only transport in the family that stays
+# tokio-free).
+#
+# Anonymity here is not a property of anything this crate does: a data channel
+# gives us a byte pipe, we move opaque bytes over it. This crate reasons about
+# framing, the sans-IO poll loop, and connection lifecycle — never about threat
+# models. (DTLS exposes a peer certificate fingerprint, but the transport does
+# no security reasoning and does not surface it as a SenderId.)
+#
+# Layer 0 of the DAG (a leaf transport): depends ONLY on transport-core (for the
+# frozen channel contract + length-prefixed framing) and its own upstream SDK
+# (str0m + std::net::UdpSocket). It is never depended on by other
+# transport-<name> crates. SIGNALING (SDP offer/answer + trickle ICE) is a
+# SEPARATE concern carried out of band over a BIP-77 payjoin-directory-over-OHTTP
+# oblivious mailbox — its own transport crate — never a direct/localhost
+# signaling server; this crate consumes signaling blobs as opaque bytes to
+# bring the data channel up, then PSBT frames flow peer-to-peer over the channel.
+#
+# ALL str0m / network usage sits behind the `str0m` cargo feature (mirroring how
+# ptj gates `iroh-sync` and how transport-arti/nym gate their SDKs): with the
+# feature OFF the crate compiles as a skeleton whose constructors/methods return
+# a clear "built without the 'str0m' feature" error, so the workspace builds
+# without pulling str0m (which is NOT in the lock).
+
+[features]
+# Off by default: the stock build is a network-free skeleton. Turning on `str0m`
+# pulls the sans-IO WebRTC state machine and lights up the real UDP + data-channel
+# send/recv driven by str0m's poll loop. No async runtime is pulled — str0m is
+# sans-IO, so the (non-suspending) async AnonymousChannel maps directly onto its
+# poll model.
+default = []
+str0m = ["dep:str0m"]
+
+[dependencies]
+async-trait = "0.1.89"
+str0m = { version = "0.21.0", optional = true }
+# str0m is grounded (cargo add; sans-IO WebRTC), unlike the still-deferred
+# transport SDKs elsewhere in the family. No tokio: str0m owns no sockets and
+# this crate drives it over a blocking std::net::UdpSocket.
+transport-core = { path = "../transport-core" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+futures = "0.3.32"
