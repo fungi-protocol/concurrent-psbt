@@ -83,6 +83,7 @@ import {
   idleWire,
   mergeSessions,
   mineFragmentKeys,
+  mintPeer,
   mintSession,
   overviewFocus,
   peerBridgeGroups,
@@ -1450,58 +1451,68 @@ function decorateWireTarget(node: HTMLElement, ref: NodeRef): void {
   });
 }
 
-// --- objects rail ------------------------------------------------------------------
+// --- spatial shelves and remaining objects -----------------------------------------
 
-function renderObjects(): void {
-  const list = el<HTMLUListElement>("objectList");
+function renderSessionShelf(): void {
+  const list = el<HTMLUListElement>("sessionShelfList");
   list.textContent = "";
-
   for (const sessionObject of objects.sessions) {
     const item = document.createElement("li");
-    item.className = "list-item session-card";
+    item.className = "list-item session-card session-shelf-card";
     const ref: NodeRef = { kind: "session", key: sessionObject.key };
     decorateWireTarget(item, ref);
     const head = document.createElement("div");
     head.className = "session-fragment-row";
     head.append(
-      span("item-title", `${sessionObject.name}`),
+      span("item-title", sessionObject.name),
       badge("session", "session-badge"),
-      span("item-meta", `${sessionObject.transport} · ${sessionObject.fragmentKeys.length} fragment(s) · ${sessionObject.peerKeys.length} peer(s)`),
+      span(
+        "item-meta",
+        `${sessionObject.fragmentKeys.length} fragment(s) · ${sessionObject.peerKeys.length} peer(s)`,
+      ),
     );
     item.append(head);
-    if (sessionObject.fragmentKeys.length) {
-      item.append(span("item-meta", sessionObject.fragmentKeys.join(", ")));
-    }
     const actions = document.createElement("div");
     actions.className = "session-card-actions";
     actions.append(
-      button("Focus", "Fill the viewport with this session (mobile view)", () => {
+      button("Focus", "Fill the viewport with this session", () => {
         focus = sessionFocus(sessionObject.key);
         render();
       }),
-      ...wireButtonNodes(ref, "Connect fragments or peers to this session."),
-      button("Sync now", "Sync this session's fragments over its transport", () => {
-        void syncSessionOverPeer(sessionObject.key, null);
-      }),
+      ...wireButtonNodes(ref, "Publish a fragment to this session."),
     );
     item.append(actions);
     list.append(item);
   }
+  el<HTMLElement>("sessionShelfEmpty").hidden = objects.sessions.length > 0;
+}
 
-  // Peers render by BRIDGE GROUP (Q3): a bridged group is one card — one
-  // peer node to the wire gesture (any member ref stands for the group) —
-  // listing its members; unbridged peers render as single cards.
+function unavailablePairButton(): HTMLButtonElement {
+  const pair = button(
+    "Pair unavailable",
+    "Pair unavailable until the ptj adapter exposes session pairing",
+    () => {},
+  );
+  pair.disabled = true;
+  return pair;
+}
+
+function renderPeerShelf(): void {
+  const list = el<HTMLUListElement>("peerShelfList");
+  list.textContent = "";
   for (const group of peerBridgeGroups(objects)) {
     const members = group
       .map((key) => peerByKey(objects, key))
       .filter((member): member is PeerObject => member !== null);
     if (!members.length) continue;
-    if (members.length === 1) {
-      list.append(renderPeerCard(members[0]));
-    } else {
-      list.append(renderBridgeGroupCard(members));
-    }
+    list.append(members.length === 1 ? renderPeerCard(members[0]) : renderBridgeGroupCard(members));
   }
+  el<HTMLElement>("peerShelfEmpty").hidden = objects.peers.length > 0;
+}
+
+function renderObjects(): void {
+  const list = el<HTMLUListElement>("objectList");
+  list.textContent = "";
 
   for (const payment of objects.payments) {
     const item = document.createElement("li");
@@ -1637,11 +1648,10 @@ function renderObjects(): void {
 
 function renderPeerCard(peer: PeerObject): HTMLLIElement {
   const item = document.createElement("li");
-  item.className = "list-item session-card";
-  // Peers are pseudo-descriptor identities: same key space as the
-  // provenance groups, so a peer and its contributed rows share a color.
+  item.className = "list-item session-card session-peer-card";
+  // The Tableau color follows the immutable transport address, never the
+  // editable local label and never a fabricated group fingerprint.
   colorizeIdentity(item, peerColorKey(peer));
-  decorateWireTarget(item, { kind: "peer", key: peer.key });
   const head = document.createElement("div");
   head.className = "session-fragment-row";
   head.append(
@@ -1657,7 +1667,7 @@ function renderPeerCard(peer: PeerObject): HTMLLIElement {
   actions.className = "session-card-actions";
   actions.append(
     button("Copy id", "Copy the full transport identity", () => copyText(peer.identity, `${peer.key} identity`)),
-    ...wireButtonNodes({ kind: "peer", key: peer.key }, "Connect this peer to a session or bridge it with another peer."),
+    unavailablePairButton(),
   );
   item.append(actions);
   return item;
@@ -1669,7 +1679,6 @@ function renderPeerCard(peer: PeerObject): HTMLLIElement {
 function renderBridgeGroupCard(members: PeerObject[]): HTMLLIElement {
   const item = document.createElement("li");
   item.className = "list-item session-card session-bridge-group";
-  decorateWireTarget(item, { kind: "peer", key: members[0].key });
   const head = document.createElement("div");
   head.className = "session-fragment-row";
   head.append(
@@ -1709,12 +1718,7 @@ function renderBridgeGroupCard(members: PeerObject[]): HTMLLIElement {
   }
   const actions = document.createElement("div");
   actions.className = "session-card-actions";
-  actions.append(
-    ...wireButtonNodes(
-      { kind: "peer", key: members[0].key },
-      "Connect this bridge group to a session (as one peer).",
-    ),
-  );
+  actions.append(unavailablePairButton());
   item.append(actions);
   return item;
 }
@@ -1996,6 +2000,42 @@ async function addPsbtText(raw: string): Promise<boolean> {
 function classifyPasteToPsbt(raw: string): string | null {
   const pasted = classifyPaste(raw);
   return pasted.kind === "psbt" ? pasted.payload : null;
+}
+
+function setAddDrawer(open: boolean, focusPeer = false): void {
+  el<HTMLElement>("addDrawer").hidden = !open;
+  const toggle = el<HTMLButtonElement>("addDrawerToggle");
+  toggle.setAttribute("aria-expanded", String(open));
+  if (open) {
+    if (focusPeer) el<HTMLInputElement>("manualPeerAddress").focus();
+    else el<HTMLTextAreaElement>("pasteInput").focus();
+  }
+}
+
+function addManualPeer(event: SubmitEvent): void {
+  event.preventDefault();
+  const identity = inputValue("manualPeerAddress").trim();
+  if (!identity) {
+    showStatus("A transport address is required.", true);
+    return;
+  }
+  const minted = mintPeer(
+    objects,
+    inputValue("manualPeerLabel"),
+    selectValue("manualPeerTransport") as PeerObject["transport"],
+    identity,
+  );
+  objects = minted.state;
+  logEvent(
+    minted.created
+      ? `added inert ${minted.peer.key} (${minted.peer.transport}); no session or transport changed`
+      : `selected existing ${minted.peer.key}; exact transport address already present`,
+  );
+  el<HTMLInputElement>("manualPeerLabel").value = "";
+  el<HTMLInputElement>("manualPeerAddress").value = "";
+  showStatus("", false);
+  setAddDrawer(false);
+  render();
 }
 
 async function addObject(): Promise<void> {
@@ -2763,6 +2803,8 @@ async function listPayments(event: Event): Promise<void> {
 function render(): void {
   renderFocus();
   renderWireStatus();
+  renderPeerShelf();
+  renderSessionShelf();
   renderFragments();
   renderObjects();
   renderOps();
@@ -2778,6 +2820,12 @@ function wireDom(): void {
 
   el<HTMLButtonElement>("addObject").addEventListener("click", () => void addObject());
   el<HTMLInputElement>("uploadInput").addEventListener("change", () => void loadUpload());
+  el<HTMLButtonElement>("addDrawerToggle").addEventListener("click", () => {
+    setAddDrawer(el<HTMLElement>("addDrawer").hidden);
+  });
+  el<HTMLButtonElement>("addDrawerClose").addEventListener("click", () => setAddDrawer(false));
+  el<HTMLButtonElement>("addPeerQuick").addEventListener("click", () => setAddDrawer(true, true));
+  el<HTMLFormElement>("manualPeerForm").addEventListener("submit", addManualPeer);
 
   el<HTMLButtonElement>("opJoin").addEventListener("click", () => void joinSelected());
   el<HTMLButtonElement>("opConcatenate").addEventListener("click", () => void concatenateSelected());
