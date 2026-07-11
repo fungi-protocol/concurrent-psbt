@@ -17,6 +17,27 @@ test("the real shell keeps peers above sessions and the Me workspace", () => {
   assert.match(app, /renderPeerShelf\(\)/);
 });
 
+test("single-session focus hides both overview shelves", () => {
+  const peerShelf = html.match(/<section id="peerShelf"[^>]*>/)?.[0] ?? "";
+  const sessionShelf = html.match(/<section id="sessionShelf"[^>]*>/)?.[0] ?? "";
+  assert.match(peerShelf, /data-focus-hide/);
+  assert.match(sessionShelf, /data-focus-hide/);
+});
+
+test("peer cards preserve bridging while Pair stays visibly unavailable", () => {
+  assert.match(app, /decorateWireTarget\(item, \{ kind: "peer", key: peer\.key \}\)/);
+  assert.match(app, /wireButtonNodes\(\{ kind: "peer", key: peer\.key \}/);
+  assert.match(app, /decorateWireTarget\(item, \{ kind: "peer", key: members\[0\]\.key \}\)/);
+  assert.match(app, /wireButtonNodes\([\s\S]*members\[0\]\.key/);
+  assert.match(app, /Pair unavailable until the ptj adapter exposes session pairing/);
+});
+
+test("session shelf cards retain transport, members, and explicit sync", () => {
+  assert.match(app, /sessionObject\.transport/);
+  assert.match(app, /sessionObject\.fragmentKeys\.join\(", "\)/);
+  assert.match(app, /button\("Sync now"/);
+});
+
 test("one shared bottom Add drawer owns quick paste and manual peer creation", () => {
   assert.equal((html.match(/id="pasteInput"/g) ?? []).length, 1);
   assert.match(html, /id="addDrawer"[^>]*class="[^"]*session-add-drawer/);
