@@ -2617,6 +2617,35 @@ img.session-lifehash {
 
 /* Spatial shell: ephemeral peers on top, shared sessions beneath them, then
    the Me/local-only workspace in the main canvas. */
+.session-spatial-workbench {
+  display: grid;
+  grid-template-rows: auto minmax(160px, 1fr) auto;
+  gap: 12px;
+  min-height: min(760px, calc(100vh - 112px));
+  margin: 12px 14px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(25, 103, 210, 0.035), transparent 28%),
+    var(--surface-2);
+  box-shadow: var(--shadow);
+}
+
+.session-spatial-workbench > .session-spatial-shelf {
+  margin: 0;
+  box-shadow: none;
+}
+
+.session-spatial-workbench > [data-spatial-region="me"] {
+  min-height: 180px;
+  box-shadow: none;
+}
+
+.session-utilities {
+  padding-top: 12px;
+}
+
 .session-spatial-shelf {
   margin: 12px 14px 0;
   padding: 10px 12px;
@@ -2686,8 +2715,18 @@ img.session-lifehash {
 }
 
 @media (max-width: 760px) {
+  .session-spatial-workbench {
+    min-height: calc(100vh - 96px);
+    margin-inline: 8px;
+    padding: 8px;
+  }
+
   .session-spatial-shelf {
     margin-inline: 8px;
+  }
+
+  .session-spatial-workbench > .session-spatial-shelf {
+    margin-inline: 0;
   }
 
   .session-add-grid {

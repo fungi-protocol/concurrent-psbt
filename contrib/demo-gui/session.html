@@ -27,6 +27,7 @@
       </div>
     </header>
 
+    <main id="spatialWorkbench" class="session-spatial-workbench">
     <section id="peerShelf" class="session-spatial-shelf session-peer-shelf" data-spatial-region="peers" aria-label="Ephemeral peers" data-focus-hide="">
       <div class="session-shelf-heading">
         <div>
@@ -50,7 +51,6 @@
       <ul id="sessionShelfList" class="item-list session-session-shelf-list"></ul>
     </section>
 
-    <main class="session-layout" id="sessionLayout">
       <!-- Focus bar: visible in single-session focus mode (mobile-first). -->
       <nav id="focusBar" class="session-focus-bar" hidden>
         <button id="focusBack" type="button">← All objects</button>
@@ -103,6 +103,10 @@
         </div>
         <div id="gateOverrides" class="session-gate-overrides"></div>
       </section>
+
+    </main>
+
+    <div class="session-layout session-utilities" id="sessionUtilities">
 
       <section class="control-section session-panel" aria-label="Sessions and other objects" data-focus-hide="">
         <h2>Create session</h2>
@@ -392,7 +396,7 @@
         <h2>Event log</h2>
         <ol id="sessionLog" class="event-log"></ol>
       </section>
-    </main>
+    </div>
 
     <section id="addDrawer" class="session-add-drawer" aria-label="Add an object" hidden>
       <div class="session-add-drawer-card">
