@@ -1,124 +1,69 @@
-//! The real arti backend — compiled only with the `arti` feature.
-//!
-//! This module owns the async runtime and the arti SDK. It bootstraps an
-//! in-process Tor client (no separate `tor` daemon binary), launches an onion
-//! service to accept inbound peer streams, opens outbound Tor streams to each
-//! configured peer `.onion`, and moves opaque bytes framed with transport-core's
-//! length-prefixed framing. It contains zero privacy/threat-model reasoning:
-//! anonymity is arti's property, we just move bytes over the stream it gives us.
-//!
-//! ## Async → sync bridge
-//!
-//! `AnonymousChannel` is synchronous; arti is async (tokio). We own one
-//! `tokio::runtime::Runtime` and `block_on` per `send`/`recv`, exactly the
-//! pattern the iroh sibling transport uses. A background task drains our onion
-//! service's inbound streams into a shared buffer so `recv` is a cheap snapshot.
+//! In-process Arti backend with one runtime-owning actor thread.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc as std_mpsc};
 
-use arti_client::{TorClient, TorClientConfig};
 use arti_client::config::onion_service::OnionServiceConfigBuilder;
+use arti_client::{TorClient, TorClientConfig};
 use futures::AsyncReadExt as _;
 use futures::AsyncWriteExt as _;
 use futures::Stream;
 use futures::StreamExt as _;
-use tokio::runtime::Runtime;
-use tor_cell::relaycell::msg::Connected;
-use tor_hsservice::{RendRequest, RunningOnionService, StreamRequest};
+use safelog::DisplayRedacted as _;
+use tokio::sync::{mpsc, oneshot};
+use tor_cell::relaycell::msg::{Connected, End, EndReason};
+use tor_hsservice::{RendRequest, StreamRequest};
 use tor_proto::stream::IncomingStreamRequest;
 use tor_rtcompat::PreferredRuntime;
 
-use transport_core::{Error, Result, MAX_FRAME_LEN};
+use transport_core::{Error, MAX_FRAME_LEN, Result};
 
 use super::ArtiConfig;
 
-/// The maximum number of buffered inbound records we retain between polls.
-/// A poll-based caller drains these on each `recv`; the cap simply bounds memory
-/// if a caller stops polling. (No dedup/ordering — the lattice join owns that.)
 const INBOUND_BUFFER_CAP: usize = 4096;
+const COMMAND_BUFFER_CAP: usize = 64;
+
+enum Command {
+    Send {
+        message: Vec<u8>,
+        response: oneshot::Sender<Result<()>>,
+    },
+}
 
 /// The live arti backend.
 pub struct Inner {
-    config: ArtiConfig,
-    rt: Runtime,
-    client: TorClient<PreferredRuntime>,
-    /// The running onion service handle. HELD ONLY to keep the service alive:
-    /// dropping it tears the service down, so it must outlive the transport.
-    _service: Arc<RunningOnionService>,
-    /// Our onion service's published `.onion` address, once known.
+    commands: mpsc::Sender<Command>,
     onion: Arc<Mutex<Option<String>>>,
-    /// Framed records peers have written to our onion service since last poll.
-    /// Drained (taken) by `recv`. Bare bytes only — no sender identity, because
-    /// a Tor stream carries no peer identity (this is why arti is anonymous).
     inbound: Arc<Mutex<Vec<Vec<u8>>>>,
+    _actor: std::thread::JoinHandle<()>,
 }
 
 impl Inner {
-    /// Bootstrap the in-process Tor client and launch our onion service.
-    ///
-    /// This is the slow step (Tor bootstrap + descriptor publication can take
-    /// tens of seconds — see the crate `uxNotes`). We block on it here so that a
-    /// returned `Inner` is ready to `send`/`recv`.
+    /// Bootstrap Arti on its actor thread and launch the onion service.
     pub fn new(config: ArtiConfig) -> Result<Self> {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| Error::new(format!("arti: building tokio runtime: {e}")))?;
-
         let onion: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let inbound: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+        let (commands, command_rx) = mpsc::channel(COMMAND_BUFFER_CAP);
+        let (ready_tx, ready_rx) = std_mpsc::sync_channel(1);
 
-        let (client, service) = {
-            let onion = Arc::clone(&onion);
-            let inbound = Arc::clone(&inbound);
-            let nickname = config.service_nickname.clone();
-            let listen_port = config.listen_port;
-
-            rt.block_on(async move {
-                // Bootstrap an in-process Tor client. `create_bootstrapped`
-                // connects to the Tor network before returning.
-                let tor_config = TorClientConfig::default();
-                let client = TorClient::create_bootstrapped(tor_config)
-                    .await
-                    .map_err(|e| format!("bootstrapping Tor client: {e}"))?;
-
-                // Launch our onion service so peers can dial us. Its inbound
-                // streams are drained by a background task into `inbound`.
-                let svc_config = OnionServiceConfigBuilder::default()
-                    .nickname(
-                        nickname
-                            .parse()
-                            .map_err(|e| format!("invalid onion-service nickname: {e}"))?,
-                    )
-                    .build()
-                    .map_err(|e| format!("building onion-service config: {e}"))?;
-
-                let (service, request_stream) = client
-                    .launch_onion_service(svc_config)
-                    .map_err(|e| format!("launching onion service: {e}"))?;
-
-                if let Some(addr) = service.onion_address() {
-                    *onion.lock().expect("onion mutex not poisoned") = Some(addr.to_string());
-                }
-
-                // Background task: accept inbound rendezvous requests, accept the
-                // stream on our listen port, read one framed record off it, and
-                // stash the bare bytes. No sender identity is recorded.
-                let inbound_bg = Arc::clone(&inbound);
-                tokio::spawn(accept_loop(request_stream, listen_port, inbound_bg));
-
-                Ok::<_, String>((client, service))
+        let actor_onion = Arc::clone(&onion);
+        let actor_inbound = Arc::clone(&inbound);
+        let actor = std::thread::Builder::new()
+            .name("transport-arti".into())
+            .spawn(move || {
+                run_actor(config, command_rx, actor_onion, actor_inbound, ready_tx);
             })
-            .map_err(|message| Error::new(format!("arti: {message}")))?
-        };
+            .map_err(|e| Error::new(format!("arti: spawning actor thread: {e}")))?;
+
+        ready_rx
+            .recv()
+            .map_err(|_| Error::new("arti: actor stopped during initialization"))?
+            .map_err(|message| Error::new(format!("arti: {message}")))?;
 
         Ok(Self {
-            config,
-            _service: service,
-            rt,
-            client,
+            commands,
             onion,
             inbound,
+            _actor: actor,
         })
     }
 
@@ -131,8 +76,8 @@ impl Inner {
             .ok_or_else(|| Error::new("arti: onion address not yet published"))
     }
 
-    /// Write one framed opaque record to every configured peer over Tor.
-    pub fn send(&mut self, message: Vec<u8>) -> Result<()> {
+    /// Ask the actor to write one record to every configured peer.
+    pub async fn send(&mut self, message: Vec<u8>) -> Result<()> {
         if message.len() > MAX_FRAME_LEN {
             return Err(Error::new(format!(
                 "arti send: message length {} exceeds MAX_FRAME_LEN {MAX_FRAME_LEN}",
@@ -140,34 +85,15 @@ impl Inner {
             )));
         }
 
-        let client = self.client.clone();
-        let peers = self.config.peers.clone();
+        let (response, response_rx) = oneshot::channel();
+        self.commands
+            .send(Command::Send { message, response })
+            .await
+            .map_err(|_| Error::new("arti: actor stopped before accepting send"))?;
 
-        self.rt.block_on(async move {
-            for peer in &peers {
-                // Open a Tor stream to the peer's onion endpoint and write one
-                // length-prefixed frame (u32 BE len + value). arti parses the
-                // "<base32>.onion:<port>" target string itself.
-                let mut stream = client
-                    .connect(peer.as_str())
-                    .await
-                    .map_err(|e| Error::new(format!("arti send: connecting to {peer}: {e}")))?;
-
-                write_frame_async(&mut stream, &message)
-                    .await
-                    .map_err(|e| Error::new(format!("arti send: framing to {peer}: {e}")))?;
-
-                stream
-                    .flush()
-                    .await
-                    .map_err(|e| Error::new(format!("arti send: flushing to {peer}: {e}")))?;
-                stream
-                    .close()
-                    .await
-                    .map_err(|e| Error::new(format!("arti send: closing to {peer}: {e}")))?;
-            }
-            Ok(())
-        })
+        response_rx
+            .await
+            .map_err(|_| Error::new("arti: actor stopped before completing send"))?
     }
 
     /// Drain and return the framed records peers have written to us since the
@@ -176,6 +102,114 @@ impl Inner {
         let mut guard = self.inbound.lock().expect("inbound mutex not poisoned");
         Ok(std::mem::take(&mut *guard))
     }
+}
+
+fn run_actor(
+    config: ArtiConfig,
+    mut commands: mpsc::Receiver<Command>,
+    onion: Arc<Mutex<Option<String>>>,
+    inbound: Arc<Mutex<Vec<Vec<u8>>>>,
+    ready: std_mpsc::SyncSender<std::result::Result<(), String>>,
+) {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            let _ = ready.send(Err(format!("building tokio runtime: {error}")));
+            return;
+        }
+    };
+
+    runtime.block_on(async move {
+        let (client, _service) = match start_backend(&config, onion, inbound).await {
+            Ok(backend) => backend,
+            Err(error) => {
+                let _ = ready.send(Err(error));
+                return;
+            }
+        };
+
+        if ready.send(Ok(())).is_err() {
+            return;
+        }
+
+        while let Some(command) = commands.recv().await {
+            match command {
+                Command::Send { message, response } => {
+                    let result = send_to_peers(client.as_ref(), &config.peers, &message).await;
+                    let _ = response.send(result);
+                }
+            }
+        }
+    });
+}
+
+async fn start_backend(
+    config: &ArtiConfig,
+    onion: Arc<Mutex<Option<String>>>,
+    inbound: Arc<Mutex<Vec<Vec<u8>>>>,
+) -> std::result::Result<
+    (
+        Arc<TorClient<PreferredRuntime>>,
+        Arc<tor_hsservice::RunningOnionService>,
+    ),
+    String,
+> {
+    let client = TorClient::create_bootstrapped(TorClientConfig::default())
+        .await
+        .map_err(|e| format!("bootstrapping Tor client: {e}"))?;
+
+    let service_config = OnionServiceConfigBuilder::default()
+        .nickname(
+            config
+                .service_nickname
+                .parse()
+                .map_err(|e| format!("invalid onion-service nickname: {e}"))?,
+        )
+        .build()
+        .map_err(|e| format!("building onion-service config: {e}"))?;
+
+    let (service, requests) = client
+        .launch_onion_service(service_config)
+        .map_err(|e| format!("launching onion service: {e}"))?
+        .ok_or_else(|| "onion service disabled in config".to_string())?;
+
+    if let Some(address) = service.onion_address() {
+        *onion.lock().expect("onion mutex not poisoned") =
+            Some(address.display_unredacted().to_string());
+    }
+
+    tokio::spawn(accept_loop(requests, config.listen_port, inbound));
+    Ok((client, service))
+}
+
+async fn send_to_peers(
+    client: &TorClient<PreferredRuntime>,
+    peers: &[String],
+    message: &[u8],
+) -> Result<()> {
+    for peer in peers {
+        let mut stream = client
+            .connect(peer.as_str())
+            .await
+            .map_err(|e| Error::new(format!("arti send: connecting to {peer}: {e}")))?;
+
+        write_frame_async(&mut stream, message)
+            .await
+            .map_err(|e| Error::new(format!("arti send: framing to {peer}: {e}")))?;
+
+        stream
+            .flush()
+            .await
+            .map_err(|e| Error::new(format!("arti send: flushing to {peer}: {e}")))?;
+        stream
+            .close()
+            .await
+            .map_err(|e| Error::new(format!("arti send: closing to {peer}: {e}")))?;
+    }
+    Ok(())
 }
 
 /// Accept inbound onion-service streams forever, reading one framed record from
@@ -202,15 +236,22 @@ where
         };
         let inbound = Arc::clone(&inbound);
         // Box the inner stream so the spawned future has a concrete Unpin type.
-        tokio::spawn(serve_circuit(Box::pin(stream_requests), listen_port, inbound));
+        tokio::spawn(serve_circuit(
+            Box::pin(stream_requests),
+            listen_port,
+            inbound,
+        ));
     }
 }
 
 /// Serve one client circuit: accept each `BEGIN` targeting our `listen_port`,
 /// read one framed opaque record off the resulting data stream, and stash the
 /// bare bytes (no sender identity — a Tor stream carries no peer identity).
-async fn serve_circuit<S>(mut stream_requests: S, listen_port: u16, inbound: Arc<Mutex<Vec<Vec<u8>>>>)
-where
+async fn serve_circuit<S>(
+    mut stream_requests: S,
+    listen_port: u16,
+    inbound: Arc<Mutex<Vec<Vec<u8>>>>,
+) where
     S: Stream<Item = StreamRequest> + Unpin + Send + 'static,
 {
     while let Some(stream_request) = stream_requests.next().await {
@@ -222,7 +263,9 @@ where
         };
         if !wants_our_port {
             // Reject anything not aimed at our listen port; keep serving.
-            let _ = stream_request.reject().await;
+            let _ = stream_request
+                .reject(End::new_with_reason(EndReason::DONE))
+                .await;
             continue;
         }
 
@@ -338,6 +381,28 @@ where
 mod tests {
     use super::*;
     use futures::io::Cursor;
+
+    #[tokio::test]
+    async fn send_from_tokio_runtime_does_not_enter_private_runtime() {
+        let (commands, mut command_rx) = mpsc::channel(1);
+        let mut inner = Inner {
+            commands,
+            onion: Arc::new(Mutex::new(None)),
+            inbound: Arc::new(Mutex::new(Vec::new())),
+            _actor: std::thread::spawn(|| {}),
+        };
+
+        let responder = tokio::spawn(async move {
+            let Some(Command::Send { message, response }) = command_rx.recv().await else {
+                panic!("send command channel closed")
+            };
+            assert_eq!(message, b"opaque record");
+            assert!(response.send(Ok(())).is_ok());
+        });
+
+        inner.send(b"opaque record".to_vec()).await.unwrap();
+        responder.await.unwrap();
+    }
 
     // A network-free async framing roundtrip over an in-memory cursor, proving
     // the async framing helpers this backend uses on a Tor stream agree with the
