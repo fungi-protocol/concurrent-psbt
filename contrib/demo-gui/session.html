@@ -13,6 +13,7 @@
         <p>Real PSBTs only: everything below drives the ptj backend on this machine. Warning: every peer can see session details and can stall coordination. Funds stay safe because wallets sign only after the final transaction gives each participant what they approved and accounts for every sat through inputs, outputs, and explicit fees.</p>
       </div>
       <div class="header-actions">
+        <button id="addDrawerToggle" type="button" class="primary" aria-expanded="false" aria-controls="addDrawer">＋ Add</button>
         <label class="field-label compact" for="displayNetwork">
           Display network
           <select id="displayNetwork">
@@ -26,6 +27,29 @@
       </div>
     </header>
 
+    <section id="peerShelf" class="session-spatial-shelf session-peer-shelf" data-spatial-region="peers" aria-label="Ephemeral peers">
+      <div class="session-shelf-heading">
+        <div>
+          <h2>Peers</h2>
+          <p class="item-meta">Ephemeral transport addresses for this page load. Adding does not pair, connect, or publish.</p>
+        </div>
+        <button id="addPeerQuick" type="button">Add peer</button>
+      </div>
+      <p id="peerShelfEmpty" class="item-meta">No peers yet.</p>
+      <ul id="peerShelfList" class="item-list session-peer-shelf-list"></ul>
+    </section>
+
+    <section id="sessionShelf" class="session-spatial-shelf session-session-shelf" data-spatial-region="sessions" aria-label="Shared sessions">
+      <div class="session-shelf-heading">
+        <div>
+          <h2>Sessions</h2>
+          <p class="item-meta">Shared monotonic PSBT state. Multiple sessions remain visible in overview.</p>
+        </div>
+      </div>
+      <p id="sessionShelfEmpty" class="item-meta">No sessions yet.</p>
+      <ul id="sessionShelfList" class="item-list session-session-shelf-list"></ul>
+    </section>
+
     <main class="session-layout" id="sessionLayout">
       <!-- Focus bar: visible in single-session focus mode (mobile-first). -->
       <nav id="focusBar" class="session-focus-bar" hidden>
@@ -33,8 +57,8 @@
         <span id="focusTitle" class="item-title"></span>
       </nav>
 
-      <section class="control-section session-panel session-panel-wide" aria-label="Loaded PSBT fragments" data-focus-hide="">
-        <h2>Session</h2>
+      <section class="control-section session-panel session-panel-wide" aria-label="Me local-only PSBT workspace" data-spatial-region="me" data-focus-hide="">
+        <h2>Me <span class="session-badge">local only</span></h2>
         <div id="sessionStatus" class="session-status" role="status"></div>
         <div id="wireStatus" class="session-wire-status" role="status" hidden>
           <span id="wireStatusText"></span>
@@ -51,20 +75,6 @@
             <button id="wireClearAll" type="button" title="Discard all pending wires without applying them">Cancel wires</button>
           </div>
           <ul id="wireQueueList" class="session-wire-queue-list"></ul>
-        </div>
-
-        <div class="session-load">
-          <label class="field-label" for="pasteInput">
-            Paste anything: PSBT (BIP 370 or BIP 174; base64 or hex), bitcoin: URI, descriptor, npub, iroh ticket, signed tx hex
-            <textarea id="pasteInput" rows="3" spellcheck="false" placeholder="cHNidP8B… / bitcoin:… / wpkh(… / npub1… / doc… / 0200…"></textarea>
-          </label>
-          <div class="session-load-actions">
-            <button id="addObject" type="button" class="primary" title="Classifies the paste automatically — PSBTs try the BIP 370 decoder and fall back to the BIP 174 import/upgrade">Add</button>
-            <label class="session-upload">
-              Upload file
-              <input id="uploadInput" type="file">
-            </label>
-          </div>
         </div>
 
         <p id="fragmentEmpty">No PSBTs loaded yet. Paste, upload, or create one.</p>
@@ -94,9 +104,9 @@
         <div id="gateOverrides" class="session-gate-overrides"></div>
       </section>
 
-      <section class="control-section session-panel" aria-label="Sessions, peers, and other objects" data-focus-hide="">
-        <h2>Objects</h2>
-        <p class="item-meta">Wire any two cards to join them: fragment⋈fragment joins PSBTs, fragment→session incorporates, peer→session syncs. Pairs without a backend seam say so.</p>
+      <section class="control-section session-panel" aria-label="Sessions and other objects" data-focus-hide="">
+        <h2>Create session</h2>
+        <p class="item-meta">Sessions appear in the spatial shelf above. Other pasted objects remain below.</p>
         <form id="newSessionForm" class="split-row session-new-object">
           <label class="field-label" for="newSessionName">
             New session
@@ -384,6 +394,58 @@
       </section>
     </main>
 
-    <script type="module" src="dist/session/app.js?v=20260709-wiring-mine"></script>
+    <section id="addDrawer" class="session-add-drawer" aria-label="Add an object" hidden>
+      <div class="session-add-drawer-card">
+        <div class="session-output-heading">
+          <div>
+            <h2>Add</h2>
+            <p class="item-meta">Quick paste and manual creation share this one page-local palette.</p>
+          </div>
+          <button id="addDrawerClose" type="button" aria-label="Close Add drawer">×</button>
+        </div>
+        <div class="session-add-grid">
+          <section>
+            <h2>Paste anything</h2>
+            <label class="field-label" for="pasteInput">
+              PSBT, bitcoin: URI, descriptor, npub, iroh ticket, or signed transaction
+              <textarea id="pasteInput" rows="3" spellcheck="false" placeholder="cHNidP8B… / bitcoin:… / wpkh(… / npub1… / doc… / 0200…"></textarea>
+            </label>
+            <div class="session-load-actions">
+              <button id="addObject" type="button" class="primary" title="Classifies through the existing universal paste capability">Add pasted object</button>
+              <label class="session-upload">
+                Upload file
+                <input id="uploadInput" type="file">
+              </label>
+            </div>
+          </section>
+          <section>
+            <h2>Manual peer</h2>
+            <form id="manualPeerForm" class="stack-form">
+              <label class="field-label" for="manualPeerLabel">
+                Local label
+                <input id="manualPeerLabel" autocomplete="off" placeholder="Dana">
+              </label>
+              <label class="field-label" for="manualPeerTransport">
+                Transport address kind
+                <select id="manualPeerTransport">
+                  <option value="nostr">nostr npub</option>
+                  <option value="iroh">iroh ticket</option>
+                  <option value="str0m">str0m signaling address</option>
+                  <option value="webrtc-rs">webrtc-rs signaling address</option>
+                </select>
+              </label>
+              <label class="field-label" for="manualPeerAddress">
+                Address
+                <input id="manualPeerAddress" autocomplete="off" spellcheck="false" required placeholder="npub1… / doc… / signaling address">
+              </label>
+              <p class="item-meta">Add is inert. Pairing remains unavailable until the ptj adapter exposes the low-level session operation.</p>
+              <button type="submit" class="primary">Add peer</button>
+            </form>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <script type="module" src="dist/session/app.js?v=20260711-peer-drawer"></script>
   </body>
 </html>
