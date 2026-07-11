@@ -180,7 +180,7 @@ test("fragment-session wiring is symmetric and membership-aware", () => {
   assert.match(member.reason, /already in the session/);
 });
 
-test("peer-session wiring depends on a usable transport identity", () => {
+test("peer-session wiring is unbacked until the ptj pairing adapter exists", () => {
   let state = emptyObjects();
   state = mintSession(state, "s", "iroh").state;
   state = mintPeer(state, "good", "iroh", "doc-abc").state;
@@ -189,20 +189,21 @@ test("peer-session wiring depends on a usable transport identity", () => {
 
   const good = wireVerdict(ref("peer", "peer-2"), ref("session", "session-1"), state);
   assert.equal(good.kind, "peer-into-session");
-  assert.equal(good.allowed, true);
-  assert.equal(good.backed, true);
+  assert.equal(good.allowed, false);
+  assert.equal(good.backed, false);
+  assert.equal(good.needs, "ptj session pairing adapter");
 
   const blank = wireVerdict(ref("peer", "peer-3"), ref("session", "session-1"), state);
   assert.equal(blank.allowed, false);
-  assert.equal(blank.backed, true);
-  assert.match(blank.reason, /transport identity/);
+  assert.equal(blank.backed, false);
+  assert.equal(blank.needs, "ptj session pairing adapter");
 
   // npub peers are minted from paste but /api/sync has no nostr transport:
   // visible, explicitly unwired, with the missing seam named.
   const nostr = wireVerdict(ref("session", "session-1"), ref("peer", "peer-4"), state);
   assert.equal(nostr.allowed, false);
   assert.equal(nostr.backed, false);
-  assert.match(nostr.needs, /nostr transport/);
+  assert.equal(nostr.needs, "ptj session pairing adapter");
 });
 
 test("payment and utxo wiring rows", () => {
@@ -731,12 +732,13 @@ test("peer-bridge verdicts: bridgeable, already bridged, and group-aware session
   assert.equal(again.backed, true);
   assert.match(again.reason, /already bridged/);
 
-  // Group-aware session wiring: the nostr member alone is unbacked, but the
-  // BRIDGE containing a usable iroh member is admissible — broadcasts reach
-  // the usable transports now, the rest are marked pending by the shell.
+  // A bridge remains a reachable peer-peer presentation operation, but it
+  // cannot bypass the missing low-level session-pairing adapter.
   const throughNostr = wireVerdict(ref("peer", "peer-3"), ref("session", "session-1"), state);
   assert.equal(throughNostr.kind, "peer-into-session");
-  assert.equal(throughNostr.allowed, true);
+  assert.equal(throughNostr.allowed, false);
+  assert.equal(throughNostr.backed, false);
+  assert.equal(throughNostr.needs, "ptj session pairing adapter");
   assert.match(throughNostr.label, /bridge alice\+npub/);
 
   // An all-nostr BRIDGE GROUP stays honestly unbacked…
@@ -745,7 +747,7 @@ test("peer-bridge verdicts: bridgeable, already bridged, and group-aware session
   const nostrGroup = wireVerdict(ref("peer", "peer-4"), ref("session", "session-1"), state);
   assert.equal(nostrGroup.allowed, false);
   assert.equal(nostrGroup.backed, false);
-  assert.match(nostrGroup.needs, /nostr transport/);
+  assert.equal(nostrGroup.needs, "ptj session pairing adapter");
   assert.match(nostrGroup.label, /bridge npub2\+npub3/);
 
   // …and a group whose members exist but have no usable identity blocks.
