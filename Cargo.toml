@@ -1,15 +1,8 @@
 [workspace]
 members = ["crates/*"]
-# Transport PLUGINS are deliberately OUTSIDE the workspace: each is a separate
-# binary with its OWN Cargo.lock, because their transport stacks cannot share
-# this workspace's lock (e.g. arti's static-sqlite pins libsqlite3-sys 0.37
-# while nym-sdk needs ^0.30.1, and `links = "sqlite3"` permits exactly one per
-# lockfile — optional deps still resolve into the lock, so feature-gating
-# cannot help). ptj spawns them via `--transport plugin`; the wire contract is
-# crates/transport-plugin-api. See contrib/design/transport-plugins.md.
-# (Explicit paths, not a glob — `workspace.exclude` does not glob-expand the
-# way `members` does; each new plugin adds its line.)
-exclude = ["plugins/ptj-transport-nym"]
+# Nym uses a separate lock domain because its sqlite dependency cannot resolve
+# alongside Arti's. The plugin is separate for the same reason.
+exclude = ["crates/transport-nym", "plugins/ptj-transport-nym"]
 resolver = "2"
 
 [workspace.package]

@@ -1,32 +1,15 @@
 [package]
 name = "transport-nym"
-version.workspace = true
+version = "0.1.0"
 edition = "2024"
 
-[features]
-# All external-network dependency usage sits behind this feature, named after
-# the transport (mirrors how ptj gates iroh behind `iroh-sync`). With the
-# feature OFF the crate still compiles as a skeleton: the public type exists and
-# every operation returns a clear "built without `nym`" error. Turning it ON
-# pulls in the nym-sdk mixnet client plus the tokio runtime it needs (nym-sdk is
-# async; the channel seam is async too, so a feature-on backend `.await`s the
-# SDK directly — the actor-at-the-edge shape the iroh transport uses).
-nym = []
+[workspace]
 
 [dependencies]
-# TODO(ground-deps): defer the network SDK until pinned to a resolvable
-# crate/version (nym-sdk). The `nym` feature is declared but empty so the
-# default skeleton (channel trait + framing) compiles; the feature-on network
-# path in the crate source stays authored-but-unverified until then.
-transport-core = { path = "../transport-core" }
-# Desugars the async `AnonymousChannel` impl to boxed futures so the seam stays
-# dyn-compatible. Proc-macro only — no runtime, no network SDK.
 async-trait = "0.1"
+nym-sdk = "1.21.2"
+tokio = { version = "1.52.3", features = ["time"] }
+transport-core = { path = "../transport-core" }
 
-[dev-dependencies]
-# `futures::executor::block_on` drives the async skeleton/channel tests (which
-# have no tokio) to completion. Dev-only, runtime-free.
-futures = "0.3"
-
-[lints]
-workspace = true
+[lints.rust]
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(coverage_nightly)'] }
