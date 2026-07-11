@@ -766,11 +766,10 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
 
   if (unordered(a, b, "peer", "session")) {
     const peerKey = a === "peer" ? source.key : target.key;
-    const peer = peerByKey(state, peerKey);
     const sessionName = a === "session" ? sourceName : targetName;
     const peerName = a === "peer" ? sourceName : targetName;
-    // A bridged peer stands for its whole group: the session is wired to
-    // each member, so the wire is admissible when ANY member can sync.
+    // A bridge remains a reachable presentation operation, but committing
+    // any peer-to-session edge belongs to the low-level ptj pairing adapter.
     const group = bridgeGroupContaining(state, peerKey)
       .map((memberKey) => peerByKey(state, memberKey))
       .filter((member): member is PeerObject => member !== null);
@@ -779,52 +778,14 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
         ? `bridge ${group.map((member) => member.name).join("+")}`
         : `peer ${peerName}`;
     const label = `Sync session ${sessionName} over ${groupLabel}`;
-    if (group.length > 1) {
-      if (group.some(peerUsableForSync)) {
-        return verdict("peer-into-session", true, true, null, null, label);
-      }
-      if (group.every((member) => member.transport === "nostr")) {
-        return verdict(
-          "peer-into-session",
-          false,
-          false,
-          null,
-          "a nostr transport behind /api/sync (npub peers cannot sync yet)",
-          label,
-        );
-      }
-      return verdict(
-        "peer-into-session",
-        false,
-        true,
-        "no bridged peer has a usable transport identity (configure a ticket or signaling files)",
-        null,
-        label,
-      );
-    }
-    if (peer && peer.transport === "nostr") {
-      // The nostr transport is not served by /api/sync yet; keep the pair
-      // visible but honestly unwired.
-      return verdict(
-        "peer-into-session",
-        false,
-        false,
-        null,
-        "a nostr transport behind /api/sync (npub peers cannot sync yet)",
-        label,
-      );
-    }
-    if (peer && (peer.transport === "unknown" || !peer.identity)) {
-      return verdict(
-        "peer-into-session",
-        false,
-        true,
-        "peer has no usable transport identity (configure a ticket or signaling files)",
-        null,
-        label,
-      );
-    }
-    return verdict("peer-into-session", true, true, null, null, label);
+    return verdict(
+      "peer-into-session",
+      false,
+      false,
+      null,
+      "ptj session pairing adapter",
+      label,
+    );
   }
 
   if (unordered(a, b, "payment", "fragment")) {
