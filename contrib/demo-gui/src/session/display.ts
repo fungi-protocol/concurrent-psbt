@@ -52,6 +52,7 @@ export interface InputView {
   hasWitnessUtxo: boolean;
   hasNonWitnessUtxo: boolean;
   provenance: string | null;
+  signatures: SignaturePresence;
 }
 
 export interface OutputView {
@@ -144,6 +145,32 @@ export interface ProvenanceMap {
   outputs: Record<string, string>;
 }
 
+// Signature presence, derived from the raw per-input keymap (inspect JSON
+// decodes no signature fields — the raw entries are the source of truth).
+// The keytype is the first byte of key_hex (a compact-size varint; every
+// signature keytype fits one byte): FINAL_SCRIPTSIG (0x07) or
+// FINAL_SCRIPTWITNESS (0x08) means the input is finalized; PARTIAL_SIG
+// (0x02), TAP_KEY_SIG (0x13), or TAP_SCRIPT_SIG (0x14) means a signature
+// is present but the input is not final.
+export type SignaturePresence = "final" | "partial" | "unsigned";
+
+const FINAL_SIG_KEYTYPES = new Set(["07", "08"]);
+const PARTIAL_SIG_KEYTYPES = new Set(["02", "13", "14"]);
+
+export function signaturePresence(inspect: InspectResponse | null, index: number): SignaturePresence {
+  const raw = asObject(asObject(inspect)?.raw);
+  const entries = asArray(asArray(raw?.inputs)?.[index]) ?? [];
+  let partial = false;
+  for (const rawEntry of entries) {
+    const keyHex = asString(asObject(rawEntry)?.key_hex);
+    if (!keyHex || keyHex.length < 2) continue;
+    const keytype = keyHex.slice(0, 2).toLowerCase();
+    if (FINAL_SIG_KEYTYPES.has(keytype)) return "final";
+    if (PARTIAL_SIG_KEYTYPES.has(keytype)) partial = true;
+  }
+  return partial ? "partial" : "unsigned";
+}
+
 export function inputViews(inspect: InspectResponse | null, provenance?: ProvenanceMap): InputView[] {
   const inputs = asArray(asObject(inspect)?.inputs) ?? [];
   return inputs.map((raw, index) => {
@@ -161,6 +188,7 @@ export function inputViews(inspect: InspectResponse | null, provenance?: Provena
       hasWitnessUtxo: asBoolean(input?.has_witness_utxo) ?? false,
       hasNonWitnessUtxo: asBoolean(input?.has_non_witness_utxo) ?? false,
       provenance: (outpointText && provenance?.inputs[outpointText]) || null,
+      signatures: signaturePresence(inspect, index),
     };
   });
 }
@@ -629,6 +657,77 @@ export function rowDetailPairs(
       value: asString(object?.value_hex) ?? "",
     });
   }
+  return pairs;
+}
+
+// ---------------------------------------------------------------------------
+// The detail ladder — how much of a card's body is visible.
+// ---------------------------------------------------------------------------
+//
+// Three in-card levels; the fourth ("everything, raw") is the modal dialog
+// rendering rowDetailPairs and is not a card state:
+//   collapsed — each group is ONE aggregate line (in provenance mode that
+//               reads as one line per peer's operations);
+//   rows      — every input/output is a row with minimal identity: the
+//               scriptPubKey LifeHash chip, the amount, and whether a
+//               signature is present;
+//   detail    — rows plus the level-3 facts (rowFacePairs).
+
+export type DetailLevel = "collapsed" | "rows" | "detail";
+
+export const DETAIL_LEVELS: readonly DetailLevel[] = ["collapsed", "rows", "detail"];
+
+// The collapsed level's one-line summary of a group.
+export interface GroupAggregate {
+  inputCount: number;
+  outputCount: number;
+  inputSubtotalSats: number | null;
+  outputSubtotalSats: number | null;
+  // Inputs carrying any signature (partial or final).
+  signedInputCount: number;
+}
+
+export function groupAggregate(group: CardGroup): GroupAggregate {
+  return {
+    inputCount: group.inputs.length,
+    outputCount: group.outputs.length,
+    inputSubtotalSats: group.inputSubtotalSats,
+    outputSubtotalSats: group.outputSubtotalSats,
+    signedInputCount: group.inputs.filter((input) => input.signatures !== "unsigned").length,
+  };
+}
+
+// The level-3 facts for one row: a curated subset of rowDetailPairs — the
+// textual identity behind the chips plus the row's structural facts. The
+// exhaustive field-by-field projection stays in rowDetailPairs (the modal).
+export function rowFacePairs(
+  inspect: InspectResponse | null,
+  side: "input" | "output",
+  index: number,
+  network: Network,
+): RowDetailPair[] {
+  const pairs: RowDetailPair[] = [];
+  if (side === "input") {
+    const [input] = inputViews(inspect).slice(index, index + 1);
+    if (!input) return pairs;
+    if (input.outpointText) pairs.push({ label: "outpoint", value: input.outpointText });
+    if (input.sequence) pairs.push({ label: "sequence", value: input.sequence });
+    pairs.push({
+      label: "utxo data",
+      value: input.hasWitnessUtxo
+        ? "witness utxo"
+        : input.hasNonWitnessUtxo
+          ? "non-witness utxo"
+          : "none",
+    });
+    pairs.push({ label: "signatures", value: input.signatures });
+    return pairs;
+  }
+  const [output] = outputViews(inspect, network).slice(index, index + 1);
+  if (!output) return pairs;
+  if (output.address) pairs.push({ label: "address", value: output.address });
+  if (output.scriptKind !== "absent") pairs.push({ label: "script", value: output.scriptLabel });
+  if (output.uniqueIdHex) pairs.push({ label: "unique id", value: output.uniqueIdHex });
   return pairs;
 }
 
