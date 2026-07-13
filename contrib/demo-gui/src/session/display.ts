@@ -304,7 +304,19 @@ function groupSlot(key: string, label: string, kind: CardGroup["kind"]): GroupSl
   };
 }
 
-export function cardGroups(inputs: InputView[], outputs: OutputView[]): CardGroup[] {
+// The DIMENSION a card groups its rows along. Attribution means a descriptor
+// or pseudo-descriptor (provenance) recognized the row; script-template kind
+// is a weaker signal that reads as attribution without being one, so the
+// default dimension leaves it out — kind-grouping stays available behind the
+// extended dimension for when a mode wants it (and future dimensions slot in
+// here the same way).
+export type GroupingDimension = "provenance" | "provenance+script-template";
+
+export function cardGroups(
+  inputs: InputView[],
+  outputs: OutputView[],
+  dimension: GroupingDimension = "provenance",
+): CardGroup[] {
   const provenance = new Map<string, GroupSlot>();
   const templates = new Map<string, GroupSlot>();
   let unattributed: GroupSlot | null = null;
@@ -319,7 +331,7 @@ export function cardGroups(inputs: InputView[], outputs: OutputView[]): CardGrou
       }
       return slot;
     }
-    if (templateKind && templateKind !== "unknown" && templateKind !== "absent") {
+    if (dimension === "provenance+script-template" && templateKind && templateKind !== "unknown" && templateKind !== "absent") {
       const key = `template:${templateKind}`;
       let slot = templates.get(key);
       if (!slot) {
@@ -537,6 +549,7 @@ export function fragmentCardModel(
   inspect: InspectResponse | null,
   network: Network,
   provenance?: ProvenanceMap,
+  dimension: GroupingDimension = "provenance",
 ): FragmentCardModel {
   const summary = fragmentSummary(inspect);
   const inputs = inputViews(inspect, provenance);
@@ -545,7 +558,7 @@ export function fragmentCardModel(
     summary,
     inputs,
     outputs,
-    groups: cardGroups(inputs, outputs),
+    groups: cardGroups(inputs, outputs, dimension),
     uidPresent: summary.outputUidPresent,
     uidTotal: outputs.length > 0 || summary.outputUidPresent !== null ? outputs.length : summary.outputCount,
     fee: feeLine(summary),
