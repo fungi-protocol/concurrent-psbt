@@ -442,7 +442,7 @@ export function rowDetailPairs(inspect, side, index, network) {
     }
     return pairs;
 }
-export const DETAIL_LEVELS = ["collapsed", "rows", "detail"];
+export const DETAIL_LEVELS = ["collapsed", "grouped", "expanded"];
 export function groupAggregate(group) {
     return {
         inputCount: group.inputs.length,

@@ -107,7 +107,7 @@ export interface RowDetailPair {
     value: string;
 }
 export declare function rowDetailPairs(inspect: InspectResponse | null, side: "input" | "output", index: number, network: Network): RowDetailPair[];
-export type DetailLevel = "collapsed" | "rows" | "detail";
+export type DetailLevel = "collapsed" | "grouped" | "expanded";
 export declare const DETAIL_LEVELS: readonly DetailLevel[];
 export interface GroupAggregate {
     inputCount: number;
