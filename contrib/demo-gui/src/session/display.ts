@@ -664,18 +664,20 @@ export function rowDetailPairs(
 // The detail ladder — how much of a card's body is visible.
 // ---------------------------------------------------------------------------
 //
-// Three in-card levels; the fourth ("everything, raw") is the modal dialog
+// Three in-card modes; the fourth ("everything, raw") is the modal dialog
 // rendering rowDetailPairs and is not a card state:
-//   collapsed — each group is ONE aggregate line (in provenance mode that
-//               reads as one line per peer's operations);
-//   rows      — every input/output is a row with minimal identity: the
-//               scriptPubKey LifeHash chip, the amount, and whether a
-//               signature is present;
-//   detail    — rows plus the level-3 facts (rowFacePairs).
+//   collapsed — each descriptor/pseudo-descriptor group is ONE line item
+//               with a balance (in provenance mode that reads as one line
+//               per peer's operations);
+//   grouped   — every input/output is a distinct row with minimal identity
+//               (LifeHash chip, amount, signature presence), inputs in the
+//               left column, outputs in the right;
+//   expanded  — rows plus their low-level facts (rowFacePairs: scripts as
+//               text, nsequence, signature details…).
 
-export type DetailLevel = "collapsed" | "rows" | "detail";
+export type DetailLevel = "collapsed" | "grouped" | "expanded";
 
-export const DETAIL_LEVELS: readonly DetailLevel[] = ["collapsed", "rows", "detail"];
+export const DETAIL_LEVELS: readonly DetailLevel[] = ["collapsed", "grouped", "expanded"];
 
 // The collapsed level's one-line summary of a group.
 export interface GroupAggregate {

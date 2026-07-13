@@ -450,6 +450,17 @@
       </div>
     </section>
 
+    <!-- The detail ladder's fourth level: everything, raw. One dialog serves
+         every scope — a single input/output (every decoded field plus the
+         raw keymap entries) or a whole fragment (the inspect JSON dump). -->
+    <dialog id="rawDialog" class="session-modal" aria-labelledby="rawDialogTitle">
+      <div class="session-output-heading">
+        <h2 id="rawDialogTitle"></h2>
+        <button id="rawDialogClose" type="button" aria-label="Close raw view">×</button>
+      </div>
+      <div id="rawDialogBody" class="session-modal-body"></div>
+    </dialog>
+
     <script type="module" src="dist/session/app.js?v=20260711-peer-drawer"></script>
   </body>
 </html>

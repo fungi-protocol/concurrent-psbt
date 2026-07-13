@@ -2034,6 +2034,94 @@ h2 {
   min-width: 0;
 }
 
+/* --- detail ladder ---------------------------------------------------------- */
+
+/* The three-segment detail-mode toggle in the card header. */
+.session-detail-toggle {
+  display: inline-flex;
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.session-detail-segment {
+  min-height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.session-detail-segment + .session-detail-segment {
+  border-left: 1px solid var(--line);
+}
+
+.session-detail-segment[aria-pressed="true"] {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Collapsed mode: one line item with a balance per group. */
+.session-aggregate-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 4px 14px;
+  font-size: 13px;
+}
+
+.session-aggregate-row .session-balance-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Signature presence: ✓ finalized, ◐ signed not final, ○ unsigned. */
+.session-sig-indicator {
+  flex: none;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.session-sig-final {
+  color: var(--green);
+}
+
+.session-sig-partial {
+  color: var(--orange);
+}
+
+.session-sig-unsigned {
+  color: var(--muted);
+}
+
+/* The level-4 dialog: everything, raw. */
+.session-modal {
+  width: min(720px, calc(100vw - 48px));
+  max-height: min(80vh, 720px);
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+
+.session-modal::backdrop {
+  background: rgba(29, 35, 41, 0.45);
+}
+
+.session-modal-body {
+  overflow: auto;
+  max-height: calc(80vh - 90px);
+}
+
+.session-modal .session-coin-detail {
+  margin-left: 0;
+}
+
 .session-coin-side {
   flex: none;
   width: 26px;
