@@ -22,7 +22,7 @@ import { PtjBackendError } from "../shared-frontend/core/types.js";
 import { seedFromRandomBytes } from "../model.js";
 import { addFragment, asArray, asObject, asString, buildConfirmArgs, buildCreateRequest, buildPayArgs, buildSyncRequest, bytesToBase64, emptySession, fragmentSummary, negotiationView, pastedPsbt, removeFragment, selectedFragments, setSelected, } from "./state.js";
 import { amountBits, amountSpanParts, DETAIL_LEVELS, elisionLabel, fragmentBadges, fragmentCardModel, groupAggregate, rowDetailPairs, rowFacePairs, signedAmountSpanParts, } from "./display.js";
-import { classifyPaste, mintFromPaste } from "./ingest.js";
+import { classifyPaste, mintFromPaste, SAMPLE_PASTES, } from "./ingest.js";
 import { actionState, addBridge, addFragmentToSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, enrichPayment, idleWire, mergeSessions, mineFragmentKeys, mintPeer, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, sessionByKey, sessionFocus, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
 import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, validateEditor, violationsFromServer, } from "./editor.js";
 import { descriptorColorKey, groupColorKey, paletteColor, paletteRegistry, peerColorKey, } from "./palette.js";
@@ -1782,6 +1782,42 @@ function setAddDrawer(open, focusPeer = false) {
             el("pasteInput").focus();
     }
 }
+// The test-vector palette (header corner). A chip fills the paste box and
+// focuses it — ingestion stays behind the operator's explicit Add, so a
+// sample walks exactly the real universal-paste path.
+function setSamplesPopover(open) {
+    el("samplesPopover").hidden = !open;
+    el("samplesToggle").setAttribute("aria-expanded", String(open));
+}
+function initSamplesPalette() {
+    const list = el("samplesList");
+    for (const sample of SAMPLE_PASTES) {
+        const chip = button(sample.name, `${sample.kind}: fills the paste box`, () => {
+            setSamplesPopover(false);
+            setAddDrawer(true);
+            el("pasteInput").value = sample.value;
+            el("pasteInput").focus();
+        });
+        chip.classList.add("session-sample-chip");
+        list.append(chip);
+    }
+    el("samplesToggle").addEventListener("click", () => {
+        setSamplesPopover(el("samplesPopover").hidden);
+    });
+    // Click-away and Escape both dismiss the popover.
+    document.addEventListener("click", (event) => {
+        if (el("samplesPopover").hidden)
+            return;
+        const target = event.target;
+        if (target && !target.closest(".session-samples"))
+            setSamplesPopover(false);
+    });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !el("samplesPopover").hidden) {
+            setSamplesPopover(false);
+        }
+    });
+}
 function addManualPeer(event) {
     event.preventDefault();
     const identity = inputValue("manualPeerAddress").trim();
@@ -2501,6 +2537,7 @@ function wireDom() {
     el("addDrawerClose").addEventListener("click", () => setAddDrawer(false));
     el("addPeerQuick").addEventListener("click", () => setAddDrawer(true, true));
     el("manualPeerForm").addEventListener("submit", addManualPeer);
+    initSamplesPalette();
     el("opJoin").addEventListener("click", () => void joinSelected());
     el("opConcatenate").addEventListener("click", () => void concatenateSelected());
     el("opSort").addEventListener("click", () => void sortSelected());

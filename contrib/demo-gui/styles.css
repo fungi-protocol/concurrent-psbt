@@ -1689,6 +1689,38 @@ h2 {
   border-color: var(--accent);
 }
 
+/* Test-vector palette: a corner popover anchored to its header button.
+   Demo/testing aid only, so it stays out of the main layout flow. */
+.session-samples {
+  position: relative;
+}
+
+.session-samples-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: min(320px, 90vw);
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+
+.session-samples-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.session-sample-chip {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
 .session-status {
   min-height: 18px;
   font-size: 13px;

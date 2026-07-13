@@ -170,6 +170,61 @@ export function classifyPaste(text: string): PasteClassification {
   };
 }
 
+// Sample pastes for the demo/test palette (the #samplesPopover corner popup).
+// Chips only FILL the paste box — classification and ingestion stay behind the
+// operator's explicit Add, so a sample exercises exactly the real paste path.
+// Every entry's declared kind is pinned to classifyPaste by the ingest tests.
+export interface SamplePaste {
+  readonly name: string;
+  readonly kind: PasteKind;
+  readonly value: string;
+}
+
+export const SAMPLE_PASTES: readonly SamplePaste[] = [
+  {
+    // BIP 370 test vector: one signed-key input, two derived outputs.
+    name: "BIP 370 PSBT (1 in / 2 out)",
+    kind: "psbt",
+    value:
+      "cHNidP8BAgQCAAAAAQQBAQEFAQIB+wQCAAAAAAEAUgIAAAABwaolbiFLlqGCL5PeQr/ztfP/jQUZMG41FddRWl6AWxIAAAAAAP////8BGMaaOwAAAAAWABSwo68UQghBJpPKfRZoUrUtsK7wbgAAAAABAR8Yxpo7AAAAABYAFLCjrxRCCEEmk8p9FmhStS2wrvBuAQ4gCwrZIUGcHIcZc11y3HOfnqngY40f5MHu8PmUQISBX8gBDwQAAAAAARAE/v///wAiAgLWAfhIRqZ1X3dr4A49nej7EKzJNfuDxF+wFi1MrVq3khj2nYc+VAAAgAEAAIAAAACAAAAAACoAAAABAwgACK8vAAAAAAEEFgAUxDD2TEdW2jENvRoIVXLvKZkmJywAIgIC42+/9T3VNAcM+P05ZhRoDzV6m4Xbc0C/HPp0XSrXs0AY9p2HPlQAAIABAACAAAAAgAEAAABkAAAAAQMIi73rCwAAAAABBBYAFE3Rk6yWSlasG54cyoRU/i9HT4UTAA==",
+  },
+  {
+    // The empty unordered PSBT the session tests seed with.
+    name: "Minimal unordered PSBT",
+    kind: "psbt",
+    value: "cHNidP8BAgQCAAAAAQMEAAAAAAEEAQABBQEAAQb8BHBzYnQBAA==",
+  },
+  {
+    name: "Output descriptor (public)",
+    kind: "descriptor",
+    value:
+      "wpkh(xpub6BosfCnifzxcFwrSzQiqu2DBVTshkCXacvNsWGYJVVhhawA7d4R5WSWGFNbi8Aw6ZRc1brxMyWMzG3DSSSSoekkudhUd9yLb6qx39T9nMdj/0/*)",
+  },
+  {
+    name: "Payment URI (BIP 21)",
+    kind: "payment-uri",
+    value: "bitcoin:bcrt1qexample?amount=0.001&label=lunch",
+  },
+  {
+    name: "Peer identity (npub)",
+    kind: "npub",
+    value: "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+  },
+  {
+    name: "Iroh document ticket",
+    kind: "iroh-ticket",
+    value: `doc${"a".repeat(64)}`,
+  },
+  {
+    // The funding transaction embedded in the BIP 370 vector above
+    // (input 0's previous tx), so the two samples relate on screen.
+    name: "Transaction hex",
+    kind: "transaction-hex",
+    value:
+      "0200000001c1aa256e214b96a1822f93de42bff3b5f3ff8d0519306e3515d7515a5e805b120000000000ffffffff0118c69a3b00000000160014b0a3af144208412693ca7d166852b52db0aef06e00000000",
+  },
+];
+
 // Route a classification into the object graph. PSBTs are NOT minted here:
 // fragments are owned by the fragment set (the shell inspects them through
 // the backend first). Returns the minted node so the shell can focus/log it.

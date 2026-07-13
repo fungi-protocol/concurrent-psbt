@@ -24,6 +24,15 @@
           </select>
         </label>
         <a class="session-demo-link" href="/demo">Demo sandbox</a>
+        <!-- Test-vector palette: demo/testing aid, deliberately out of the
+             main layout. Chips fill the paste box; they never add objects. -->
+        <div class="session-samples">
+          <button id="samplesToggle" type="button" aria-expanded="false" aria-controls="samplesPopover" title="Sample pastes for demos and testing">🧪 Samples</button>
+          <div id="samplesPopover" class="session-samples-popover" role="menu" aria-label="Sample pastes" hidden>
+            <p class="item-meta">Fills the paste box — nothing is added until you press Add.</p>
+            <div id="samplesList" class="session-samples-list"></div>
+          </div>
+        </div>
       </div>
     </header>
 
