@@ -1976,15 +1976,29 @@ h2 {
 }
 
 @container (max-width: 520px) {
-  .session-group-columns {
+  .session-group-columns,
+  .session-balance-row,
+  .session-aggregate-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .session-balance-cell-input,
+  .session-balance-cell-output {
+    grid-column: 1;
   }
 }
 
 /* Fallback for engines without container queries. */
 @media (max-width: 480px) {
-  .session-group-columns {
+  .session-group-columns,
+  .session-balance-row,
+  .session-aggregate-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .session-balance-cell-input,
+  .session-balance-cell-output {
+    grid-column: 1;
   }
 }
 
@@ -2240,11 +2254,20 @@ h2 {
   border-top-color: rgba(179, 38, 30, 0.45);
 }
 
+/* Ledger alignment: balance rows share the coin columns' two-column grid,
+   so subtotal/total amounts right-align under the amounts they sum. */
 .session-balance-row {
-  display: flex;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 4px 14px;
   align-items: baseline;
   font-size: 13px;
+}
+
+/* Rows that carry prose (fee rate, fallback sentence) stay flat. */
+.session-balance-row.session-balance-feerate {
+  display: flex;
+  gap: 6px;
 }
 
 .session-balance-cell {
@@ -2255,11 +2278,15 @@ h2 {
 }
 
 .session-balance-cell .session-amount {
-  margin-left: 0;
+  margin-left: auto;
+}
+
+.session-balance-cell-input {
+  grid-column: 1;
 }
 
 .session-balance-cell-output {
-  margin-left: auto;
+  grid-column: 2;
 }
 
 .session-balance-label {
