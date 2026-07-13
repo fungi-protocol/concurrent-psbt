@@ -1820,9 +1820,14 @@ h2 {
 
 /* --- session UI rework: cards, wiring, gates, editor, focus ---------------- */
 
+/* Cards cap near a readable width and pack side by side in wide panels
+   instead of one card stretching across the whole panel with blank space. */
 .session-card-list {
   display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 480px));
   gap: 10px;
+  align-items: start;
+  justify-content: start;
 }
 
 .session-card {
@@ -1886,7 +1891,7 @@ h2 {
   line-height: 1;
 }
 
-@container (max-width: 520px) {
+@container (max-width: 340px) {
   .session-badge-emoji .session-badge-label {
     display: none;
   }
@@ -1975,7 +1980,7 @@ h2 {
   color: var(--muted);
 }
 
-@container (max-width: 520px) {
+@container (max-width: 340px) {
   .session-group-columns,
   .session-balance-row,
   .session-aggregate-row {
