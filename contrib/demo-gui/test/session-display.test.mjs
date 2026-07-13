@@ -130,10 +130,26 @@ test("inputViews and outputViews project inspect JSON defensively", () => {
   assert.deepEqual(outputViews({ outputs: "mangled" }, "bitcoin"), []);
 });
 
-test("cardGroups: script templates group outputs, inputs stay unattributed", () => {
+test("cardGroups: the default dimension leaves script templates ungrouped", () => {
   const inputs = inputViews(INSPECT);
   const outputs = outputViews(INSPECT, "regtest");
+  // Script kind is not attribution: without provenance every row lands in
+  // the single implicit unattributed group.
   const groups = cardGroups(inputs, outputs);
+  assert.deepEqual(
+    groups.map((group) => group.key),
+    ["unattributed"],
+  );
+  assert.equal(groups[0].inputs.length, 2);
+  assert.equal(groups[0].outputs.length, 3);
+  assert.equal(groups[0].inputSubtotalSats, null); // one input amount unknown
+  assert.equal(groups[0].outputSubtotalSats, 125000);
+});
+
+test("cardGroups: script templates group outputs under the extended dimension", () => {
+  const inputs = inputViews(INSPECT);
+  const outputs = outputViews(INSPECT, "regtest");
+  const groups = cardGroups(inputs, outputs, "provenance+script-template");
 
   assert.deepEqual(
     groups.map((group) => group.key),
@@ -160,7 +176,7 @@ test("cardGroups: provenance metadata takes precedence when supplied", () => {
   };
   const inputs = inputViews(INSPECT, provenance);
   const outputs = outputViews(INSPECT, "regtest", provenance);
-  const groups = cardGroups(inputs, outputs);
+  const groups = cardGroups(inputs, outputs, "provenance+script-template");
 
   assert.equal(groups[0].key, "peer:peer-alice");
   assert.equal(groups[0].kind, "provenance");
@@ -209,7 +225,7 @@ test("fragmentCardModel assembles summary, groups, uid indicator, fee", () => {
   assert.equal(card.summary.ordering, "unordered");
   assert.equal(card.inputs.length, 2);
   assert.equal(card.outputs.length, 3);
-  assert.equal(card.groups.length, 3);
+  assert.equal(card.groups.length, 1); // default dimension: one implicit unattributed group
   assert.equal(card.uidPresent, 2);
   assert.equal(card.uidTotal, 3);
   assert.match(card.fee.text, /fee unknown/);

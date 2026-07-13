@@ -196,7 +196,7 @@ function groupSlot(key, label, kind) {
         outputComplete: true,
     };
 }
-export function cardGroups(inputs, outputs) {
+export function cardGroups(inputs, outputs, dimension = "provenance") {
     const provenance = new Map();
     const templates = new Map();
     let unattributed = null;
@@ -210,7 +210,7 @@ export function cardGroups(inputs, outputs) {
             }
             return slot;
         }
-        if (templateKind && templateKind !== "unknown" && templateKind !== "absent") {
+        if (dimension === "provenance+script-template" && templateKind && templateKind !== "unknown" && templateKind !== "absent") {
             const key = `template:${templateKind}`;
             let slot = templates.get(key);
             if (!slot) {
@@ -364,7 +364,7 @@ export function balanceSheet(summary, inspect) {
         fallbackText: feeSats === null ? feeLine(summary).text : null,
     };
 }
-export function fragmentCardModel(inspect, network, provenance) {
+export function fragmentCardModel(inspect, network, provenance, dimension = "provenance") {
     const summary = fragmentSummary(inspect);
     const inputs = inputViews(inspect, provenance);
     const outputs = outputViews(inspect, network, provenance);
@@ -372,7 +372,7 @@ export function fragmentCardModel(inspect, network, provenance) {
         summary,
         inputs,
         outputs,
-        groups: cardGroups(inputs, outputs),
+        groups: cardGroups(inputs, outputs, dimension),
         uidPresent: summary.outputUidPresent,
         uidTotal: outputs.length > 0 || summary.outputUidPresent !== null ? outputs.length : summary.outputCount,
         fee: feeLine(summary),

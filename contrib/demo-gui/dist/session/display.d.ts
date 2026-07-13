@@ -53,7 +53,8 @@ export interface CardGroup {
     inputSubtotalSats: number | null;
     outputSubtotalSats: number | null;
 }
-export declare function cardGroups(inputs: InputView[], outputs: OutputView[]): CardGroup[];
+export type GroupingDimension = "provenance" | "provenance+script-template";
+export declare function cardGroups(inputs: InputView[], outputs: OutputView[], dimension?: GroupingDimension): CardGroup[];
 export declare function groupChipDigestHex(group: Pick<CardGroup, "outputs">): string | null;
 export interface FeeLine {
     knownInputSats: number | null;
@@ -96,7 +97,7 @@ export interface FragmentCardModel {
     fee: FeeLine;
     balance: BalanceSheet;
 }
-export declare function fragmentCardModel(inspect: InspectResponse | null, network: Network, provenance?: ProvenanceMap): FragmentCardModel;
+export declare function fragmentCardModel(inspect: InspectResponse | null, network: Network, provenance?: ProvenanceMap, dimension?: GroupingDimension): FragmentCardModel;
 export declare function elisionLabel(shown: number, total: number): string | null;
 export interface RowDetailPair {
     label: string;
