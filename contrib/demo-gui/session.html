@@ -60,9 +60,10 @@
       <section class="control-section session-panel session-panel-wide" aria-label="Me local-only PSBT workspace" data-spatial-region="me" data-focus-hide="">
         <h2>Me <span class="session-badge">local only</span></h2>
         <div id="sessionStatus" class="session-status" role="status"></div>
+        <!-- Live drag-to-wire hint: shown imperatively while a drag is in
+             flight (Esc or dropping anywhere else cancels). -->
         <div id="wireStatus" class="session-wire-status" role="status" hidden>
           <span id="wireStatusText"></span>
-          <button id="wireCancel" type="button">Cancel wiring</button>
         </div>
         <!-- Pending-wire queue: completed wire gestures accumulate here as
              visible edges instead of executing immediately. Each edge has

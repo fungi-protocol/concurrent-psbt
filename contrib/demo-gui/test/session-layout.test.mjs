@@ -51,10 +51,14 @@ test("single-session focus hides both overview shelves", () => {
 });
 
 test("peer cards preserve bridging while Pair stays visibly unavailable", () => {
+  // Bridging rides the always-on drag gesture: decorateWireTarget arms the
+  // drag on single peers AND bridge-group cards, and the queue chip keeps
+  // their pending-wire participation visible.
   assert.match(app, /decorateWireTarget\(item, \{ kind: "peer", key: peer\.key \}\)/);
-  assert.match(app, /wireButtonNodes\(\{ kind: "peer", key: peer\.key \}/);
+  assert.match(app, /wireQueueChip\(\{ kind: "peer", key: peer\.key \}\)/);
   assert.match(app, /decorateWireTarget\(item, \{ kind: "peer", key: members\[0\]\.key \}\)/);
-  assert.match(app, /wireButtonNodes\([\s\S]*members\[0\]\.key/);
+  assert.match(app, /wireQueueChip\(\{ kind: "peer", key: members\[0\]\.key \}\)/);
+  assert.match(app, /armWireDrag\(node, ref\)/);
   assert.match(app, /Pair unavailable until the ptj adapter exposes session pairing/);
 });
 
