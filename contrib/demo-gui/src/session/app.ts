@@ -967,23 +967,31 @@ function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
   const body = document.createElement("div");
   body.className = "session-card-body";
   for (const group of card.groups) {
-    const groupNode = document.createElement("div");
-    groupNode.className = `session-group session-group-${group.kind}`;
-    // Group delineation in the descriptor's (or pseudo-descriptor's) color.
-    colorizeIdentity(groupNode, groupColorKey(group));
-    const title = document.createElement("div");
-    title.className = "session-group-title";
-    // The header wears the group's script fingerprint when every output
-    // shares one script_pubkey (display.js groupChipDigestHex).
-    const groupChip = groupChipDigestHex(group);
-    if (groupChip) {
-      const groupAddress = group.outputs.find((output) => output.address)?.address;
-      title.append(
-        lifehashBadge(groupChip, `${groupAddress ?? group.label}\nshared script of every output in this group`),
-      );
+    // Attribution is the exception, not the default: only attributed groups
+    // (descriptor / pseudo-descriptor provenance) earn a wrapper, title, and
+    // identity color. Unattributed rows render flat — being unattributed is
+    // implicit, so no "unattributed" label either.
+    const attributed = group.kind !== "unattributed";
+    let groupNode: HTMLElement = body;
+    if (attributed) {
+      groupNode = document.createElement("div");
+      groupNode.className = `session-group session-group-${group.kind}`;
+      // Group delineation in the descriptor's (or pseudo-descriptor's) color.
+      colorizeIdentity(groupNode, groupColorKey(group));
+      const title = document.createElement("div");
+      title.className = "session-group-title";
+      // The header wears the group's script fingerprint when every output
+      // shares one script_pubkey (display.js groupChipDigestHex).
+      const groupChip = groupChipDigestHex(group);
+      if (groupChip) {
+        const groupAddress = group.outputs.find((output) => output.address)?.address;
+        title.append(
+          lifehashBadge(groupChip, `${groupAddress ?? group.label}\nshared script of every output in this group`),
+        );
+      }
+      title.append(span("", group.label));
+      groupNode.append(title);
     }
-    title.append(span("", group.label));
-    groupNode.append(title);
 
     // Inputs LEFT, outputs RIGHT — the demo's section layout, card-shaped.
     // The columns collapse to one in narrow cards (container query); the
@@ -1019,7 +1027,7 @@ function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
       groupNode.append(groupBalanceFooter(group));
     }
 
-    body.append(groupNode);
+    if (attributed) body.append(groupNode);
   }
   if (card.groups.length) {
     body.append(balanceReport(card.balance, card.fee.text));
