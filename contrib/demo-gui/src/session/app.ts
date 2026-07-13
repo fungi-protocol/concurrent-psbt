@@ -69,7 +69,12 @@ import {
   type OutputView,
 } from "./display.js";
 import type { Network } from "./encoding.js";
-import { classifyPaste, mintFromPaste, type PasteClassification } from "./ingest.js";
+import {
+  classifyPaste,
+  mintFromPaste,
+  SAMPLE_PASTES,
+  type PasteClassification,
+} from "./ingest.js";
 import {
   actionState,
   addBridge,
@@ -2231,6 +2236,42 @@ function setAddDrawer(open: boolean, focusPeer = false): void {
   }
 }
 
+// The test-vector palette (header corner). A chip fills the paste box and
+// focuses it — ingestion stays behind the operator's explicit Add, so a
+// sample walks exactly the real universal-paste path.
+function setSamplesPopover(open: boolean): void {
+  el<HTMLElement>("samplesPopover").hidden = !open;
+  el<HTMLButtonElement>("samplesToggle").setAttribute("aria-expanded", String(open));
+}
+
+function initSamplesPalette(): void {
+  const list = el<HTMLElement>("samplesList");
+  for (const sample of SAMPLE_PASTES) {
+    const chip = button(sample.name, `${sample.kind}: fills the paste box`, () => {
+      setSamplesPopover(false);
+      setAddDrawer(true);
+      el<HTMLTextAreaElement>("pasteInput").value = sample.value;
+      el<HTMLTextAreaElement>("pasteInput").focus();
+    });
+    chip.classList.add("session-sample-chip");
+    list.append(chip);
+  }
+  el<HTMLButtonElement>("samplesToggle").addEventListener("click", () => {
+    setSamplesPopover(el<HTMLElement>("samplesPopover").hidden);
+  });
+  // Click-away and Escape both dismiss the popover.
+  document.addEventListener("click", (event) => {
+    if (el<HTMLElement>("samplesPopover").hidden) return;
+    const target = event.target as HTMLElement | null;
+    if (target && !target.closest(".session-samples")) setSamplesPopover(false);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !el<HTMLElement>("samplesPopover").hidden) {
+      setSamplesPopover(false);
+    }
+  });
+}
+
 function addManualPeer(event: SubmitEvent): void {
   event.preventDefault();
   const identity = inputValue("manualPeerAddress").trim();
@@ -3031,6 +3072,7 @@ function wireDom(): void {
   el<HTMLButtonElement>("addDrawerClose").addEventListener("click", () => setAddDrawer(false));
   el<HTMLButtonElement>("addPeerQuick").addEventListener("click", () => setAddDrawer(true, true));
   el<HTMLFormElement>("manualPeerForm").addEventListener("submit", addManualPeer);
+  initSamplesPalette();
 
   el<HTMLButtonElement>("opJoin").addEventListener("click", () => void joinSelected());
   el<HTMLButtonElement>("opConcatenate").addEventListener("click", () => void concatenateSelected());

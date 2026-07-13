@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { classifyPaste, mintFromPaste } from "../dist/session/ingest.js";
+import { classifyPaste, mintFromPaste, SAMPLE_PASTES } from "../dist/session/ingest.js";
 import { emptyObjects } from "../dist/session/wiring.js";
 
 const PSBT_B64 = "cHNidP8BAgQCAAAAAQMEAAAAAAEEAQABBQEAAQb8BHBzYnQBAA==";
@@ -80,6 +80,27 @@ test("classifyPaste: unknown pastes name everything that was tried", () => {
 
   assert.equal(classifyPaste("   ").kind, "unknown");
   assert.equal(classifyPaste("").detail, "empty paste");
+});
+
+test("every sample paste classifies as its declared kind", () => {
+  // The palette promises the operator a specific object kind; a sample that
+  // drifts away from classifyPaste would fill the box with a lie.
+  assert.ok(SAMPLE_PASTES.length >= 6, "palette covers the recognized kinds");
+  const names = new Set();
+  const kinds = new Set();
+  for (const sample of SAMPLE_PASTES) {
+    const classified = classifyPaste(sample.value);
+    assert.equal(classified.kind, sample.kind, `sample "${sample.name}"`);
+    assert.notEqual(sample.kind, "unknown", `sample "${sample.name}" must be recognizable`);
+    assert.ok(sample.name.trim(), "samples are named");
+    names.add(sample.name);
+    kinds.add(sample.kind);
+  }
+  assert.equal(names.size, SAMPLE_PASTES.length, "sample names are unique");
+  // One of each recognizable kind, at minimum.
+  for (const kind of ["psbt", "payment-uri", "descriptor", "npub", "iroh-ticket", "transaction-hex"]) {
+    assert.ok(kinds.has(kind), `palette has a ${kind} sample`);
+  }
 });
 
 test("mintFromPaste routes classifications into the object graph", () => {

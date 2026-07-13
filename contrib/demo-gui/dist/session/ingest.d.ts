@@ -7,6 +7,12 @@ export interface PasteClassification {
     needsBackend: string | null;
 }
 export declare function classifyPaste(text: string): PasteClassification;
+export interface SamplePaste {
+    readonly name: string;
+    readonly kind: PasteKind;
+    readonly value: string;
+}
+export declare const SAMPLE_PASTES: readonly SamplePaste[];
 export interface MintResult {
     state: ObjectsState;
     minted: NodeRef | null;
