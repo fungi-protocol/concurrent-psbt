@@ -359,14 +359,157 @@ function flashWireRejection(ref, text) {
         }
     }, 1800);
 }
-function startWire(kind, key) {
-    wire = beginWire(kind, key);
-    showStatus("", false);
-    render();
+let wireDrag = null;
+const WIRE_DRAG_THRESHOLD_PX = 6;
+function wireRefOf(node) {
+    const kind = node.dataset.wireKind;
+    const key = node.dataset.wireKey;
+    return kind && key ? { kind, key } : null;
 }
-function cancelWire() {
+function sameRef(a, b) {
+    return !!a && !!b && a.kind === b.kind && a.key === b.key;
+}
+// Imperative target painting: the render-time verdict pass cannot run
+// mid-drag, so the same class vocabulary (source / compatible green /
+// blocked red / unbacked dim) is applied directly to the live nodes.
+function paintWireTargets() {
+    if (!wire.source)
+        return;
+    for (const node of Array.from(document.querySelectorAll("[data-wire-kind]"))) {
+        const ref = wireRefOf(node);
+        if (!ref)
+            continue;
+        if (sameRef(wire.source, ref)) {
+            node.classList.add("session-wire-source");
+            continue;
+        }
+        const v = wireVerdict(wire.source, ref, objects);
+        switch (wireDisposition(v)) {
+            case "compatible":
+                node.classList.add("session-wire-target");
+                node.title = `wire here: ${v.label ?? v.kind}`;
+                break;
+            case "blocked":
+                node.classList.add("session-wire-incompatible");
+                node.title = `${v.label ?? "not wireable"} — blocked: ${v.reason ?? ""}`;
+                break;
+            default:
+                node.classList.add("session-wire-blocked");
+                node.title = v.needs
+                    ? `${v.label ?? "not wireable"} — needs backend: ${v.needs}`
+                    : (v.reason ?? "no join is defined");
+                break;
+        }
+    }
+    const host = el("wireStatus");
+    host.hidden = false;
+    el("wireStatusText").textContent =
+        `wiring from ${nodeName(wire.source)} — drop on a highlighted card to queue the wire ` +
+            "(dimmed cards explain why not)";
+}
+function clearWirePaint() {
+    for (const node of Array.from(document.querySelectorAll("[data-wire-kind]"))) {
+        node.classList.remove("session-wire-source", "session-wire-target", "session-wire-incompatible", "session-wire-blocked", "session-wire-hover");
+        node.removeAttribute("title");
+    }
+    el("wireStatus").hidden = true;
+}
+// The drag line: one fixed-position element from the gesture's start to
+// the pointer, created lazily and reused.
+function wireDragLine() {
+    let line = document.getElementById("wireDragLine");
+    if (!line) {
+        line = document.createElement("div");
+        line.id = "wireDragLine";
+        line.className = "session-wire-drag-line";
+        line.hidden = true;
+        document.body.append(line);
+    }
+    return line;
+}
+function updateWireDragLine(x1, y1, x2, y2) {
+    const line = wireDragLine();
+    const length = Math.hypot(x2 - x1, y2 - y1);
+    const angle = Math.atan2(y2 - y1, x2 - x1);
+    line.hidden = false;
+    line.style.width = `${length}px`;
+    line.style.transform = `translate(${x1}px, ${y1}px) rotate(${angle}rad)`;
+}
+function hideWireDragLine() {
+    wireDragLine().hidden = true;
+}
+function wireTargetAt(x, y) {
+    const hit = document.elementFromPoint(x, y);
+    return hit ? hit.closest("[data-wire-kind]") : null;
+}
+function cancelWireDrag() {
+    wireDrag = null;
     wire = idleWire();
-    render();
+    hideWireDragLine();
+    clearWirePaint();
+}
+function armWireDrag(node, ref) {
+    node.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 || wireDrag)
+            return;
+        // Form controls and buttons keep their own press semantics.
+        if (event.target.closest("button, a, input, textarea, select"))
+            return;
+        wireDrag = {
+            ref,
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            active: false,
+            node,
+        };
+        node.setPointerCapture(event.pointerId);
+    });
+    node.addEventListener("pointermove", (event) => {
+        if (!wireDrag || wireDrag.node !== node || wireDrag.pointerId !== event.pointerId)
+            return;
+        if (!wireDrag.active) {
+            if (Math.hypot(event.clientX - wireDrag.startX, event.clientY - wireDrag.startY) <
+                WIRE_DRAG_THRESHOLD_PX) {
+                return;
+            }
+            wireDrag.active = true;
+            wire = beginWire(ref.kind, ref.key);
+            paintWireTargets();
+        }
+        updateWireDragLine(wireDrag.startX, wireDrag.startY, event.clientX, event.clientY);
+        const hover = wireTargetAt(event.clientX, event.clientY);
+        for (const painted of Array.from(document.querySelectorAll(".session-wire-hover"))) {
+            if (painted !== hover)
+                painted.classList.remove("session-wire-hover");
+        }
+        if (hover && !sameRef(wireRefOf(hover), ref))
+            hover.classList.add("session-wire-hover");
+    });
+    const finish = (event, completed) => {
+        if (!wireDrag || wireDrag.node !== node || wireDrag.pointerId !== event.pointerId)
+            return;
+        const wasActive = wireDrag.active;
+        if (node.hasPointerCapture?.(event.pointerId))
+            node.releasePointerCapture(event.pointerId);
+        wireDrag = null;
+        if (!wasActive)
+            return; // a plain click: selection/detail handlers take it
+        hideWireDragLine();
+        clearWirePaint();
+        suppressNextClick = true;
+        const target = completed ? wireTargetAt(event.clientX, event.clientY) : null;
+        const targetRef = target ? wireRefOf(target) : null;
+        if (targetRef && !sameRef(targetRef, ref)) {
+            wireTo(targetRef); // queues (or explains) and re-renders
+        }
+        else {
+            wire = idleWire();
+            render();
+        }
+    };
+    node.addEventListener("pointerup", (event) => finish(event, true));
+    node.addEventListener("pointercancel", (event) => finish(event, false));
 }
 // Completing a wire gesture QUEUES the edge (compatible verdicts) or
 // reports why it cannot wire (blocked/unbacked) — nothing executes on tap.
@@ -827,7 +970,7 @@ function renderFragmentCard(fragment) {
         editorOverrides.clear();
         renderEditor([]);
         revealPanel("editorPanel");
-    }), ...wireButtonNodes(ref, "Connect this fragment to another object (join, session, payment)."), button("Remove", "Drop the fragment from the set", () => {
+    }), ...wireQueueChip(ref), button("Remove", "Drop the fragment from the set", () => {
         session = removeFragment(session, fragment.key);
         objects = dropFragmentKey(objects, fragment.key);
         detailLevels.delete(fragment.key);
@@ -1160,100 +1303,37 @@ function openRawModal(fragment, scope) {
     }
     dialog.showModal();
 }
-// The per-card Wire affordance, action made visible (the wiring verdict
-// system's labels): idle it STARTS a gesture; while a gesture is active it
-// becomes the completion affordance on other cards — labeled with the
-// verdict's action ("Join psbt-1 into psbt-2") — and the cancel affordance
-// on the source card. Blocked/unbacked pairs disable it with the reason.
-// A "N queued" chip beside it shows the card's pending-wire participation
-// (tooltip: the queued action labels).
-function wireButtonNodes(ref, idleTitle) {
-    const nodes = [];
-    if (!wire.source) {
-        nodes.push(button("Wire", `${idleTitle}\nCompatible targets light up and their buttons name the action ("Join X into Y").`, () => startWire(ref.kind, ref.key)));
-    }
-    else if (wire.source.kind === ref.kind && wire.source.key === ref.key) {
-        nodes.push(button("Cancel wiring", "Stop the wire gesture without queueing anything", cancelWire));
-    }
-    else {
-        const v = wireVerdict(wire.source, ref, objects);
-        const label = v.label ?? "Wire";
-        const node = button(label, "", () => wireTo(ref));
-        switch (wireDisposition(v)) {
-            case "compatible":
-                node.title = `${label} — queue this wire`;
-                break;
-            case "blocked":
-                node.disabled = true;
-                node.title = `${label} — blocked: ${v.reason ?? ""}`;
-                break;
-            default:
-                node.disabled = true;
-                node.title = v.needs
-                    ? `${label} — needs backend: ${v.needs}`
-                    : (v.reason ?? "no join is defined");
-                break;
-        }
-        nodes.push(node);
-    }
-    const queued = pendingWires.filter((wireEntry) => (wireEntry.source.kind === ref.kind && wireEntry.source.key === ref.key) ||
-        (wireEntry.target.kind === ref.kind && wireEntry.target.key === ref.key));
-    if (queued.length) {
-        const chip = span("session-badge session-wire-queued-chip", `${queued.length} queued`);
-        chip.title = queued
-            .map((wireEntry) => wireVerdict(wireEntry.source, wireEntry.target, objects).label ??
-            `${nodeName(wireEntry.source)} ⋈ ${nodeName(wireEntry.target)}`)
-            .join("\n");
-        nodes.push(chip);
-    }
-    return nodes;
+// The card's pending-wire participation: a "N queued" chip (tooltip: the
+// queued action labels). The Wire button is gone — wiring is the always-on
+// drag gesture (armWireDrag), the demo's semantics.
+function wireQueueChip(ref) {
+    const queued = pendingWires.filter((wireEntry) => sameRef(wireEntry.source, ref) || sameRef(wireEntry.target, ref));
+    if (!queued.length)
+        return [];
+    const chip = span("session-badge session-wire-queued-chip", `${queued.length} queued`);
+    chip.title = queued
+        .map((wireEntry) => wireVerdict(wireEntry.source, wireEntry.target, objects).label ??
+        `${nodeName(wireEntry.source)} ⋈ ${nodeName(wireEntry.target)}`)
+        .join("\n");
+    return [chip];
 }
-// Highlight and arm wire targets while a wire is pending. The three-way
-// vocabulary (compatible green / blocked red / unbacked dim) and the action
-// label in the title come from the presenter's verdict; a recently rejected
-// tap keeps its pulse + reason chip independent of wire mode.
+// Mark a card as a wire endpoint and arm the always-on drag gesture. The
+// verdict vocabulary (compatible green / blocked red / unbacked dim) is
+// painted imperatively DURING a drag (paintWireTargets); at render time the
+// card only wears its queue participation and any recent rejection pulse.
 function decorateWireTarget(node, ref) {
-    if (wireRejection && wireRejection.ref.kind === ref.kind && wireRejection.ref.key === ref.key) {
+    node.dataset.wireKind = ref.kind;
+    node.dataset.wireKey = ref.key;
+    armWireDrag(node, ref);
+    if (wireRejection && sameRef(wireRejection.ref, ref)) {
         node.classList.add("session-wire-rejected");
         node.append(span("session-wire-reason", wireRejection.text));
     }
     // Cards with at least one queued wire wear the pending-edge vocabulary
     // (the demo's animated orange dashes, card-shaped).
-    if (pendingWires.some((wireEntry) => (wireEntry.source.kind === ref.kind && wireEntry.source.key === ref.key) ||
-        (wireEntry.target.kind === ref.kind && wireEntry.target.key === ref.key))) {
+    if (pendingWires.some((wireEntry) => sameRef(wireEntry.source, ref) || sameRef(wireEntry.target, ref))) {
         node.classList.add("session-wire-pending");
     }
-    if (!wire.source)
-        return;
-    if (wire.source.kind === ref.kind && wire.source.key === ref.key) {
-        node.classList.add("session-wire-source");
-        return;
-    }
-    const v = wireVerdict(wire.source, ref, objects);
-    switch (wireDisposition(v)) {
-        case "compatible":
-            node.classList.add("session-wire-target");
-            node.title = `wire here: ${v.label ?? v.kind}`;
-            break;
-        case "blocked":
-            node.classList.add("session-wire-incompatible");
-            node.title = `${v.label ?? "not wireable"} — blocked: ${v.reason ?? ""}`;
-            break;
-        default:
-            node.classList.add("session-wire-blocked");
-            node.title = v.needs
-                ? `${v.label ?? "not wireable"} — needs backend: ${v.needs}`
-                : (v.reason ?? "no join is defined");
-            break;
-    }
-    node.addEventListener("click", (event) => {
-        // The explicit per-card buttons keep working; a plain click on the card
-        // body completes (or explains) the pending wire.
-        if (event.target.closest("button, input, textarea, select, a"))
-            return;
-        event.preventDefault();
-        wireTo(ref);
-    });
 }
 // --- spatial shelves and remaining objects -----------------------------------------
 function renderSessionShelf() {
@@ -1277,7 +1357,7 @@ function renderSessionShelf() {
         actions.append(button("Focus", "Fill the viewport with this session", () => {
             focus = sessionFocus(sessionObject.key);
             render();
-        }), ...wireButtonNodes(ref, "Publish a fragment to this session."), button("Sync now", "Sync this session's fragments over its transport", () => {
+        }), ...wireQueueChip(ref), button("Sync now", "Sync this session's fragments over its transport", () => {
             void syncSessionOverPeer(sessionObject.key, null);
         }));
         item.append(actions);
@@ -1331,7 +1411,7 @@ function renderObjects() {
             el("payAmount").value = (payment.amountSats / 100_000_000).toFixed(8);
             el("payLabel").value = payment.label;
             logEvent(`prefilled the Pay form from ${payment.key}`);
-        }), ...wireButtonNodes({ kind: "payment", key: payment.key }, "Attach this payment to a fragment."));
+        }), ...wireQueueChip({ kind: "payment", key: payment.key }));
         item.append(actions);
         list.append(item);
     }
@@ -1354,7 +1434,7 @@ function renderObjects() {
             item.append(addressNode(utxo.address, `address of ${utxo.key}`, "item-meta session-address"));
         const actions = document.createElement("div");
         actions.className = "session-card-actions";
-        actions.append(...wireButtonNodes({ kind: "utxo", key: utxo.key }, "Use as a create-form input."), button("Copy hex", "Copy the raw transaction hex", () => copyText(utxo.rawTxHex, `${utxo.key} hex`)));
+        actions.append(...wireQueueChip({ kind: "utxo", key: utxo.key }), button("Copy hex", "Copy the raw transaction hex", () => copyText(utxo.rawTxHex, `${utxo.key} hex`)));
         item.append(actions);
         list.append(item);
     }
@@ -1411,7 +1491,7 @@ function renderPeerCard(peer) {
     item.append(head);
     const actions = document.createElement("div");
     actions.className = "session-card-actions";
-    actions.append(button("Copy id", "Copy the full transport identity", () => copyText(peer.identity, `${peer.key} identity`)), ...wireButtonNodes({ kind: "peer", key: peer.key }, "Bridge this peer with another peer."), unavailablePairButton());
+    actions.append(button("Copy id", "Copy the full transport identity", () => copyText(peer.identity, `${peer.key} identity`)), ...wireQueueChip({ kind: "peer", key: peer.key }), unavailablePairButton());
     item.append(actions);
     return item;
 }
@@ -1444,22 +1524,15 @@ function renderBridgeGroupCard(members) {
     }
     const actions = document.createElement("div");
     actions.className = "session-card-actions";
-    actions.append(...wireButtonNodes({ kind: "peer", key: members[0].key }, "Bridge this peer group with another peer."), unavailablePairButton());
+    actions.append(...wireQueueChip({ kind: "peer", key: members[0].key }), unavailablePairButton());
     item.append(actions);
     return item;
 }
 // --- wire status + focus bar ---------------------------------------------------------
 function renderWireStatus() {
-    const host = el("wireStatus");
-    if (!wire.source) {
-        host.hidden = true;
-    }
-    else {
-        host.hidden = false;
-        el("wireStatusText").textContent =
-            `wiring from ${nodeName(wire.source)} — tap a highlighted card to queue the wire ` +
-                "(dimmed cards explain why not)";
-    }
+    // The live-drag hint is painted imperatively (paintWireTargets); at
+    // render time the gesture is always over, so the bar only hides.
+    el("wireStatus").hidden = true;
     renderWireQueue();
 }
 // The pending-wire queue panel: one row per queued edge with its action
@@ -2441,7 +2514,11 @@ function wireDom() {
         el("assignIdsPanel").hidden = true;
     });
     el("displayNetwork").addEventListener("change", render);
-    el("wireCancel").addEventListener("click", cancelWire);
+    // Escape cancels a live drag-to-wire gesture.
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && wireDrag)
+            cancelWireDrag();
+    });
     el("wireJoinAll").addEventListener("click", () => void joinAllWires());
     el("wireClearAll").addEventListener("click", clearPendingWires);
     el("focusBack").addEventListener("click", () => {
