@@ -146,6 +146,16 @@ let wire: WireGesture = idleWire();
 // the toolbar Join applies whole connected components. Pruned against the
 // live object graph on every render.
 let pendingWires: PendingWire[] = [];
+// A completed pointer gesture (drag-to-wire) sets this so the click event
+// the browser fires afterward does not ALSO toggle selection or open a
+// row dialog. Consumed by the first click handler that checks it.
+let suppressNextClick = false;
+
+function consumeSuppressedClick(): boolean {
+  const suppressed = suppressNextClick;
+  suppressNextClick = false;
+  return suppressed;
+}
 let editor: EditorModel | null = null;
 // Server-side fixes queued for the next editor save (violation fix_ids the
 // user accepted) and gate overrides armed for it (violation override_params).
@@ -943,20 +953,26 @@ function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
   const ref: NodeRef = { kind: "fragment", key: fragment.key };
   decorateWireTarget(item, ref);
 
-  // Header: select, identity fingerprint, key, badges, fee.
-  const head = document.createElement("div");
-  head.className = "session-fragment-row";
-
-  const checkbox = document.createElement("input");
-  checkbox.type = "checkbox";
-  checkbox.checked = fragment.selected;
-  checkbox.setAttribute("aria-label", `select ${fragment.key}`);
-  checkbox.addEventListener("change", () => {
-    session = setSelected(session, fragment.key, checkbox.checked);
+  // Selection is the card itself (the demo's click-a-vertex semantics):
+  // clicking the card background toggles it; rows, buttons, and form
+  // controls keep their own click meanings, and a completed drag-wire
+  // gesture suppresses the click it would otherwise leave behind.
+  item.classList.toggle("session-card-selected", fragment.selected);
+  item.setAttribute("aria-pressed", String(fragment.selected));
+  item.addEventListener("click", (event) => {
+    if (consumeSuppressedClick()) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("button, a, input, textarea, select, dialog, .session-coin-row, .session-detail-toggle")) {
+      return;
+    }
+    session = setSelected(session, fragment.key, !fragment.selected);
     overrides.clear();
     render();
   });
-  head.append(checkbox);
+
+  // Header: identity fingerprint, key, badges, fee.
+  const head = document.createElement("div");
+  head.className = "session-fragment-row";
 
   if (card.summary.uniqueIdHex) {
     head.append(lifehashBadge(card.summary.uniqueIdHex, `unordered unique id of ${fragment.key}`));
