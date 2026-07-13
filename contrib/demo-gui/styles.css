@@ -1830,7 +1830,17 @@ h2 {
   justify-content: start;
 }
 
+/* Click-to-select: the card is the selection control (no checkbox). The
+   selected state is an accent outline, distinct from the wire vocabulary
+   (dashed/animated) and the identity colors (left stripe). */
+.session-card-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+
 .session-card {
+  cursor: pointer;
   position: relative;
   display: grid;
   gap: 6px;
