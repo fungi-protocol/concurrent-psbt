@@ -11,6 +11,7 @@ export interface InputView {
     hasWitnessUtxo: boolean;
     hasNonWitnessUtxo: boolean;
     provenance: string | null;
+    signatures: SignaturePresence;
 }
 export interface OutputView {
     index: number;
@@ -34,6 +35,8 @@ export interface ProvenanceMap {
     inputs: Record<string, string>;
     outputs: Record<string, string>;
 }
+export type SignaturePresence = "final" | "partial" | "unsigned";
+export declare function signaturePresence(inspect: InspectResponse | null, index: number): SignaturePresence;
 export declare function inputViews(inspect: InspectResponse | null, provenance?: ProvenanceMap): InputView[];
 export declare function outputViews(inspect: InspectResponse | null, network: Network, provenance?: ProvenanceMap): OutputView[];
 export interface AmountSpanPart {
@@ -104,6 +107,17 @@ export interface RowDetailPair {
     value: string;
 }
 export declare function rowDetailPairs(inspect: InspectResponse | null, side: "input" | "output", index: number, network: Network): RowDetailPair[];
+export type DetailLevel = "collapsed" | "rows" | "detail";
+export declare const DETAIL_LEVELS: readonly DetailLevel[];
+export interface GroupAggregate {
+    inputCount: number;
+    outputCount: number;
+    inputSubtotalSats: number | null;
+    outputSubtotalSats: number | null;
+    signedInputCount: number;
+}
+export declare function groupAggregate(group: CardGroup): GroupAggregate;
+export declare function rowFacePairs(inspect: InspectResponse | null, side: "input" | "output", index: number, network: Network): RowDetailPair[];
 export interface BadgeView {
     emoji: string | null;
     text: string;

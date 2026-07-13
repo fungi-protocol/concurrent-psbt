@@ -94,6 +94,24 @@ export function addressChipDigestHex(address) {
         return null;
     return scriptFromAddress(address)?.scriptHex ?? null;
 }
+const FINAL_SIG_KEYTYPES = new Set(["07", "08"]);
+const PARTIAL_SIG_KEYTYPES = new Set(["02", "13", "14"]);
+export function signaturePresence(inspect, index) {
+    const raw = asObject(asObject(inspect)?.raw);
+    const entries = asArray(asArray(raw?.inputs)?.[index]) ?? [];
+    let partial = false;
+    for (const rawEntry of entries) {
+        const keyHex = asString(asObject(rawEntry)?.key_hex);
+        if (!keyHex || keyHex.length < 2)
+            continue;
+        const keytype = keyHex.slice(0, 2).toLowerCase();
+        if (FINAL_SIG_KEYTYPES.has(keytype))
+            return "final";
+        if (PARTIAL_SIG_KEYTYPES.has(keytype))
+            partial = true;
+    }
+    return partial ? "partial" : "unsigned";
+}
 export function inputViews(inspect, provenance) {
     const inputs = asArray(asObject(inspect)?.inputs) ?? [];
     return inputs.map((raw, index) => {
@@ -111,6 +129,7 @@ export function inputViews(inspect, provenance) {
             hasWitnessUtxo: asBoolean(input?.has_witness_utxo) ?? false,
             hasNonWitnessUtxo: asBoolean(input?.has_non_witness_utxo) ?? false,
             provenance: (outpointText && provenance?.inputs[outpointText]) || null,
+            signatures: signaturePresence(inspect, index),
         };
     });
 }
@@ -421,6 +440,51 @@ export function rowDetailPairs(inspect, side, index, network) {
             value: asString(object?.value_hex) ?? "",
         });
     }
+    return pairs;
+}
+export const DETAIL_LEVELS = ["collapsed", "rows", "detail"];
+export function groupAggregate(group) {
+    return {
+        inputCount: group.inputs.length,
+        outputCount: group.outputs.length,
+        inputSubtotalSats: group.inputSubtotalSats,
+        outputSubtotalSats: group.outputSubtotalSats,
+        signedInputCount: group.inputs.filter((input) => input.signatures !== "unsigned").length,
+    };
+}
+// The level-3 facts for one row: a curated subset of rowDetailPairs — the
+// textual identity behind the chips plus the row's structural facts. The
+// exhaustive field-by-field projection stays in rowDetailPairs (the modal).
+export function rowFacePairs(inspect, side, index, network) {
+    const pairs = [];
+    if (side === "input") {
+        const [input] = inputViews(inspect).slice(index, index + 1);
+        if (!input)
+            return pairs;
+        if (input.outpointText)
+            pairs.push({ label: "outpoint", value: input.outpointText });
+        if (input.sequence)
+            pairs.push({ label: "sequence", value: input.sequence });
+        pairs.push({
+            label: "utxo data",
+            value: input.hasWitnessUtxo
+                ? "witness utxo"
+                : input.hasNonWitnessUtxo
+                    ? "non-witness utxo"
+                    : "none",
+        });
+        pairs.push({ label: "signatures", value: input.signatures });
+        return pairs;
+    }
+    const [output] = outputViews(inspect, network).slice(index, index + 1);
+    if (!output)
+        return pairs;
+    if (output.address)
+        pairs.push({ label: "address", value: output.address });
+    if (output.scriptKind !== "absent")
+        pairs.push({ label: "script", value: output.scriptLabel });
+    if (output.uniqueIdHex)
+        pairs.push({ label: "unique id", value: output.uniqueIdHex });
     return pairs;
 }
 // The serialization format wears its BIP number on the card; inspect's
