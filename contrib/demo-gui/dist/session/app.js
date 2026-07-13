@@ -788,8 +788,9 @@ function renderFragmentCard(fragment) {
         }
         // Per-group subtotals at the BOTTOM of the columns. With a single
         // group the card-level report directly below would repeat them (the
-        // demo's grand-total elision rule, inverted for the card layout).
-        if (card.groups.length > 1) {
+        // demo's grand-total elision rule, inverted for the card layout); at
+        // the collapsed mode the aggregate line IS the subtotal.
+        if (level !== "collapsed" && card.groups.length > 1) {
             groupNode.append(groupBalanceFooter(group));
         }
         if (attributed)
@@ -905,8 +906,12 @@ function naSlot(why) {
     node.title = why;
     return node;
 }
-function balanceCell(side, label, sats, why) {
+function balanceCell(side, label, sats, why, roleLabel) {
     const cell = span(`session-balance-cell session-balance-cell-${side}`, "");
+    // The ledger reading: an explicit subtotal/total word before the side
+    // marker, the amount right-aligned under its column's amounts.
+    if (roleLabel)
+        cell.append(span("session-balance-label", roleLabel));
     cell.append(span("session-coin-side", label));
     cell.append(sats !== null ? amountSpan(sats) : naSlot(why));
     return cell;
@@ -917,10 +922,10 @@ function groupBalanceFooter(group) {
     footer.append(span("session-balance-sumline", ""));
     const totals = span("session-balance-row session-balance-totals", "");
     if (group.inputs.length > 0) {
-        totals.append(balanceCell("input", "in", group.inputSubtotalSats, PARTIAL_SUBTOTAL_WHY));
+        totals.append(balanceCell("input", "in", group.inputSubtotalSats, PARTIAL_SUBTOTAL_WHY, "subtotal"));
     }
     if (group.outputs.length > 0) {
-        totals.append(balanceCell("output", "out", group.outputSubtotalSats, PARTIAL_SUBTOTAL_WHY));
+        totals.append(balanceCell("output", "out", group.outputSubtotalSats, PARTIAL_SUBTOTAL_WHY, "subtotal"));
     }
     footer.append(totals);
     return footer;
@@ -944,9 +949,9 @@ function balanceReport(sheet, feeText) {
     }
     block.append(span("session-balance-sumline", ""));
     const totals = span("session-balance-row session-balance-totals", "");
-    totals.append(balanceCell("input", "in", sheet.inputTotalSats, "input amounts incomplete (missing UTXO data)"));
+    totals.append(balanceCell("input", "in", sheet.inputTotalSats, "input amounts incomplete (missing UTXO data)", "total"));
     if (!sheet.outputTotalElidedByDeclaredFees) {
-        const outCell = balanceCell("output", "out", sheet.outputAccountingTotalSats, "outputs not decoded");
+        const outCell = balanceCell("output", "out", sheet.outputAccountingTotalSats, "outputs not decoded", "total");
         if (sheet.declaredFeeSats !== null && sheet.declaredFeeSats > 0) {
             outCell.title = "outputs + declared fees";
         }
