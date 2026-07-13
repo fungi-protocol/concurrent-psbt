@@ -21,7 +21,7 @@ import { HttpBackend } from "../shared-frontend/backends/http.js";
 import { PtjBackendError } from "../shared-frontend/core/types.js";
 import { seedFromRandomBytes } from "../model.js";
 import { addFragment, asArray, asObject, asString, buildConfirmArgs, buildCreateRequest, buildPayArgs, buildSyncRequest, bytesToBase64, emptySession, fragmentSummary, negotiationView, pastedPsbt, removeFragment, selectedFragments, setSelected, } from "./state.js";
-import { amountBits, amountSpanParts, elisionLabel, fragmentBadges, fragmentCardModel, rowDetailPairs, signedAmountSpanParts, } from "./display.js";
+import { amountBits, amountSpanParts, DETAIL_LEVELS, elisionLabel, fragmentBadges, fragmentCardModel, groupAggregate, rowDetailPairs, rowFacePairs, signedAmountSpanParts, } from "./display.js";
 import { classifyPaste, mintFromPaste } from "./ingest.js";
 import { actionState, addBridge, addFragmentToSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, enrichPayment, idleWire, mergeSessions, mineFragmentKeys, mintPeer, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, sessionByKey, sessionFocus, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
 import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, validateEditor, violationsFromServer, } from "./editor.js";
@@ -49,10 +49,13 @@ let assignIdsTarget = null;
 // Armed correctness-gate overrides. Cleared whenever the selection changes:
 // an override is an explicit, per-situation decision, never a sticky default.
 const overrides = new Set();
-const expanded = new Set();
-// Expanded input/output rows, keyed "<fragment>:<side>:<index>" — clicking a
-// row toggles its full-field detail (display.ts rowDetailPairs).
-const expandedRows = new Set();
+// Per-card detail-ladder level (display.ts DetailLevel). Absent = the
+// default "grouped" mode; the fourth mode (everything, raw) is the modal
+// dialog, not a card state.
+const detailLevels = new Map();
+function detailLevel(key) {
+    return detailLevels.get(key) ?? "grouped";
+}
 // Lineage notes for operation results ("join of psbt-1, psbt-2") — the
 // lattice provenance the card shows under the title.
 const lineage = new Map();
@@ -716,6 +719,7 @@ function renderFragmentCard(fragment) {
         head.append(badge(view.text, badgeToneClass(view.tone), view.emoji, view.title));
     }
     head.append(span("item-meta", fragment.origin));
+    head.append(detailToggle(fragment.key));
     item.append(head);
     const note = lineage.get(fragment.key);
     if (note)
@@ -747,33 +751,41 @@ function renderFragmentCard(fragment) {
             title.append(span("", group.label));
             groupNode.append(title);
         }
-        // Inputs LEFT, outputs RIGHT — the demo's section layout, card-shaped.
-        // The columns collapse to one in narrow cards (container query); the
-        // per-row in/out side markers keep the sides readable there.
-        const columns = document.createElement("div");
-        columns.className = "session-group-columns";
-        const inputColumn = document.createElement("div");
-        inputColumn.className = "session-group-column session-group-column-inputs";
-        const outputColumn = document.createElement("div");
-        outputColumn.className = "session-group-column session-group-column-outputs";
-        if (group.inputs.length || group.outputs.length) {
-            inputColumn.append(span("session-column-heading", "inputs"));
-            outputColumn.append(span("session-column-heading", "outputs"));
+        const level = detailLevel(fragment.key);
+        if (level === "collapsed") {
+            // One aggregate line per group — in provenance mode this reads as
+            // one line per peer's operations.
+            groupNode.append(aggregateRow(group));
         }
-        for (const input of group.inputs.slice(0, INPUT_ROWS_SHOWN)) {
-            inputColumn.append(expandableCoinRow(fragment, "input", input.index, inputRow(input)));
+        else {
+            // Inputs LEFT, outputs RIGHT — the demo's section layout, card-shaped.
+            // The columns collapse to one in narrow cards (container query); the
+            // per-row in/out side markers keep the sides readable there.
+            const columns = document.createElement("div");
+            columns.className = "session-group-columns";
+            const inputColumn = document.createElement("div");
+            inputColumn.className = "session-group-column session-group-column-inputs";
+            const outputColumn = document.createElement("div");
+            outputColumn.className = "session-group-column session-group-column-outputs";
+            if (group.inputs.length || group.outputs.length) {
+                inputColumn.append(span("session-column-heading", "inputs"));
+                outputColumn.append(span("session-column-heading", "outputs"));
+            }
+            for (const input of group.inputs.slice(0, INPUT_ROWS_SHOWN)) {
+                inputColumn.append(coinRow(fragment, "input", input.index, inputRow(input, level), level));
+            }
+            const inputsHidden = elisionLabel(INPUT_ROWS_SHOWN, group.inputs.length);
+            if (inputsHidden)
+                inputColumn.append(span("item-meta session-elided", `inputs ${inputsHidden}`));
+            for (const output of group.outputs.slice(0, OUTPUT_ROWS_SHOWN)) {
+                outputColumn.append(coinRow(fragment, "output", output.index, outputRow(output, level), level));
+            }
+            const outputsHidden = elisionLabel(OUTPUT_ROWS_SHOWN, group.outputs.length);
+            if (outputsHidden)
+                outputColumn.append(span("item-meta session-elided", `outputs ${outputsHidden}`));
+            columns.append(inputColumn, outputColumn);
+            groupNode.append(columns);
         }
-        const inputsHidden = elisionLabel(INPUT_ROWS_SHOWN, group.inputs.length);
-        if (inputsHidden)
-            inputColumn.append(span("item-meta session-elided", `inputs ${inputsHidden}`));
-        for (const output of group.outputs.slice(0, OUTPUT_ROWS_SHOWN)) {
-            outputColumn.append(expandableCoinRow(fragment, "output", output.index, outputRow(output)));
-        }
-        const outputsHidden = elisionLabel(OUTPUT_ROWS_SHOWN, group.outputs.length);
-        if (outputsHidden)
-            outputColumn.append(span("item-meta session-elided", `outputs ${outputsHidden}`));
-        columns.append(inputColumn, outputColumn);
-        groupNode.append(columns);
         // Per-group subtotals at the BOTTOM of the columns. With a single
         // group the card-level report directly below would repeat them (the
         // demo's grand-total elision rule, inverted for the card layout).
@@ -790,14 +802,8 @@ function renderFragmentCard(fragment) {
     // Footer: per-card actions.
     const foot = document.createElement("div");
     foot.className = "session-card-actions";
-    foot.append(button(expanded.has(fragment.key) ? "Hide JSON" : "JSON", "The full inspect JSON dump (not raw bytes — those live behind the export buttons)", () => {
-        if (expanded.has(fragment.key)) {
-            expanded.delete(fragment.key);
-        }
-        else {
-            expanded.add(fragment.key);
-        }
-        render();
+    foot.append(button("Raw", "Everything, raw: the full inspect JSON dump in a dialog (not raw bytes — those live behind the export buttons)", () => {
+        openRawModal(fragment, "card");
     }), button("Edit", "Field-by-field editor (liberal parsing; saving mints a new fragment)", () => {
         editor = editorModel(fragment.key, fragment.inspect, displayNetwork());
         pendingEditorFixes.clear();
@@ -807,25 +813,62 @@ function renderFragmentCard(fragment) {
     }), ...wireButtonNodes(ref, "Connect this fragment to another object (join, session, payment)."), button("Remove", "Drop the fragment from the set", () => {
         session = removeFragment(session, fragment.key);
         objects = dropFragmentKey(objects, fragment.key);
-        expanded.delete(fragment.key);
-        for (const rowKey of Array.from(expandedRows)) {
-            if (rowKey.startsWith(`${fragment.key}:`))
-                expandedRows.delete(rowKey);
-        }
+        detailLevels.delete(fragment.key);
         lineage.delete(fragment.key);
         logEvent(`removed ${fragment.key}`);
         render();
     }));
     item.append(foot);
-    if (expanded.has(fragment.key)) {
-        const detail = document.createElement("pre");
-        detail.className = "session-fragment-detail";
-        detail.textContent = fragment.inspect
-            ? JSON.stringify(fragment.inspect, null, 2)
-            : "(not decoded)";
-        item.append(detail);
-    }
     return item;
+}
+// The detail-ladder control: a three-segment toggle cycling how much of the
+// card body is visible (display.ts DetailLevel). The fourth level — every
+// field, raw — is the dialog behind each row and the card's Raw button.
+function detailToggle(key) {
+    const current = detailLevel(key);
+    const control = span("session-detail-toggle", "");
+    control.setAttribute("role", "group");
+    control.setAttribute("aria-label", `detail level for ${key}`);
+    const titles = {
+        collapsed: "collapsed: one line item with a balance per group",
+        grouped: "grouped: every input/output with chip, amount, signature state",
+        expanded: "expanded: rows plus their low-level facts (address, outpoint, sequence…)",
+    };
+    const labels = { collapsed: "Σ", grouped: "☰", expanded: "☷" };
+    for (const level of DETAIL_LEVELS) {
+        const segment = button(labels[level], titles[level], () => {
+            detailLevels.set(key, level);
+            render();
+        });
+        segment.classList.add("session-detail-segment");
+        segment.setAttribute("aria-pressed", String(level === current));
+        control.append(segment);
+    }
+    return control;
+}
+// The collapsed level's one-line group summary (display.ts groupAggregate).
+function aggregateRow(group) {
+    const aggregate = groupAggregate(group);
+    const row = span("session-aggregate-row", "");
+    const inCell = span("session-balance-cell session-balance-cell-input", "");
+    inCell.append(span("session-coin-side", `${aggregate.inputCount} in`));
+    if (aggregate.inputCount > 0) {
+        inCell.append(aggregate.inputSubtotalSats !== null
+            ? amountSpan(aggregate.inputSubtotalSats)
+            : naSlot(PARTIAL_SUBTOTAL_WHY));
+    }
+    if (aggregate.signedInputCount > 0) {
+        inCell.append(span("item-meta", `${aggregate.signedInputCount}/${aggregate.inputCount} signed`));
+    }
+    const outCell = span("session-balance-cell session-balance-cell-output", "");
+    outCell.append(span("session-coin-side", `${aggregate.outputCount} out`));
+    if (aggregate.outputCount > 0) {
+        outCell.append(aggregate.outputSubtotalSats !== null
+            ? amountSpan(aggregate.outputSubtotalSats)
+            : naSlot(PARTIAL_SUBTOTAL_WHY));
+    }
+    row.append(inCell, outCell);
+    return row;
 }
 // Emoji + text pill (display.ts fragmentBadges): with an emoji the pill
 // collapses to emoji-only in narrow cards (container query; the title
@@ -939,69 +982,70 @@ function balanceReport(sheet, feeText) {
     }
     return block;
 }
-// Row expansion: clicking an input/output row toggles a detail block with
-// the textual address and EVERY field inspect carries for that index — all
-// decoded entry fields plus the raw keymap entries (display.ts
-// rowDetailPairs), the counterpart of the chips-instead-of-text card face.
-// During a wire gesture the whole card is the tap target, so expansion
+// A coin row: clicking it opens the level-4 dialog — the textual address
+// and EVERY field inspect carries for that index, all decoded entry fields
+// plus the raw keymap entries (display.ts rowDetailPairs), the counterpart
+// of the chips-instead-of-text card face. At the "expanded" mode the row
+// also carries its curated facts inline (display.ts rowFacePairs).
+// During a wire gesture the whole card is the tap target, so the row
 // steps aside (the click bubbles to the card's wire handler).
-function expandableCoinRow(fragment, side, index, row) {
-    const key = `${fragment.key}:${side}:${index}`;
+function coinRow(fragment, side, index, row, level) {
     const host = document.createElement("div");
     host.className = "session-coin-item";
-    const open = expandedRows.has(key);
     row.classList.add("session-coin-row-expandable");
     row.setAttribute("role", "button");
-    row.setAttribute("aria-expanded", String(open));
     row.tabIndex = 0;
-    row.title = `${side} ${index} — click for every field (address, omitted fields, raw keymap entries)`;
-    const toggle = () => {
-        if (expandedRows.has(key)) {
-            expandedRows.delete(key);
-        }
-        else {
-            expandedRows.add(key);
-        }
-        render();
-    };
+    row.title = `${side} ${index} — click for every field, raw (address, omitted fields, raw keymap entries)`;
+    const open = () => openRawModal(fragment, { side, index });
     row.addEventListener("click", (event) => {
         if (wire.source)
             return; // wiring in progress: the card handles the tap
         if (event.target.closest("button, a, input"))
             return;
         event.stopPropagation();
-        toggle();
+        open();
     });
     row.addEventListener("keydown", (event) => {
         if (wire.source)
             return;
         if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            toggle();
+            open();
         }
     });
     host.append(row);
-    if (open) {
-        const detail = document.createElement("dl");
-        detail.className = "session-coin-detail";
-        const pairs = rowDetailPairs(fragment.inspect, side, index, displayNetwork());
-        for (const pair of pairs) {
+    if (level === "expanded") {
+        const facts = document.createElement("dl");
+        facts.className = "session-coin-detail session-coin-facts";
+        for (const pair of rowFacePairs(fragment.inspect, side, index, displayNetwork())) {
             const term = document.createElement("dt");
             term.textContent = pair.label;
             const value = document.createElement("dd");
             value.textContent = pair.value;
-            detail.append(term, value);
+            facts.append(term, value);
         }
-        if (!pairs.length) {
-            const term = document.createElement("dt");
-            term.textContent = "(not decoded)";
-            detail.append(term);
-        }
-        host.append(detail);
+        if (facts.childElementCount > 0)
+            host.append(facts);
     }
     return host;
 }
-function inputRow(input) {
+// The signature-presence indicator: ✓ finalized, ◐ signed but not final,
+// ○ unsigned. Text lives in the title; the mark inherits the row color.
+function signatureMark(presence, index) {
+    const marks = { final: "✓", partial: "◐", unsigned: "○" };
+    const titles = {
+        final: "finalized (final scriptSig/scriptWitness present)",
+        partial: "signature present, not finalized",
+        unsigned: "no signatures yet",
+    };
+    const mark = span(`session-sig-indicator session-sig-${presence}`, marks[presence]);
+    mark.title = `input ${index}: ${titles[presence]}`;
+    return mark;
+}
+// Row faces. The "grouped" mode is minimal identity — LifeHash chip, amount,
+// signature state; the structural warnings (no utxo data, no id) join at
+// the "expanded" mode, and everything else lives in the dialog.
+function inputRow(input, level) {
     const row = document.createElement("div");
     row.className = "session-coin-row";
     row.append(span("session-coin-side", "in"));
@@ -1018,25 +1062,26 @@ function inputRow(input) {
     else {
         row.append(span("item-meta", "amount unknown"));
     }
-    if (!input.hasWitnessUtxo && !input.hasNonWitnessUtxo) {
+    row.append(signatureMark(input.signatures, input.index));
+    if (level === "expanded" && !input.hasWitnessUtxo && !input.hasNonWitnessUtxo) {
         row.append(span("session-badge session-badge-warn", "no utxo data"));
     }
     return row;
 }
-function outputRow(output) {
+function outputRow(output, level) {
     const row = document.createElement("div");
     row.className = "session-coin-row";
     row.append(span("session-coin-side", "out"));
     if (output.uniqueIdHex) {
         row.append(lifehashBadge(output.uniqueIdHex, `output unique id (output ${output.index})`));
     }
-    else {
+    else if (level === "expanded") {
         row.append(span("session-badge session-badge-warn", "no id"));
     }
     if (output.scriptHex && output.address) {
         // Address as LifeHash chip of the script_pubkey hex — the textual
         // address rides the chip title/aria-label and stays available in the
-        // expanded raw view and the field editor.
+        // dialog's raw view and the field editor.
         row.append(lifehashBadge(output.scriptHex, `${output.address}\n${output.scriptLabel} (output ${output.index})`));
     }
     else if (output.scriptHex) {
@@ -1052,6 +1097,47 @@ function outputRow(output) {
     if (output.amountSats !== null)
         row.append(amountSpan(output.amountSats));
     return row;
+}
+// --- the level-4 dialog: everything, raw -------------------------------------
+//
+// One <dialog> serves every scope: a single row (rowDetailPairs — every
+// decoded field plus the raw keymap entries) or the whole card (the full
+// inspect JSON dump). Native showModal gives Esc and focus trapping;
+// clicking the backdrop closes.
+function openRawModal(fragment, scope) {
+    const dialog = el("rawDialog");
+    const title = el("rawDialogTitle");
+    const dialogBody = el("rawDialogBody");
+    dialogBody.textContent = "";
+    if (scope === "card") {
+        title.textContent = `${fragment.key} — inspect JSON`;
+        const detail = document.createElement("pre");
+        detail.className = "session-fragment-detail";
+        detail.textContent = fragment.inspect
+            ? JSON.stringify(fragment.inspect, null, 2)
+            : "(not decoded)";
+        dialogBody.append(detail);
+    }
+    else {
+        title.textContent = `${fragment.key} — ${scope.side} ${scope.index}`;
+        const detail = document.createElement("dl");
+        detail.className = "session-coin-detail";
+        const pairs = rowDetailPairs(fragment.inspect, scope.side, scope.index, displayNetwork());
+        for (const pair of pairs) {
+            const term = document.createElement("dt");
+            term.textContent = pair.label;
+            const value = document.createElement("dd");
+            value.textContent = pair.value;
+            detail.append(term, value);
+        }
+        if (!pairs.length) {
+            const term = document.createElement("dt");
+            term.textContent = "(not decoded)";
+            detail.append(term);
+        }
+        dialogBody.append(detail);
+    }
+    dialog.showModal();
 }
 // The per-card Wire affordance, action made visible (the wiring verdict
 // system's labels): idle it STARTS a gesture; while a gesture is active it
@@ -2307,6 +2393,14 @@ function wireDom() {
     }
     el("addObject").addEventListener("click", () => void addObject());
     el("uploadInput").addEventListener("change", () => void loadUpload());
+    const rawDialog = el("rawDialog");
+    el("rawDialogClose").addEventListener("click", () => rawDialog.close());
+    rawDialog.addEventListener("click", (event) => {
+        // A click on the dialog element itself is the backdrop (the content
+        // is fully covered by the dialog's children).
+        if (event.target === rawDialog)
+            rawDialog.close();
+    });
     el("addDrawerToggle").addEventListener("click", () => {
         setAddDrawer(el("addDrawer").hidden);
     });
