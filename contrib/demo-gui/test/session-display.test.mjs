@@ -13,10 +13,13 @@ import {
   formatFeeRate,
   fragmentBadges,
   fragmentCardModel,
+  groupAggregate,
   inputViews,
   outputViews,
   rowDetailPairs,
+  rowFacePairs,
   scriptTemplate,
+  signaturePresence,
   signedAmountSpanParts,
   sizeEstimateVbytesFromInspect,
 } from "../dist/session/display.js";
@@ -352,6 +355,95 @@ test("rowDetailPairs: every decoded field plus the raw keymap entries", () => {
   const bare = rowDetailPairs(INSPECT, "output", 1, "bitcoin");
   assert.ok(bare.length > 0);
   assert.ok(bare.every((pair) => !pair.label.startsWith("raw ")));
+});
+
+// --- detail ladder (signaturePresence, groupAggregate, rowFacePairs) --------
+
+test("signaturePresence reads the raw keymap keytypes", () => {
+  const withSigs = {
+    ...INSPECT,
+    raw: {
+      inputs: [
+        [
+          { key_hex: "0e", value_hex: "aa".repeat(32), kind: "known" },
+          { key_hex: "02" + "03".repeat(33), value_hex: "30".repeat(70), kind: "known" },
+        ],
+        [{ key_hex: "08", value_hex: "beef", kind: "known" }],
+      ],
+      outputs: [[], [], []],
+    },
+  };
+  assert.equal(signaturePresence(withSigs, 0), "partial"); // PARTIAL_SIG (0x02)
+  assert.equal(signaturePresence(withSigs, 1), "final"); // FINAL_SCRIPTWITNESS (0x08)
+  // Taproot key-path signature counts as a (non-final) signature.
+  const taproot = { raw: { inputs: [[{ key_hex: "13", value_hex: "40".repeat(64), kind: "known" }]] } };
+  assert.equal(signaturePresence(taproot, 0), "partial");
+  // No signature keytypes, missing raw section, out of range: unsigned.
+  assert.equal(signaturePresence(withSigs, 9), "unsigned");
+  assert.equal(signaturePresence(INSPECT, 0), "unsigned");
+  assert.equal(signaturePresence(null, 0), "unsigned");
+  // inputViews carries the presence onto every row.
+  assert.deepEqual(
+    inputViews(withSigs).map((input) => input.signatures),
+    ["partial", "final"],
+  );
+});
+
+test("groupAggregate summarizes a group into one line of facts", () => {
+  const inputs = inputViews(INSPECT);
+  const outputs = outputViews(INSPECT, "regtest");
+  const [group] = cardGroups(inputs, outputs);
+  assert.deepEqual(groupAggregate(group), {
+    inputCount: 2,
+    outputCount: 3,
+    inputSubtotalSats: null, // one input amount unknown — a partial sum would lie
+    outputSubtotalSats: 125000,
+    signedInputCount: 0,
+  });
+
+  const signed = { ...inputs[0], signatures: "partial" };
+  const [signedGroup] = cardGroups([signed, inputs[1]], []);
+  assert.equal(groupAggregate(signedGroup).signedInputCount, 1);
+  assert.equal(groupAggregate(signedGroup).outputCount, 0);
+  assert.equal(groupAggregate(signedGroup).outputSubtotalSats, null);
+});
+
+test("rowFacePairs is the curated level-3 subset, not the raw dump", () => {
+  const input = rowFacePairs(INSPECT, "input", 0, "regtest");
+  assert.deepEqual(
+    input.map((pair) => pair.label),
+    ["outpoint", "sequence", "utxo data", "signatures"],
+  );
+  assert.equal(input[0].value, `${"aa".repeat(32)}:0`);
+  assert.equal(input[2].value, "witness utxo");
+  assert.equal(input[3].value, "unsigned");
+
+  // Sparse input: no sequence pair, honest "none" for utxo data.
+  const sparse = rowFacePairs(INSPECT, "input", 1, "regtest");
+  assert.deepEqual(
+    sparse.map((pair) => pair.label),
+    ["outpoint", "utxo data", "signatures"],
+  );
+  assert.equal(sparse.find((pair) => pair.label === "utxo data").value, "none");
+
+  const output = rowFacePairs(INSPECT, "output", 0, "regtest");
+  assert.deepEqual(
+    output.map((pair) => pair.label),
+    ["address", "script", "unique id"],
+  );
+  assert.equal(output[0].value, "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080");
+
+  // OP_RETURN output: no address, script label still present, uid present.
+  const nonstandard = rowFacePairs(INSPECT, "output", 2, "regtest");
+  assert.deepEqual(
+    nonstandard.map((pair) => pair.label),
+    ["script", "unique id"],
+  );
+
+  // Never the raw keymap: face pairs stay curated even when raw data exists.
+  assert.ok(rowFacePairs(INSPECT, "output", 0, "regtest").every((pair) => !pair.label.startsWith("raw ")));
+  assert.deepEqual(rowFacePairs(null, "input", 0, "regtest"), []);
+  assert.deepEqual(rowFacePairs(INSPECT, "output", 9, "regtest"), []);
 });
 
 // --- amount emphasis (BIP 177 sat-first; the ead6ca05 convention) ----------
