@@ -2399,9 +2399,22 @@ h2 {
 }
 
 /* Drag-to-wire: wireable cards keep vertical scroll on touch; horizontal
-   presses become the wire gesture. */
+   presses become the wire gesture. The grab cursor advertises it. */
 [data-wire-kind] {
   touch-action: pan-y;
+  cursor: grab;
+}
+
+[data-wire-kind]:active {
+  cursor: grabbing;
+}
+
+/* Idle state of the wire status bar: a quiet standing hint, promoted to
+   full strength while a drag is live. */
+.session-wire-status.session-wire-status-idle {
+  border-color: var(--border);
+  background: transparent;
+  opacity: 0.75;
 }
 
 /* The hovered drop target while a drag is live. */
