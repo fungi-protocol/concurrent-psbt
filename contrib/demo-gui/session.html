@@ -112,6 +112,9 @@
           <button id="opExportBip174" type="button" data-action="export-bip174" title="Convert the selected fragment to BIP 174 base64 (needs an ordered PSBT)">Export BIP 174</button>
         </div>
         <div id="gateOverrides" class="session-gate-overrides"></div>
+        <!-- Pressing a disabled op surfaces its reason here: title tooltips
+             are hover-only, and disabled buttons swallow clicks silently. -->
+        <p id="opsHint" class="item-meta session-ops-hint" role="status" hidden></p>
       </section>
 
     </main>

@@ -1804,6 +1804,11 @@ h2 {
   margin-right: 4px;
 }
 
+/* The disabled-op explainer under the toolbar (filled on press). */
+.session-ops-hint {
+  margin: 6px 0 0;
+}
+
 .session-seed {
   max-width: 180px;
 }

@@ -82,3 +82,14 @@ test("one shared bottom Add drawer owns quick paste and manual peer creation", (
   }
   assert.match(app, /Pair unavailable until the ptj adapter exposes session pairing/);
 });
+
+test("disabled ops explain themselves on press, not only on hover", () => {
+  const hint = html.indexOf('id="opsHint"');
+  assert.ok(hint >= 0, "the ops hint line is present");
+  assert.ok(hint > html.indexOf('id="gateOverrides"'), "the hint follows the gate rows");
+  assert.match(html, /id="opsHint"[^>]*role="status"/, "the hint is a live status region");
+  // The reason is stashed per button and surfaced by hit-testing the press
+  // (disabled buttons swallow their own pointer events).
+  assert.match(app, /dataset\.why = why/);
+  assert.match(app, /elementsFromPoint\(event\.clientX, event\.clientY\)/);
+});
