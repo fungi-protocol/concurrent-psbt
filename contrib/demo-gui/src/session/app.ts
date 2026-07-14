@@ -444,11 +444,14 @@ function enablementContext() {
 
 function renderOps(): void {
   const ctx = enablementContext();
+  // Enablement changed, so a previously surfaced disabled-reason is stale.
+  el<HTMLElement>("opsHint").hidden = true;
   const gates: { action: SessionAction; id: string; label: string; warning: string }[] = [];
   for (const [id, action] of ACTION_BUTTONS) {
     const node = el<HTMLButtonElement>(id);
     const state = actionState(action, ctx);
     node.disabled = !state.enabled;
+    node.dataset.why = "";
     const base = BASE_TITLE.get(id) ?? "";
     if (state.enabled && state.overridden && state.gate) {
       node.title = `${base}\nOVERRIDDEN: ${state.gate.label} — ${state.gate.warning}`.trim();
@@ -461,6 +464,7 @@ function renderOps(): void {
           : state.reason
         : "";
       node.title = why ? `${base}\ndisabled: ${why}`.trim() : base;
+      node.dataset.why = why;
     }
     if (state.gate) {
       gates.push({ action, ...state.gate });
@@ -3073,6 +3077,22 @@ function wireDom(): void {
   el<HTMLButtonElement>("addPeerQuick").addEventListener("click", () => setAddDrawer(true, true));
   el<HTMLFormElement>("manualPeerForm").addEventListener("submit", addManualPeer);
   initSamplesPalette();
+
+  // Disabled buttons never see clicks, so a press lands on the toolbar;
+  // hit-test the point for a disabled op and surface its stored reason in
+  // #opsHint (the same text the hover tooltip carries).
+  el<HTMLElement>("sessionOps").addEventListener("pointerdown", (event) => {
+    const hit = document
+      .elementsFromPoint(event.clientX, event.clientY)
+      .find(
+        (node): node is HTMLButtonElement =>
+          node instanceof HTMLButtonElement && node.disabled && node.dataset.action !== undefined,
+      );
+    if (!hit) return;
+    const hint = el<HTMLElement>("opsHint");
+    hint.textContent = `${hit.textContent}: ${hit.dataset.why || "unavailable"}`;
+    hint.hidden = false;
+  });
 
   el<HTMLButtonElement>("opJoin").addEventListener("click", () => void joinSelected());
   el<HTMLButtonElement>("opConcatenate").addEventListener("click", () => void concatenateSelected());
