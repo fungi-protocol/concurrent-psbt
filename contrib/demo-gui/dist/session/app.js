@@ -284,11 +284,14 @@ function enablementContext() {
 }
 function renderOps() {
     const ctx = enablementContext();
+    // Enablement changed, so a previously surfaced disabled-reason is stale.
+    el("opsHint").hidden = true;
     const gates = [];
     for (const [id, action] of ACTION_BUTTONS) {
         const node = el(id);
         const state = actionState(action, ctx);
         node.disabled = !state.enabled;
+        node.dataset.why = "";
         const base = BASE_TITLE.get(id) ?? "";
         if (state.enabled && state.overridden && state.gate) {
             node.title = `${base}\nOVERRIDDEN: ${state.gate.label} — ${state.gate.warning}`.trim();
@@ -302,6 +305,7 @@ function renderOps() {
                     : state.reason
                 : "";
             node.title = why ? `${base}\ndisabled: ${why}`.trim() : base;
+            node.dataset.why = why;
         }
         if (state.gate) {
             gates.push({ action, ...state.gate });
@@ -2538,6 +2542,19 @@ function wireDom() {
     el("addPeerQuick").addEventListener("click", () => setAddDrawer(true, true));
     el("manualPeerForm").addEventListener("submit", addManualPeer);
     initSamplesPalette();
+    // Disabled buttons never see clicks, so a press lands on the toolbar;
+    // hit-test the point for a disabled op and surface its stored reason in
+    // #opsHint (the same text the hover tooltip carries).
+    el("sessionOps").addEventListener("pointerdown", (event) => {
+        const hit = document
+            .elementsFromPoint(event.clientX, event.clientY)
+            .find((node) => node instanceof HTMLButtonElement && node.disabled && node.dataset.action !== undefined);
+        if (!hit)
+            return;
+        const hint = el("opsHint");
+        hint.textContent = `${hit.textContent}: ${hit.dataset.why || "unavailable"}`;
+        hint.hidden = false;
+    });
     el("opJoin").addEventListener("click", () => void joinSelected());
     el("opConcatenate").addEventListener("click", () => void concatenateSelected());
     el("opSort").addEventListener("click", () => void sortSelected());
