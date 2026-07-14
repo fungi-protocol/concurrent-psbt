@@ -93,3 +93,12 @@ test("disabled ops explain themselves on press, not only on hover", () => {
   assert.match(app, /dataset\.why = why/);
   assert.match(app, /elementsFromPoint\(event\.clientX, event\.clientY\)/);
 });
+
+test("the wire drag advertises itself when idle", () => {
+  // Grab cursor on every wireable card…
+  assert.match(styles, /\[data-wire-kind\]\s*\{[^}]*cursor:\s*grab;/);
+  assert.match(styles, /\[data-wire-kind\]:active\s*\{[^}]*cursor:\s*grabbing;/);
+  // …and a standing hint in the status bar instead of a hidden one.
+  assert.match(app, /session-wire-status-idle/);
+  assert.match(app, /drag a card onto another to wire them/);
+});
