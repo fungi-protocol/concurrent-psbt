@@ -592,6 +592,7 @@ function paintWireTargets(): void {
   }
   const host = el<HTMLElement>("wireStatus");
   host.hidden = false;
+  host.classList.remove("session-wire-status-idle");
   el<HTMLElement>("wireStatusText").textContent =
     `wiring from ${nodeName(wire.source)} — drop on a highlighted card to queue the wire ` +
     "(dimmed cards explain why not)";
@@ -608,7 +609,8 @@ function clearWirePaint(): void {
     );
     node.removeAttribute("title");
   }
-  el<HTMLElement>("wireStatus").hidden = true;
+  // Back from live-drag messaging to the idle advertisement.
+  renderWireStatus();
 }
 
 // The drag line: one fixed-position element from the gesture's start to
@@ -1961,8 +1963,14 @@ function renderBridgeGroupCard(members: PeerObject[]): HTMLLIElement {
 
 function renderWireStatus(): void {
   // The live-drag hint is painted imperatively (paintWireTargets); at
-  // render time the gesture is always over, so the bar only hides.
-  el<HTMLElement>("wireStatus").hidden = true;
+  // render time the gesture is always over, so the bar idles as the
+  // gesture's advertisement whenever anything on screen is wireable.
+  // (render() calls this after the card passes so the DOM query sees them.)
+  const host = el<HTMLElement>("wireStatus");
+  host.classList.add("session-wire-status-idle");
+  host.hidden = document.querySelector("[data-wire-kind]") === null;
+  el<HTMLElement>("wireStatusText").textContent =
+    "drag a card onto another to wire them — Esc cancels a drag";
   renderWireQueue();
 }
 
@@ -3045,11 +3053,13 @@ async function listPayments(event: Event): Promise<void> {
 
 function render(): void {
   renderFocus();
-  renderWireStatus();
   renderPeerShelf();
   renderSessionShelf();
   renderFragments();
   renderObjects();
+  // After the card passes: the idle wire hint asks the DOM whether any
+  // wireable card exists.
+  renderWireStatus();
   renderOps();
   el<HTMLElement>("createWireTarget").hidden = !(wire.source && wire.source.kind === "utxo");
 }

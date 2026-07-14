@@ -407,6 +407,7 @@ function paintWireTargets() {
     }
     const host = el("wireStatus");
     host.hidden = false;
+    host.classList.remove("session-wire-status-idle");
     el("wireStatusText").textContent =
         `wiring from ${nodeName(wire.source)} — drop on a highlighted card to queue the wire ` +
             "(dimmed cards explain why not)";
@@ -416,7 +417,8 @@ function clearWirePaint() {
         node.classList.remove("session-wire-source", "session-wire-target", "session-wire-incompatible", "session-wire-blocked", "session-wire-hover");
         node.removeAttribute("title");
     }
-    el("wireStatus").hidden = true;
+    // Back from live-drag messaging to the idle advertisement.
+    renderWireStatus();
 }
 // The drag line: one fixed-position element from the gesture's start to
 // the pointer, created lazily and reused.
@@ -1535,8 +1537,14 @@ function renderBridgeGroupCard(members) {
 // --- wire status + focus bar ---------------------------------------------------------
 function renderWireStatus() {
     // The live-drag hint is painted imperatively (paintWireTargets); at
-    // render time the gesture is always over, so the bar only hides.
-    el("wireStatus").hidden = true;
+    // render time the gesture is always over, so the bar idles as the
+    // gesture's advertisement whenever anything on screen is wireable.
+    // (render() calls this after the card passes so the DOM query sees them.)
+    const host = el("wireStatus");
+    host.classList.add("session-wire-status-idle");
+    host.hidden = document.querySelector("[data-wire-kind]") === null;
+    el("wireStatusText").textContent =
+        "drag a card onto another to wire them — Esc cancels a drag";
     renderWireQueue();
 }
 // The pending-wire queue panel: one row per queued edge with its action
@@ -2512,11 +2520,13 @@ async function listPayments(event) {
 // --- render root -----------------------------------------------------------------
 function render() {
     renderFocus();
-    renderWireStatus();
     renderPeerShelf();
     renderSessionShelf();
     renderFragments();
     renderObjects();
+    // After the card passes: the idle wire hint asks the DOM whether any
+    // wireable card exists.
+    renderWireStatus();
     renderOps();
     el("createWireTarget").hidden = !(wire.source && wire.source.kind === "utxo");
 }
