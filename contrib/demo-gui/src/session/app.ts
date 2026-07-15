@@ -2633,7 +2633,9 @@ function promptSortSeed(fragmentKey: string): Promise<string | null> {
   const input = el<HTMLInputElement>("sortSeedInput");
   input.value = "";
   return new Promise((resolve) => {
-    sortSeedResolve?.(null); // a re-prompt cancels any dangling prompt
+    // A re-prompt cancels any dangling prompt AND closes its dialog —
+    // showModal() on an already-open dialog throws inside this executor.
+    settleSortSeed(null);
     sortSeedResolve = resolve;
     dialog.showModal();
     input.focus();
@@ -3345,10 +3347,20 @@ function wireDom(): void {
   });
   // The sort-seed prompt settles the pending promise: confirm resolves the
   // trimmed hex, cancel/backdrop/Esc resolve null (the sort is abandoned).
+  // An empty or non-hex confirm is NOT a cancel — the dialog stays open and
+  // the field says why, so the sort is never silently abandoned.
   const sortSeedDialog = el<HTMLDialogElement>("sortSeedDialog");
+  const sortSeedInput = el<HTMLInputElement>("sortSeedInput");
   el<HTMLButtonElement>("sortSeedConfirm").addEventListener("click", () => {
-    settleSortSeed(el<HTMLInputElement>("sortSeedInput").value.trim() || null);
+    const seed = sortSeedInput.value.trim();
+    if (!/^([0-9a-fA-F]{2})+$/.test(seed)) {
+      sortSeedInput.setCustomValidity("enter a hex seed (whole bytes), or Generate one");
+      sortSeedInput.reportValidity();
+      return;
+    }
+    settleSortSeed(seed);
   });
+  sortSeedInput.addEventListener("input", () => sortSeedInput.setCustomValidity(""));
   el<HTMLButtonElement>("sortSeedCancel").addEventListener("click", () => settleSortSeed(null));
   el<HTMLButtonElement>("sortSeedGenerate").addEventListener("click", () => {
     const bytes = new Uint8Array(16);

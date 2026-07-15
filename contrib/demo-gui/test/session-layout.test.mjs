@@ -139,6 +139,10 @@ test("the sort seed is PSBT state: no ops-bar field, a prompt only when absent",
   assert.match(app, /summary\.sortMode !== "explicit" && !summary\.seedHex/);
   // Cancel paths resolve the pending sort as abandoned, never half-armed.
   assert.match(app, /sortSeedDialog\.addEventListener\("cancel", \(\) => settleSortSeed\(null\)\)/);
+  // …but an empty/non-hex confirm is NOT a cancel: it keeps the dialog
+  // open with a field-level validity message instead of settling null.
+  assert.match(app, /setCustomValidity\("enter a hex seed/);
+  assert.match(app, /reportValidity\(\)/);
 });
 
 test("a local 'peer' presents as a disk location, not an identity", () => {
