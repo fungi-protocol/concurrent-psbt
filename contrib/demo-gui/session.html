@@ -66,9 +66,10 @@
         <span id="focusTitle" class="item-title"></span>
       </nav>
 
-      <!-- The work area: published session containers plus the MINE strip.
-           No "Me" heading — MINE below is the one name for the local side
-           (the panel also hosts published areas, which are not local). -->
+      <!-- The work area: published session containers plus a flat bottom
+           band of sessionless local cards. Local/unpublished is the default
+           and carries no heading or badge of its own — published session
+           areas are the labelled exception. -->
       <section class="control-section session-panel session-panel-wide" aria-label="PSBT work area" data-spatial-region="me" data-focus-hide="">
         <div id="sessionStatus" class="session-status" role="status"></div>
         <!-- The wire-status bar: an idle advertisement of the drag-to-wire

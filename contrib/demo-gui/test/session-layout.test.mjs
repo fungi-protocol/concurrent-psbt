@@ -49,6 +49,11 @@ test("the Mine strip is the bottom band and owns an empty workbench", () => {
   // With no peers and no sessions the shelves collapse and Mine expands.
   assert.match(app, /"session-workbench-solo",\s*objects\.peers\.length === 0 && objects\.sessions\.length === 0/);
   assert.match(styles, /\.session-workbench-solo \.session-area-list\s*>\s*\.session-mine-area\s*\{[\s\S]*?flex:\s*1 0 auto;/);
+  // The band is layout only — no nested pseudo-peer: local/unpublished is
+  // the default, so it wears no title and no badge (published areas do).
+  const mine = app.slice(app.indexOf("function renderMineArea"), app.indexOf("function renderSessionArea"));
+  assert.doesNotMatch(mine, /item-title/);
+  assert.doesNotMatch(mine, /badge\(/);
 });
 
 test("the real shell keeps peers above sessions and the Me workspace", () => {

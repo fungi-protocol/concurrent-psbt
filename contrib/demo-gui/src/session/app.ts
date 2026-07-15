@@ -1084,39 +1084,28 @@ function renderFragments(): void {
   el<HTMLElement>("fragmentEmpty").hidden = session.fragments.length > 0;
 }
 
-// The MINE pseudo-peer container: a peer-like large area holding the
-// sessionless local fragments (Q6). Local-only workflows (join, sort,
-// edit, atomize) happen here; wiring a fragment to a session publishes it
-// and moves it out.
+// The bottom band of the work area: the sessionless local fragments (Q6).
+// Being local/unpublished is the DEFAULT, so — like unattributed rows —
+// the band carries no title and no badge: published session areas are the
+// labelled exception, and everything else in the panel is simply yours.
+// The element survives purely for layout (bottom pinning, solo expansion).
 function renderMineArea(fragments: SessionFragment[]): HTMLLIElement {
   const item = document.createElement("li");
   item.className = "session-mine-area";
-  const head = document.createElement("div");
-  head.className = "session-fragment-row";
-  head.append(
-    span("item-title", "Mine"),
-    badge("local only", "session-badge"),
-    span(
-      "item-meta",
-      `${fragments.length} local fragment(s), not published to any session`,
-    ),
-  );
-  item.append(head);
-  item.append(
-    span(
-      "item-meta session-area-hint",
-      "Local-only workflows (join, sort, edit, atomize) happen here; wiring a fragment to a session publishes it.",
-    ),
-  );
   const inner = document.createElement("ul");
   inner.className = "item-list session-card-list";
   for (const fragment of fragments) {
     inner.append(renderFragmentCard(fragment));
   }
   item.append(inner);
-  if (!fragments.length) {
-    item.append(span("item-meta session-area-hint", "empty — every loaded fragment is published"));
-  }
+  item.append(
+    span(
+      "item-meta session-area-hint",
+      fragments.length
+        ? "not published to any session — wiring a card to a session publishes it"
+        : "every loaded fragment is published",
+    ),
+  );
   return item;
 }
 
