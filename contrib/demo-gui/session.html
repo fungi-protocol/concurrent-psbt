@@ -104,11 +104,7 @@
           <button id="opJoin" type="button" class="primary" data-action="join" title="Lattice join of the selected unordered PSBTs">Join</button>
           <button id="opConcatenate" type="button" data-action="concatenate" title="Concatenate the selected PSBTs in list order">Concatenate</button>
           <button id="opMakeUnordered" type="button" data-action="make-unordered" title="Shuffle an ordered PSBT into unordered form">Make unordered</button>
-          <button id="opSort" type="button" data-action="sort" title="Run the sorter role on the selected PSBT">Sort</button>
-          <label class="field-label compact session-seed" for="sortSeed">
-            sort seed (hex, optional)
-            <input id="sortSeed" autocomplete="off" spellcheck="false" placeholder="abcd">
-          </label>
+          <button id="opSort" type="button" data-action="sort" title="Run the sorter role on the selected PSBT (the seed comes from the PSBT; a dialog asks if it carries none)">Sort</button>
           <button id="opAtomize" type="button" data-action="atomize" title="Split the selected PSBT into single-element fragments">Atomize</button>
           <button id="opAssignIds" type="button" data-action="assign-ids" title="Assign unique ids to outputs missing them (manual per-output ids optional; the panel opens on click)">Assign ids</button>
           <button id="opExportV2" type="button" data-action="export-v2" title="Show the selected fragment as BIP 370 base64">Export BIP 370</button>
@@ -478,6 +474,27 @@
         <button id="rawDialogClose" type="button" aria-label="Close raw view">×</button>
       </div>
       <div id="rawDialogBody" class="session-modal-body"></div>
+    </dialog>
+
+    <!-- Sort-seed prompt: opens ONLY when the selected PSBT carries neither
+         explicit sort keys nor a stored PSBT_GLOBAL_SORT_SEED. The seed is
+         PSBT state, not a standing UI parameter — hence no ops-bar field. -->
+    <dialog id="sortSeedDialog" class="session-modal" aria-labelledby="sortSeedDialogTitle">
+      <div class="session-output-heading">
+        <h2 id="sortSeedDialogTitle">Sort seed needed</h2>
+        <button id="sortSeedCancel" type="button" aria-label="Cancel sort">×</button>
+      </div>
+      <div class="session-modal-body">
+        <p id="sortSeedDialogWhy" class="item-meta"></p>
+        <label class="field-label" for="sortSeedInput">
+          sort seed (hex, 16 bytes minimum)
+          <input id="sortSeedInput" autocomplete="off" spellcheck="false" placeholder="128-bit hex seed">
+        </label>
+        <div class="session-card-actions">
+          <button id="sortSeedGenerate" type="button" title="Fill the field with a random 128-bit seed">Generate</button>
+          <button id="sortSeedConfirm" type="button" class="primary">Sort with this seed</button>
+        </div>
+      </div>
     </dialog>
 
     <script type="module" src="dist/session/app.js?v=20260715-reviewfixes"></script>

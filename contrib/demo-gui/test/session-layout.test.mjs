@@ -128,6 +128,18 @@ test("fragment selection has a keyboard path", () => {
   assert.doesNotMatch(card, /item\.setAttribute\("aria-pressed"/);
 });
 
+test("the sort seed is PSBT state: no ops-bar field, a prompt only when absent", () => {
+  // The standing "sort seed (hex, optional)" input is gone from the ops bar…
+  assert.doesNotMatch(html, /id="sortSeed"/);
+  // …replaced by a dialog that opens only when the PSBT carries neither
+  // explicit sort keys nor a stored seed.
+  assert.match(html, /<dialog id="sortSeedDialog"/);
+  assert.match(html, /id="sortSeedGenerate"/);
+  assert.match(app, /summary\.sortMode !== "explicit" && !summary\.seedHex/);
+  // Cancel paths resolve the pending sort as abandoned, never half-armed.
+  assert.match(app, /sortSeedDialog\.addEventListener\("cancel", \(\) => settleSortSeed\(null\)\)/);
+});
+
 test("coins wear the mockup's boundary", () => {
   // The mockup draws every coin as rect.coin-body (thin ink stroke,
   // radius 5); the session coin items carry the CSS equivalent.

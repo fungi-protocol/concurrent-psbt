@@ -2108,13 +2108,53 @@ async function concatenateSelected() {
         reportError("concatenate", error);
     }
 }
+// The sort seed is PSBT state (PSBT_GLOBAL_SORT_SEED), not a UI parameter:
+// explicit sort keys or a stored seed mean the backend sorts with what the
+// PSBT carries. Only a fragment with NEITHER prompts — a modal asking for
+// the missing seed (resolves null on cancel).
+function sortSeedNeeded(fragment) {
+    const summary = fragmentSummary(fragment.inspect);
+    return summary.sortMode !== "explicit" && !summary.seedHex;
+}
+let sortSeedResolve = null;
+function promptSortSeed(fragmentKey) {
+    const dialog = el("sortSeedDialog");
+    el("sortSeedDialogWhy").textContent =
+        `${fragmentKey} carries no explicit sort keys and no PSBT_GLOBAL_SORT_SEED — ` +
+            `the sorter role needs a seed. It rides this one request; the sorted result stores it.`;
+    const input = el("sortSeedInput");
+    input.value = "";
+    return new Promise((resolve) => {
+        sortSeedResolve?.(null); // a re-prompt cancels any dangling prompt
+        sortSeedResolve = resolve;
+        dialog.showModal();
+        input.focus();
+    });
+}
+function settleSortSeed(seed) {
+    const dialog = el("sortSeedDialog");
+    if (dialog.open)
+        dialog.close();
+    sortSeedResolve?.(seed);
+    sortSeedResolve = null;
+}
+// Resolve the seed to send for a fragment: undefined = the PSBT's own
+// records suffice; a string = the prompted seed; null = the user cancelled.
+async function sortSeedFor(fragment) {
+    if (!sortSeedNeeded(fragment))
+        return undefined;
+    const seed = await promptSortSeed(fragment.key);
+    return seed === null ? null : seed;
+}
 async function sortSelected() {
     const selected = requireEnabled("sort");
     if (!selected)
         return;
-    const seed = inputValue("sortSeed").trim();
+    const seed = await sortSeedFor(selected[0]);
+    if (seed === null)
+        return; // prompt cancelled
     try {
-        await addResponse(await backend.sortPsbt(selected[0].psbt, seed || undefined), "sort", `sort of ${selected[0].key}`);
+        await addResponse(await backend.sortPsbt(selected[0].psbt, seed), "sort", `sort of ${selected[0].key}`);
         showStatus("", false);
     }
     catch (error) {
@@ -2156,15 +2196,11 @@ async function applySetTxModifiableFix(fragment) {
     return minted;
 }
 async function applySortFirstFix(fragment) {
-    let seed = inputValue("sortSeed").trim() || undefined;
-    if (!seed && !fragmentSummary(fragment.inspect).seedHex) {
-        // The sorter role needs PSBT_GLOBAL_SORT_SEED; the fragment carries none
-        // and the field is blank, so generate one (the create form's spec
-        // minimum: 128 bits) and say so.
-        const bytes = new Uint8Array(16);
-        crypto.getRandomValues(bytes);
-        seed = seedFromRandomBytes(bytes);
-        logEvent(`override fix: generated a random sort seed (${seed}) — fill the sort-seed field to control it`);
+    // Same seed policy as the Sort op: the PSBT's own records when it has
+    // them, the modal prompt when it doesn't (Generate lives in the dialog).
+    const seed = await sortSeedFor(fragment);
+    if (seed === null) {
+        throw new Error("sort-first fix cancelled: no sort seed provided");
     }
     const sorted = await addResponse(await backend.sortPsbt(fragment.psbt, seed), "sort", `sort of ${fragment.key} (override fix)`);
     logEvent(`override fix: ${fragment.key} → ${sorted.key} (sorted via /api/sort)`);
@@ -2723,6 +2759,23 @@ function wireDom() {
         if (event.target === rawDialog)
             rawDialog.close();
     });
+    // The sort-seed prompt settles the pending promise: confirm resolves the
+    // trimmed hex, cancel/backdrop/Esc resolve null (the sort is abandoned).
+    const sortSeedDialog = el("sortSeedDialog");
+    el("sortSeedConfirm").addEventListener("click", () => {
+        settleSortSeed(el("sortSeedInput").value.trim() || null);
+    });
+    el("sortSeedCancel").addEventListener("click", () => settleSortSeed(null));
+    el("sortSeedGenerate").addEventListener("click", () => {
+        const bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        el("sortSeedInput").value = seedFromRandomBytes(bytes);
+    });
+    sortSeedDialog.addEventListener("click", (event) => {
+        if (event.target === sortSeedDialog)
+            settleSortSeed(null);
+    });
+    sortSeedDialog.addEventListener("cancel", () => settleSortSeed(null));
     el("addDrawerToggle").addEventListener("click", () => {
         setAddDrawer(el("addDrawer").hidden);
     });
