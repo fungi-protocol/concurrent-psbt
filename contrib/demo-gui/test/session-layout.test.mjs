@@ -128,6 +128,12 @@ test("fragment selection has a keyboard path", () => {
   assert.doesNotMatch(card, /item\.setAttribute\("aria-pressed"/);
 });
 
+test("coins wear the mockup's boundary", () => {
+  // The mockup draws every coin as rect.coin-body (thin ink stroke,
+  // radius 5); the session coin items carry the CSS equivalent.
+  assert.match(styles, /\.session-coin-item\s*\{[\s\S]*?border:\s*1px solid[\s\S]*?border-radius:\s*5px;/);
+});
+
 test("the wire drag advertises itself when idle", () => {
   // Grab cursor on every wireable card…
   assert.match(styles, /\[data-wire-kind\]\s*\{[^}]*cursor:\s*grab;/);
