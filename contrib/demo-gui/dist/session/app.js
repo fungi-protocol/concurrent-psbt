@@ -792,7 +792,14 @@ const OUTPUT_ROWS_SHOWN = 3;
 function renderFragments() {
     const list = el("fragmentList");
     list.textContent = "";
+    // Solo mode: with no peers and no sessions the spatial shelves collapse
+    // to their headings and the Mine strip takes over the whole work area.
+    el("spatialWorkbench").classList.toggle("session-workbench-solo", objects.peers.length === 0 && objects.sessions.length === 0);
     const focused = focus.mode === "session" && focus.sessionKey ? sessionByKey(objects, focus.sessionKey) : null;
+    // Overview stacks full-width area strips (sessions above, Mine pinned to
+    // the bottom); focus mode is a flat card grid. The list element is shared,
+    // so the layout class flips with the mode.
+    list.classList.toggle("session-area-list", !focused);
     if (focused) {
         // Single-session focus keeps the flat member list.
         const visible = session.fragments.filter((fragment) => focused.fragmentKeys.includes(fragment.key));
@@ -809,13 +816,15 @@ function renderFragments() {
     // visible MOVE between areas.
     if (session.fragments.length) {
         const mineKeys = mineFragmentKeys(session.fragments.map((fragment) => fragment.key), objects);
-        list.append(renderMineArea(session.fragments.filter((fragment) => mineKeys.includes(fragment.key))));
         for (const sessionObject of objects.sessions) {
             const members = session.fragments.filter((fragment) => sessionObject.fragmentKeys.includes(fragment.key));
             if (members.length) {
                 list.append(renderSessionArea(sessionObject, members));
             }
         }
+        // Mine renders LAST: it is the static full-width strip at the bottom
+        // of the work area, beneath every published-session container.
+        list.append(renderMineArea(session.fragments.filter((fragment) => mineKeys.includes(fragment.key))));
     }
     el("fragmentEmpty").hidden = session.fragments.length > 0;
 }

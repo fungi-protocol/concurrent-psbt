@@ -27,8 +27,28 @@ test("the primary objects share one bounded spatial workbench", () => {
   assert.ok(utilities > workbenchEnd, "secondary utilities follow the workbench");
   assert.match(
     styles,
-    /\.session-spatial-workbench\s*\{[\s\S]*?grid-template-rows:\s*auto\s+minmax\([^;]+\)\s+auto;/,
+    /\.session-spatial-workbench\s*\{[\s\S]*?flex-direction:\s*column;/,
+    "the workbench stacks its shelves as a column",
   );
+  assert.match(
+    styles,
+    /\.session-spatial-workbench\s*>\s*\[data-spatial-region="me"\]\s*\{[\s\S]*?flex:\s*1 1 auto;/,
+    "the Me region absorbs the workbench's remaining height",
+  );
+});
+
+test("the Mine strip is the bottom band and owns an empty workbench", () => {
+  // Overview renders published-session areas first and Mine last…
+  const overview = app.slice(app.indexOf("function renderFragments"));
+  const sessionsLoop = overview.indexOf("renderSessionArea(sessionObject, members)");
+  const mineAppend = overview.indexOf("renderMineArea(");
+  assert.ok(sessionsLoop >= 0 && mineAppend > sessionsLoop, "Mine renders after the session areas");
+  // …as full-width strips with Mine pinned to the bottom of the Me region.
+  assert.match(styles, /\.session-area-list\s*\{[\s\S]*?flex-direction:\s*column;/);
+  assert.match(styles, /\.session-area-list\s*>\s*\.session-mine-area\s*\{\s*margin-top:\s*auto;/);
+  // With no peers and no sessions the shelves collapse and Mine expands.
+  assert.match(app, /"session-workbench-solo",\s*objects\.peers\.length === 0 && objects\.sessions\.length === 0/);
+  assert.match(styles, /\.session-workbench-solo \.session-area-list\s*>\s*\.session-mine-area\s*\{[\s\S]*?flex:\s*1 0 auto;/);
 });
 
 test("the real shell keeps peers above sessions and the Me workspace", () => {

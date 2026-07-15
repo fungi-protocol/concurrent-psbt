@@ -1863,13 +1863,17 @@ h2 {
 }
 
 /* Click-to-select: the card is the selection control (no checkbox). The
-   selected state is an accent outline, distinct from the wire vocabulary
-   (dashed/animated) and the identity colors (left stripe). */
+   selected state must read on the card itself, not just in the ops row:
+   a solid accent border + tint + corner checkmark, distinct from the wire
+   vocabulary (dashed/animated) and the identity colors (left stripe). */
 .session-card-selected {
+  border-color: var(--accent);
   outline: 2px solid var(--accent);
   outline-offset: -1px;
-  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
 }
+
 
 .session-card {
   cursor: pointer;
@@ -2115,7 +2119,14 @@ h2 {
 
 .session-select-toggle[aria-pressed="true"] {
   border-color: var(--accent);
-  color: var(--accent);
+  /* Filled, not just tinted: with the card tint behind it, an outline-only
+     pressed state was too quiet to read as "this card is selected". */
+  background: var(--accent);
+  color: #fff;
+}
+
+.session-select-toggle[aria-pressed="true"]::before {
+  content: "✓ ";
 }
 
 .session-detail-toggle {
@@ -2835,10 +2846,11 @@ img.session-lifehash {
 }
 
 /* Spatial shell: ephemeral peers on top, shared sessions beneath them, then
-   the Me/local-only workspace in the main canvas. */
+   the Me/local-only workspace absorbing all remaining height so the Mine
+   strip stays a stable bottom band of the work area. */
 .session-spatial-workbench {
-  display: grid;
-  grid-template-rows: auto minmax(160px, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   min-height: min(760px, calc(100vh - 112px));
   margin: 12px 14px 0;
@@ -2852,13 +2864,60 @@ img.session-lifehash {
 }
 
 .session-spatial-workbench > .session-spatial-shelf {
+  flex: none;
   margin: 0;
   box-shadow: none;
 }
 
 .session-spatial-workbench > [data-spatial-region="me"] {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
   min-height: 180px;
   box-shadow: none;
+}
+
+.session-spatial-workbench > .session-ops-panel {
+  flex: none;
+}
+
+/* Overview mode: the fragment list stacks full-width area strips —
+   published-session containers first, then Mine pinned to the bottom of
+   whatever height the Me region absorbed. (Focus mode removes this class
+   and falls back to the card grid.) */
+.session-area-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+}
+
+.session-area-list > .session-mine-area,
+.session-area-list > .session-published-area {
+  width: 100%;
+  margin-bottom: 0;
+}
+
+.session-area-list > .session-mine-area {
+  margin-top: auto;
+}
+
+/* Solo mode (no peers, no sessions): the shelves collapse to their
+   headings and Mine takes over the entire work area. */
+.session-workbench-solo .session-peer-shelf-list,
+.session-workbench-solo .session-session-shelf-list,
+.session-workbench-solo #peerShelfEmpty,
+.session-workbench-solo #sessionShelfEmpty {
+  display: none;
+}
+
+.session-workbench-solo .session-shelf-heading {
+  margin-bottom: 0;
+}
+
+.session-workbench-solo .session-area-list > .session-mine-area {
+  flex: 1 0 auto;
+  margin-top: 0;
 }
 
 .session-utilities {
