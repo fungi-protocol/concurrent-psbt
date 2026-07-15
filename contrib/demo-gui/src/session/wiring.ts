@@ -64,16 +64,20 @@ export interface NodeRef {
   key: string;
 }
 
-// A session is a named set of fragments and peer connections — nothing
-// more. It has NO transport of its own: transports and their identity
-// material (tickets, addresses, disk paths) belong to the PEERS, and
-// reaching the session goes over each peer's own transport. The converging
-// state itself lives server-side (or on peers); this object is the UI-model
-// handle the wire gesture manipulates.
+// A session is a MONOTONE SHARED MEMORY REGISTER for PSBT fragments:
+// fragments are values, the session holds ONE growing lattice value
+// (contentKey, null while the register is empty). Writing a fragment in is
+// content ⊔ fragment — always legal, absorbed when the register already
+// contains it. The session also carries its authorized peer set. It has NO
+// transport of its own: transports and their identity material belong to
+// the PEERS, and reaching the session goes over each peer's own transport.
+// With best-effort gossip over those peers the register is eventually
+// consistent (which does not promise a VALID transaction — e.g. too many
+// inputs/outputs is still a well-formed lattice value).
 export interface SessionObject {
   key: string;
   name: string;
-  fragmentKeys: string[];
+  contentKey: string | null;
   peerKeys: string[];
 }
 
@@ -188,7 +192,7 @@ export function mintSession(
   const session: SessionObject = {
     key: next.key,
     name: name.trim() || next.key,
-    fragmentKeys: [],
+    contentKey: null,
     peerKeys: [],
   };
   return {
@@ -414,7 +418,9 @@ export function peerByKey(state: ObjectsState, key: string): PeerObject | null {
   return state.peers.find((peer) => peer.key === key) ?? null;
 }
 
-export function addFragmentToSession(
+// Set the register's value. The join itself (old content ⊔ fragment) is the
+// shell's job — it owns the async backend seam; this is the pure write-back.
+export function writeSessionContent(
   state: ObjectsState,
   sessionKey: string,
   fragmentKey: string,
@@ -422,14 +428,15 @@ export function addFragmentToSession(
   return {
     ...state,
     sessions: state.sessions.map((session) =>
-      session.key === sessionKey && !session.fragmentKeys.includes(fragmentKey)
-        ? { ...session, fragmentKeys: [...session.fragmentKeys, fragmentKey] }
-        : session,
+      session.key === sessionKey ? { ...session, contentKey: fragmentKey } : session,
     ),
   };
 }
 
-export function addPeerToSession(
+// Peer↔session wiring is AUTHORIZATION: the peer may read/write the
+// register. The peer set is a grow-only set-union, so re-authorizing is an
+// idempotent no-op — callers report it, never error on it.
+export function authorizePeerOnSession(
   state: ObjectsState,
   sessionKey: string,
   peerKey: string,
@@ -444,15 +451,13 @@ export function addPeerToSession(
   };
 }
 
-// Fragments removed from the fragment set must also leave session
-// memberships (sessions reference fragments by key).
+// Fragments removed from the fragment set must also leave the registers
+// that reference them (a register whose value is dropped becomes empty).
 export function dropFragmentKey(state: ObjectsState, fragmentKey: string): ObjectsState {
   return {
     ...state,
     sessions: state.sessions.map((session) =>
-      session.fragmentKeys.includes(fragmentKey)
-        ? { ...session, fragmentKeys: session.fragmentKeys.filter((key) => key !== fragmentKey) }
-        : session,
+      session.contentKey === fragmentKey ? { ...session, contentKey: null } : session,
     ),
   };
 }
@@ -469,7 +474,7 @@ export function dropFragmentKey(state: ObjectsState, fragmentKey: string): Objec
 
 export function fragmentSessionKeys(state: ObjectsState, fragmentKey: string): string[] {
   return state.sessions
-    .filter((session) => session.fragmentKeys.includes(fragmentKey))
+    .filter((session) => session.contentKey === fragmentKey)
     .map((session) => session.key);
 }
 
@@ -478,25 +483,27 @@ export function mineFragmentKeys(
   state: ObjectsState,
 ): string[] {
   return fragmentKeys.filter(
-    (fragmentKey) =>
-      !state.sessions.some((session) => session.fragmentKeys.includes(fragmentKey)),
+    (fragmentKey) => !state.sessions.some((session) => session.contentKey === fragmentKey),
   );
 }
 
 // ---------------------------------------------------------------------------
-// Session merge (session ⋈ session, per Q3): sessions are fragment-state
-// carriers, so merging means joining their fragment states AND unioning
-// their peer connections. This function is the UI-MODEL half: it mints the
-// merged session (fragment/peer unions, transport config carried over) and
-// retires the two sources; the shell orchestrates the fragment-state join
-// through the existing /api/join route. What it does NOT merge — any
-// server-side converging session state — is named in the notes so the shell
-// logs it honestly; a future backend session-state seam would own that.
+// Session merge (session ⋈ session, per Q3): merging two registers JOINS
+// their contents and takes the UNION of their peer sets as the merged
+// session's peer set. This function is the UI-MODEL half: it mints the
+// merged session (peer union, provisional content) and retires the two
+// sources; the shell joins the two content values through the existing
+// /api/join route and writes the result back — `contents` hands it both
+// operand keys. What this does NOT merge — any server-side converging
+// session state — is named in the notes so the shell logs it honestly.
 // ---------------------------------------------------------------------------
 
 export interface SessionMergeResult {
   state: ObjectsState;
   merged: SessionObject | null;
+  // The two registers' values at merge time, for the shell to ⊔ and write
+  // back (null entries are empty registers — nothing to join on that side).
+  contents: { left: string | null; right: string | null };
   // Honest-logging notes: what the UI-model merge cannot do (server-side
   // converging state). Transports live on peers, and the peer union carries
   // every connection along — there is no transport to conflict.
@@ -511,22 +518,21 @@ export function mergeSessions(
   const left = sessionByKey(state, leftKey);
   const right = sessionByKey(state, rightKey);
   if (!left || !right || left.key === right.key) {
-    return { state, merged: null, notes: [] };
+    return { state, merged: null, contents: { left: null, right: null }, notes: [] };
   }
   const notes: string[] = [];
   notes.push(
     "server-side session state (if any) is NOT merged — the UI-model merge joins " +
-      "fragment states via /api/join and unions peer connections; a backend " +
+      "the register contents via /api/join and unions peer connections; a backend " +
       "session-state merge seam would own the converging state itself",
   );
   const next = nextKey(state, "session");
   const merged: SessionObject = {
     key: next.key,
     name: `${left.name}+${right.name}`,
-    fragmentKeys: [
-      ...left.fragmentKeys,
-      ...right.fragmentKeys.filter((key) => !left.fragmentKeys.includes(key)),
-    ],
+    // Provisional: the lone value when only one register holds one; when
+    // both do, the shell writes the joined result over this.
+    contentKey: left.contentKey ?? right.contentKey,
     peerKeys: [...left.peerKeys, ...right.peerKeys.filter((key) => !left.peerKeys.includes(key))],
   };
   return {
@@ -540,6 +546,7 @@ export function mergeSessions(
       ],
     },
     merged,
+    contents: { left: left.contentKey, right: right.contentKey },
     notes,
   };
 }
@@ -725,31 +732,26 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
   }
 
   if (unordered(a, b, "fragment", "session")) {
-    const sessionKey = a === "session" ? source.key : target.key;
+    // Writing a value to a monotone register is ALWAYS legal: the register
+    // takes content ⊔ fragment. A value it already contains is an absorbed
+    // join the shell reports — never a refusal ("already in the session" is
+    // nonsensical for a register).
     const fragmentKey = a === "fragment" ? source.key : target.key;
-    const session = sessionByKey(state, sessionKey);
-    const label = `Publish ${fragmentKey} to session ${
+    const label = `Write ${fragmentKey} into session ${
       a === "session" ? sourceName : targetName
-    }`;
-    if (session && session.fragmentKeys.includes(fragmentKey)) {
-      return verdict(
-        "fragment-into-session",
-        false,
-        true,
-        "fragment is already in the session",
-        null,
-        label,
-      );
-    }
+    } (⊔ into the register)`;
     return verdict("fragment-into-session", true, true, null, null, label);
   }
 
   if (unordered(a, b, "peer", "session")) {
+    // Peer↔session is AUTHORIZATION: connect the peer to the register so it
+    // can read/write it. The UI model owns the peer set, so the wire is
+    // executable; actually reaching the peer stays a sync-time transport
+    // concern (surfaced there, not here). Re-authorizing is an idempotent
+    // no-op the shell reports.
     const peerKey = a === "peer" ? source.key : target.key;
     const sessionName = a === "session" ? sourceName : targetName;
     const peerName = a === "peer" ? sourceName : targetName;
-    // A bridge remains a reachable presentation operation, but committing
-    // any peer-to-session edge belongs to the low-level ptj pairing adapter.
     const group = bridgeGroupContaining(state, peerKey)
       .map((memberKey) => peerByKey(state, memberKey))
       .filter((member): member is PeerObject => member !== null);
@@ -757,15 +759,8 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
       group.length > 1
         ? `bridge ${group.map((member) => member.name).join("+")}`
         : `peer ${peerName}`;
-    const label = `Sync session ${sessionName} over ${groupLabel}`;
-    return verdict(
-      "peer-into-session",
-      false,
-      false,
-      null,
-      "ptj session pairing adapter",
-      label,
-    );
+    const label = `Authorize ${groupLabel} on session ${sessionName}`;
+    return verdict("peer-into-session", true, true, null, null, label);
   }
 
   if (unordered(a, b, "payment", "fragment")) {
@@ -795,11 +790,11 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
   }
 
   if (a === "session" && b === "session") {
-    // Client-orchestrated merge: joins the sessions' fragment states over
-    // the existing join route and unions their peer connections in the UI
-    // model. The server-side converging state (once it exists) stays with a
+    // Client-orchestrated merge: ⊔ the two registers' contents over the
+    // existing join route, ∪ their peer sets as the merged session's peer
+    // set. The server-side converging state (once it exists) stays with a
     // future backend session-state seam — the shell logs that honestly.
-    const label = `Merge sessions ${sourceName} and ${targetName}`;
+    const label = `Merge sessions ${sourceName} and ${targetName} (⊔ contents, ∪ peers)`;
     if (!sessionByKey(state, source.key) || !sessionByKey(state, target.key)) {
       return verdict(
         "session-merge",
@@ -862,12 +857,11 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
 // the toolbar Join applies whole connected components. Everything here is
 // pure — the shell holds the PendingWire[] and calls the backend.
 //
-// Divergence from the demo, deliberate: the session fragment set is
-// grow-only (joins ADD their result, sources stay), so instead of the
-// demo's successive pairwise LUBs with id remapping, a component's
-// fragment-join cluster executes as ONE n-ary /api/join call, and the
-// component's remaining wires run with consumed fragment endpoints remapped
-// to the cluster's result.
+// Like the demo, local joins REPLACE their operands with the LUB (the
+// shell retires sessionless operand copies after the join); a component's
+// fragment-join cluster still executes as ONE n-ary /api/join call rather
+// than successive pairwise LUBs, and the component's remaining wires run
+// with consumed fragment endpoints remapped to the cluster's result.
 // ---------------------------------------------------------------------------
 
 export interface PendingWire {

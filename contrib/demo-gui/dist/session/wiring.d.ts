@@ -8,7 +8,7 @@ export interface NodeRef {
 export interface SessionObject {
     key: string;
     name: string;
-    fragmentKeys: string[];
+    contentKey: string | null;
     peerKeys: string[];
 }
 export interface PeerObject {
@@ -94,14 +94,18 @@ export declare function applyTxOutputs(state: ObjectsState, key: string, classif
 };
 export declare function sessionByKey(state: ObjectsState, key: string): SessionObject | null;
 export declare function peerByKey(state: ObjectsState, key: string): PeerObject | null;
-export declare function addFragmentToSession(state: ObjectsState, sessionKey: string, fragmentKey: string): ObjectsState;
-export declare function addPeerToSession(state: ObjectsState, sessionKey: string, peerKey: string): ObjectsState;
+export declare function writeSessionContent(state: ObjectsState, sessionKey: string, fragmentKey: string): ObjectsState;
+export declare function authorizePeerOnSession(state: ObjectsState, sessionKey: string, peerKey: string): ObjectsState;
 export declare function dropFragmentKey(state: ObjectsState, fragmentKey: string): ObjectsState;
 export declare function fragmentSessionKeys(state: ObjectsState, fragmentKey: string): string[];
 export declare function mineFragmentKeys(fragmentKeys: readonly string[], state: ObjectsState): string[];
 export interface SessionMergeResult {
     state: ObjectsState;
     merged: SessionObject | null;
+    contents: {
+        left: string | null;
+        right: string | null;
+    };
     notes: string[];
 }
 export declare function mergeSessions(state: ObjectsState, leftKey: string, rightKey: string): SessionMergeResult;

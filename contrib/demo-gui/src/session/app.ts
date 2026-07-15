@@ -79,7 +79,7 @@ import {
 import {
   actionState,
   addBridge,
-  addFragmentToSession,
+  authorizePeerOnSession,
   applyTxOutputs,
   beginWire,
   bridgeGroupContaining,
@@ -92,6 +92,7 @@ import {
   idleWire,
   mergeSessions,
   mineFragmentKeys,
+  writeSessionContent,
   mintPeer,
   mintSession,
   overviewFocus,
@@ -438,6 +439,30 @@ function reportJoinOutcome(joined: SessionFragment, sources: SessionFragment[]):
   showStatus(text, false);
   logEvent(text);
   flashWireNotice({ kind: "fragment", key: joined.key }, "join absorbed — nothing new", "absorbed");
+}
+
+// Post-join settlement. Fragments are VALUE TYPES: once a join has produced
+// the LUB, (1) every register whose value was an operand takes the LUB as
+// its new value (fragment ⊔ register-content writes back to the session),
+// and (2) stale sessionless operand copies are retired — local joins
+// REPLACE their operands instead of piling grow-only clutter into Mine. A
+// key some register still references is never dropped: that register owns
+// its value.
+function settleJoin(operandKeys: readonly string[], resultKey: string): void {
+  for (const sessionObject of objects.sessions) {
+    if (sessionObject.contentKey && operandKeys.includes(sessionObject.contentKey)) {
+      objects = writeSessionContent(objects, sessionObject.key, resultKey);
+    }
+  }
+  for (const key of operandKeys) {
+    if (key === resultKey || !fragmentByKey(key)) continue;
+    if (objects.sessions.some((sessionObject) => sessionObject.contentKey === key)) continue;
+    session = removeFragment(session, key);
+    objects = dropFragmentKey(objects, key);
+    detailLevels.delete(key);
+    lineage.delete(key);
+    logEvent(`retired ${key} — its value lives on in ${resultKey}`);
+  }
 }
 
 // --- contextual enablement -----------------------------------------------------
@@ -827,13 +852,61 @@ async function executeWire(
         // The absorbed-join outcome message must survive this function's
         // generic status clear, so this case reports and returns itself.
         reportJoinOutcome(joined, [left, right]);
+        settleJoin([left.key, right.key], joined.key);
         return true;
       }
       case "fragment-into-session": {
+        // Write the value into the register: content ⊔ fragment, written
+        // back. Publishing MOVES the value — settleJoin retires the stale
+        // sessionless copy (unless another register still references it).
         const sessionKey = source.kind === "session" ? source.key : target.key;
         const fragmentKey = source.kind === "fragment" ? source.key : target.key;
-        objects = addFragmentToSession(objects, sessionKey, fragmentKey);
-        logEvent(`wired ${fragmentKey} into ${sessionKey}`);
+        const sessionObject = sessionByKey(objects, sessionKey);
+        const fragment = fragmentByKey(fragmentKey);
+        if (!sessionObject || !fragment) return false;
+        const content = sessionObject.contentKey
+          ? fragmentByKey(sessionObject.contentKey)
+          : null;
+        let result = fragment;
+        if (content && content.key !== fragment.key) {
+          result = await addResponse(
+            await backend.joinPsbts([content.psbt, fragment.psbt]),
+            "join",
+            `⊔ write of ${fragment.key} into ${sessionObject.name}`,
+          );
+          reportJoinOutcome(result, [content, fragment]);
+        }
+        objects = writeSessionContent(objects, sessionKey, result.key);
+        settleJoin(
+          content ? [fragment.key, content.key] : [fragment.key],
+          result.key,
+        );
+        logEvent(`wrote ${fragmentKey} into ${sessionObject.name} — register now ${result.key}`);
+        // Keep the absorbed-join status (when one was reported) alive past
+        // the generic clear below.
+        return true;
+      }
+      case "peer-into-session": {
+        // Authorization: connect the peer (and its bridge group) to the
+        // register. The peer set is grow-only — re-authorizing is an
+        // idempotent no-op, reported, never an error.
+        const sessionKey = source.kind === "session" ? source.key : target.key;
+        const authPeerKey = source.kind === "peer" ? source.key : target.key;
+        const sessionObject = sessionByKey(objects, sessionKey);
+        const authPeer = peerByKey(objects, authPeerKey);
+        if (!sessionObject || !authPeer) return false;
+        if (sessionObject.peerKeys.includes(authPeerKey)) {
+          const text = `${authPeer.name} is already authorized on ${sessionObject.name} — nothing to add`;
+          showStatus(text, false);
+          logEvent(text);
+          return true;
+        }
+        objects = authorizePeerOnSession(objects, sessionKey, authPeerKey);
+        objects = unionBridgedPeersIntoSessions(objects);
+        logEvent(
+          `authorized ${authPeer.name} on ${sessionObject.name} — the peer can now read/write the register` +
+            ` (bridged peers ride along)`,
+        );
         break;
       }
       case "attach-payment": {
@@ -876,10 +949,11 @@ async function executeWire(
         break;
       }
       case "session-merge": {
-        // Client-orchestrated merge (Q3): the UI model unions memberships
-        // and retires the sources; the fragment states join through the
-        // existing /api/join route. Every decision and every limit of the
-        // merge is logged honestly.
+        // Client-orchestrated merge (Q3): merging registers ⊔s their
+        // contents and ∪s their peer sets. The UI model unions the peers
+        // and retires the sources; the contents join through the existing
+        // /api/join route and the result is written into the merged
+        // register. Every decision and every limit is logged honestly.
         const leftName = sessionByKey(objects, source.key)?.name ?? source.key;
         const rightName = sessionByKey(objects, target.key)?.name ?? target.key;
         const merge = mergeSessions(objects, source.key, target.key);
@@ -889,29 +963,31 @@ async function executeWire(
         remaps?.set(`session:${target.key}`, merge.merged.key);
         logEvent(
           `merged sessions ${leftName} ⋈ ${rightName} → ${merge.merged.name} ` +
-            `(${merge.merged.fragmentKeys.length} fragment(s), ` +
-            `${merge.merged.peerKeys.length} peer(s) unioned)`,
+            `(${merge.merged.peerKeys.length} peer(s) unioned)`,
         );
         for (const note of merge.notes) {
           logEvent(`session merge: ${note}`);
         }
-        const members = merge.merged.fragmentKeys
-          .map((key) => fragmentByKey(key))
-          .filter((fragment): fragment is SessionFragment => fragment !== null);
-        if (members.length >= 2) {
+        const leftContent = merge.contents.left ? fragmentByKey(merge.contents.left) : null;
+        const rightContent = merge.contents.right ? fragmentByKey(merge.contents.right) : null;
+        if (leftContent && rightContent && leftContent.key !== rightContent.key) {
           const joined = await addResponse(
-            await backend.joinPsbts(members.map((fragment) => fragment.psbt)),
+            await backend.joinPsbts([leftContent.psbt, rightContent.psbt]),
             "join",
-            `⊔ session merge of ${leftName}, ${rightName}`,
+            `⊔ register merge of ${leftName}, ${rightName}`,
           );
-          objects = addFragmentToSession(objects, merge.merged.key, joined.key);
+          objects = writeSessionContent(objects, merge.merged.key, joined.key);
+          settleJoin([leftContent.key, rightContent.key], joined.key);
           logEvent(
-            `session merge joined ${members.map((fragment) => fragment.key).join(" ⋈ ")} → ` +
-              `${joined.key} via /api/join (added to ${merge.merged.name})`,
+            `register contents joined: ${leftContent.key} ⊔ ${rightContent.key} → ${joined.key} ` +
+              `(written into ${merge.merged.name})`,
           );
         } else {
+          const lone = leftContent ?? rightContent;
           logEvent(
-            "session merge: fewer than two member fragment states loaded — nothing to join",
+            lone
+              ? `merged register carries ${lone.key} (only one register held a value)`
+              : "both registers were empty — the merged register starts empty",
           );
         }
         break;
@@ -956,6 +1032,10 @@ async function executeJoinGroup(group: FragmentJoinGroup): Promise<string | null
       `wired ${members.map((fragment) => fragment.key).join(" ⋈ ")} → ${joined.key} (lattice join)`,
     );
     reportJoinOutcome(joined, members);
+    settleJoin(
+      members.map((fragment) => fragment.key),
+      joined.key,
+    );
     return joined.key;
   } catch (error) {
     reportError("wire fragment-join", error);
@@ -1081,7 +1161,7 @@ function renderFragments(): void {
   list.classList.toggle("session-area-list", !focused);
   if (focused) {
     // Single-session focus keeps the flat member list.
-    const visible = session.fragments.filter((fragment) => focused.fragmentKeys.includes(fragment.key));
+    const visible = session.fragments.filter((fragment) => focused.contentKey === fragment.key);
     for (const fragment of visible) {
       list.append(renderFragmentCard(fragment));
     }
@@ -1099,8 +1179,8 @@ function renderFragments(): void {
       objects,
     );
     for (const sessionObject of objects.sessions) {
-      const members = session.fragments.filter((fragment) =>
-        sessionObject.fragmentKeys.includes(fragment.key),
+      const members = session.fragments.filter(
+        (fragment) => sessionObject.contentKey === fragment.key,
       );
       if (members.length) {
         list.append(renderSessionArea(sessionObject, members));
@@ -1815,14 +1895,11 @@ function renderSessionShelf(): void {
       badge("session", "session-badge"),
       span(
         "item-meta",
-        `${sessionObject.fragmentKeys.length} fragment(s) · ` +
+        `${sessionObject.contentKey ? `register: ${sessionObject.contentKey}` : "empty register"} · ` +
           `${sessionObject.peerKeys.length} peer(s)`,
       ),
     );
     item.append(head);
-    if (sessionObject.fragmentKeys.length) {
-      item.append(span("item-meta", sessionObject.fragmentKeys.join(", ")));
-    }
     const actions = document.createElement("div");
     actions.className = "session-card-actions";
     actions.append(
@@ -2172,7 +2249,7 @@ function renderFocus(): void {
         .map((key) => peerByKey(objects, key)?.name ?? key)
         .join(", ");
       el<HTMLElement>("focusTitle").textContent =
-        `${focused.name} · ${focused.fragmentKeys.length} fragment(s)` +
+        `${focused.name} · ${focused.contentKey ? `register: ${focused.contentKey}` : "empty register"}` +
         (peers ? ` · peers: ${peers}` : "");
     }
   }
@@ -2621,6 +2698,11 @@ async function joinSelected(): Promise<void> {
       `⊔ join of ${selected.map((f) => f.key).join(", ")}`,
     );
     reportJoinOutcome(joined, selected);
+    settleJoin(
+      selected.map((f) => f.key),
+      joined.key,
+    );
+    render();
   } catch (error) {
     reportError("join", error);
   }
@@ -3215,15 +3297,15 @@ async function syncSessionOverPeer(sessionKey: string, peerKey: string | null): 
     el<HTMLTextAreaElement>("syncIrohTicket").value = carrier.identity;
     el<HTMLInputElement>("syncIrohTicketOut").checked = false;
   }
-  const members = sessionObject.fragmentKeys
-    .map((key) => fragmentByKey(key))
-    .filter((fragment): fragment is SessionFragment => fragment !== null)
-    .map((fragment) => fragment.psbt);
-  if (!members.length && transport !== "local") {
-    showStatus(`${sessionObject.name}: wire fragments into the session before syncing`, true);
+  const content = sessionObject.contentKey ? fragmentByKey(sessionObject.contentKey) : null;
+  if (!content && transport !== "local") {
+    showStatus(`${sessionObject.name}: the register is empty — write a fragment in before syncing`, true);
     return;
   }
-  await runSyncRequest(members, `session ${sessionObject.name} (${members.length} fragment(s))`);
+  await runSyncRequest(
+    content ? [content.psbt] : [],
+    `session ${sessionObject.name} (register ${content?.key ?? "empty"})`,
+  );
 }
 
 // --- negotiation panel -----------------------------------------------------------
