@@ -13,6 +13,7 @@ export declare const TX_MODIFIABLE_BITS: readonly [{
     readonly bit: 2;
     readonly label: "has SIGHASH_SINGLE";
 }];
+export declare function toggledBitfieldValue(value: string, bit: number, checked: boolean): string | null;
 export declare const OUTPUT_UNIQUE_ID_KEY_HEX = "fc0f636f6e63757272656e742d7073627401";
 export interface EditorField {
     path: string;

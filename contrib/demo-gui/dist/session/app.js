@@ -24,7 +24,7 @@ import { addFragment, asArray, asObject, asString, buildConfirmArgs, buildCreate
 import { amountBits, amountSpanParts, DETAIL_LEVELS, elisionLabel, fragmentBadges, fragmentCardModel, groupAggregate, rawKeymapSections, rowDetailPairs, rowFacePairs, signedAmountSpanParts, } from "./display.js";
 import { classifyPaste, mintFromPaste, SAMPLE_PASTES, } from "./ingest.js";
 import { actionState, addBridge, addFragmentToSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, enrichPayment, idleWire, mergeSessions, mineFragmentKeys, mintPeer, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, sessionByKey, sessionFocus, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
-import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, TX_MODIFIABLE_BITS, validateEditor, violationsFromServer, } from "./editor.js";
+import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, toggledBitfieldValue, TX_MODIFIABLE_BITS, validateEditor, violationsFromServer, } from "./editor.js";
 import { descriptorColorKey, groupColorKey, paletteColor, paletteRegistry, peerColorKey, } from "./palette.js";
 const backend = new HttpBackend();
 // --- shell state ------------------------------------------------------------
@@ -1681,8 +1681,16 @@ function renderFocus() {
 function bitfieldEditorRow(field) {
     const row = document.createElement("div");
     row.className = "field-label session-editor-field session-editor-bitfield";
+    row.setAttribute("role", "group");
+    row.setAttribute("aria-label", field.label);
     row.append(span("", field.label));
-    const byte0 = field.value ? Number.parseInt(field.value.slice(0, 2), 16) : 0;
+    // While the escape-hatch hex is invalid, the checkboxes go inert: flipping
+    // a bit of unparseable text would clobber what the operator was typing.
+    const byte0 = toggledBitfieldValue(field.value, 0, false) === null
+        ? null
+        : field.value
+            ? Number.parseInt(field.value.slice(0, 2), 16)
+            : 0;
     const setValue = (next) => {
         if (!editor)
             return;
@@ -1694,12 +1702,13 @@ function bitfieldEditorRow(field) {
         wrap.className = "session-editor-bit";
         const box = document.createElement("input");
         box.type = "checkbox";
-        box.checked = Number.isFinite(byte0) && (byte0 & (1 << bit)) !== 0;
+        box.checked = byte0 !== null && (byte0 & (1 << bit)) !== 0;
+        box.disabled = byte0 === null;
         box.addEventListener("change", () => {
-            const current = field.value ? Number.parseInt(field.value.slice(0, 2), 16) : 0;
-            const flipped = box.checked ? current | (1 << bit) : current & ~(1 << bit);
-            const rest = field.value.slice(2);
-            setValue(`${flipped.toString(16).padStart(2, "0")}${rest}`);
+            const next = toggledBitfieldValue(field.value, bit, box.checked);
+            if (next === null)
+                return;
+            setValue(next);
         });
         wrap.append(box, span("", label));
         row.append(wrap);

@@ -754,10 +754,16 @@ function rawKeymapEntries(map: unknown, names: Record<string, string>): RawKeyma
       keyHex,
       valueHex: asString(object?.value_hex) ?? "",
       kind,
+      // The name annotation follows the backend's own classification: an
+      // entry the backend calls "unknown" gets no name even when its first
+      // byte collides with a defined keytype (unexpected keydata, say) —
+      // the annotation must never contradict the kind.
       name:
         kind === "proprietary" && prefix !== null
           ? `${prefix}#${subtype ?? "?"}`
-          : (names[keyHex.slice(0, 2).toLowerCase()] ?? null),
+          : kind === "known"
+            ? (names[keyHex.slice(0, 2).toLowerCase()] ?? null)
+            : null,
     });
   }
   return entries;

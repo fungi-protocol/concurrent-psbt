@@ -60,6 +60,19 @@ export const TX_MODIFIABLE_BITS = [
   { bit: 2, label: "has SIGHASH_SINGLE" },
 ] as const;
 
+// Flip one bit of a bitfield value's first byte, preserving every other
+// byte verbatim (unknown trailing bytes belong to specs this program
+// doesn't understand yet). Returns null when the current value is not
+// plain hex bytes — the checkboxes must stay inert rather than reinterpret
+// garbage as a byte (parseInt would read "ba" out of "banana") and
+// clobber whatever the operator was typing into the escape hatch.
+export function toggledBitfieldValue(value: string, bit: number, checked: boolean): string | null {
+  if (!/^([0-9a-fA-F]{2})*$/.test(value)) return null;
+  const byte0 = value ? Number.parseInt(value.slice(0, 2), 16) : 0;
+  const flipped = checked ? byte0 | (1 << bit) : byte0 & ~(1 << bit);
+  return `${flipped.toString(16).padStart(2, "0")}${value.slice(2)}`;
+}
+
 // The psbt.md per-output unique id: proprietary keytype 0xFC, prefix
 // "concurrent-psbt" (15 bytes), subtype 0x01, no subkeydata. The value IS
 // the id bytes, so a decoded unique-id edit translates byte-for-byte into a

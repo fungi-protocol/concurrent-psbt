@@ -380,6 +380,10 @@ test("rawKeymapSections: the three map kinds, faithful to serialization order", 
       inputs: [[
         { key_hex: "0e", value_hex: "aa".repeat(32), kind: "known" },
         { key_hex: "ef01", value_hex: "beef", kind: "unknown" },
+        // A kind=unknown entry whose first byte collides with a defined
+        // keytype (0x01 WITNESS_UTXO, unexpected keydata): the annotation
+        // follows the backend's classification, never contradicts it.
+        { key_hex: "01aa", value_hex: "cafe", kind: "unknown" },
       ]],
       outputs: [
         [{ key_hex: "03", value_hex: "1027000000000000", kind: "known" }],
@@ -414,10 +418,11 @@ test("rawKeymapSections: the three map kinds, faithful to serialization order", 
   assert.deepEqual(output0.entries, [
     { keyHex: "03", valueHex: "1027000000000000", kind: "known", name: "PSBT_OUT_AMOUNT" },
   ]);
-  // …and unknown keytypes keep their hex with no invented name.
+  // …and unknown entries keep their hex with no invented name, even when
+  // the first byte collides with a defined keytype.
   assert.deepEqual(
     input0.entries.map((entry) => [entry.name, entry.kind]),
-    [["PSBT_IN_PREVIOUS_TXID", "known"], [null, "unknown"]],
+    [["PSBT_IN_PREVIOUS_TXID", "known"], [null, "unknown"], [null, "unknown"]],
   );
 
   // Empty maps stay in the section list — the PSBT genuinely contains them.

@@ -127,6 +127,7 @@ import {
   decodedEditsLeftBehind,
   editorModel,
   rawEditsForSave,
+  toggledBitfieldValue,
   TX_MODIFIABLE_BITS,
   validateEditor,
   violationsFromServer,
@@ -2124,8 +2125,16 @@ function renderFocus(): void {
 function bitfieldEditorRow(field: EditorField): HTMLElement {
   const row = document.createElement("div");
   row.className = "field-label session-editor-field session-editor-bitfield";
+  row.setAttribute("role", "group");
+  row.setAttribute("aria-label", field.label);
   row.append(span("", field.label));
-  const byte0 = field.value ? Number.parseInt(field.value.slice(0, 2), 16) : 0;
+  // While the escape-hatch hex is invalid, the checkboxes go inert: flipping
+  // a bit of unparseable text would clobber what the operator was typing.
+  const byte0 = toggledBitfieldValue(field.value, 0, false) === null
+    ? null
+    : field.value
+      ? Number.parseInt(field.value.slice(0, 2), 16)
+      : 0;
   const setValue = (next: string): void => {
     if (!editor) return;
     editor = applyEdit(editor, field.path, next);
@@ -2136,12 +2145,12 @@ function bitfieldEditorRow(field: EditorField): HTMLElement {
     wrap.className = "session-editor-bit";
     const box = document.createElement("input");
     box.type = "checkbox";
-    box.checked = Number.isFinite(byte0) && (byte0 & (1 << bit)) !== 0;
+    box.checked = byte0 !== null && (byte0 & (1 << bit)) !== 0;
+    box.disabled = byte0 === null;
     box.addEventListener("change", () => {
-      const current = field.value ? Number.parseInt(field.value.slice(0, 2), 16) : 0;
-      const flipped = box.checked ? current | (1 << bit) : current & ~(1 << bit);
-      const rest = field.value.slice(2);
-      setValue(`${flipped.toString(16).padStart(2, "0")}${rest}`);
+      const next = toggledBitfieldValue(field.value, bit, box.checked);
+      if (next === null) return;
+      setValue(next);
     });
     wrap.append(box, span("", label));
     row.append(wrap);

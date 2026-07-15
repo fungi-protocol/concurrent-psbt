@@ -12,6 +12,7 @@ import {
   isRawPath,
   OUTPUT_UNIQUE_ID_KEY_HEX,
   rawEditsForSave,
+  toggledBitfieldValue,
   TX_MODIFIABLE_BITS,
   TX_MODIFIABLE_KEY_HEX,
   validateEditor,
@@ -308,6 +309,22 @@ test("the defined tx-modifiable bits are named for the checkbox UI", () => {
   assert.match(TX_MODIFIABLE_BITS[0].label, /inputs/);
   assert.match(TX_MODIFIABLE_BITS[1].label, /outputs/);
   assert.match(TX_MODIFIABLE_BITS[2].label, /SIGHASH_SINGLE/);
+});
+
+test("toggledBitfieldValue flips one bit, preserves the rest, refuses garbage", () => {
+  // Byte 0 is the defined bitfield; trailing bytes survive verbatim (the
+  // commit's escape-hatch promise for specs this program doesn't know yet).
+  assert.equal(toggledBitfieldValue("0380", 2, true), "0780");
+  assert.equal(toggledBitfieldValue("0780", 2, false), "0380");
+  // Setting a bit that is already set (and clearing a clear one) is stable.
+  assert.equal(toggledBitfieldValue("0380", 0, true), "0380");
+  assert.equal(toggledBitfieldValue("0080", 2, false), "0080");
+  // An empty value (entry absent) starts from 0x00.
+  assert.equal(toggledBitfieldValue("", 0, true), "01");
+  // Non-hex text — mid-edit escape-hatch content — must NOT be reinterpreted
+  // as a byte and clobbered: the toggle refuses instead.
+  assert.equal(toggledBitfieldValue("banana", 0, true), null);
+  assert.equal(toggledBitfieldValue("012", 1, true), null); // odd length
 });
 
 test("the proprietary unique-id raw row collapses into the decoded field", () => {
