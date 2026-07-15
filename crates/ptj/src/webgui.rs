@@ -3945,4 +3945,61 @@ mod tests {
                 .contains("requires secret_hex")
         );
     }
+
+    /// Every PSBT and payment URI offered by the session palette must be
+    /// accepted by the backend it will be pasted into. The palette data
+    /// lives in TypeScript (SAMPLE_PASTES in ingest.ts); rather than
+    /// duplicating the strings here, scan the source for its recognizable
+    /// literals — any `cHNidP8...` base64 (the "psbt\xff" magic) must
+    /// inspect cleanly, and any `bitcoin:` URI must classify as a payment.
+    #[test]
+    fn session_sample_pastes_are_accepted_by_the_backend() {
+        let ingest_ts = include_str!("../../../contrib/demo-gui/src/session/ingest.ts");
+        let quoted: Vec<&str> = ingest_ts
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .collect();
+
+        let psbts: Vec<&str> = quoted
+            .iter()
+            .copied()
+            .filter(|s| s.starts_with("cHNidP8"))
+            .collect();
+        assert!(
+            psbts.len() >= 3,
+            "expected at least three sample PSBTs in ingest.ts, found {}",
+            psbts.len()
+        );
+        for psbt in psbts {
+            let request = serde_json::json!({ "psbt": psbt }).to_string();
+            let response = response_for("POST", "/api/inspect", request.as_bytes());
+            assert_eq!(
+                response.status,
+                200,
+                "sample PSBT rejected by /api/inspect: {psbt}: {}",
+                String::from_utf8_lossy(&response.body)
+            );
+        }
+
+        let uris: Vec<&str> = quoted
+            .iter()
+            .copied()
+            .filter(|s| s.starts_with("bitcoin:"))
+            .collect();
+        assert!(!uris.is_empty(), "expected a bitcoin: URI sample in ingest.ts");
+        for uri in uris {
+            let request =
+                serde_json::json!({ "payload": uri, "network": "regtest" }).to_string();
+            let response = response_for("POST", "/api/classify", request.as_bytes());
+            assert_eq!(
+                response.status,
+                200,
+                "sample URI rejected by /api/classify: {uri}: {}",
+                String::from_utf8_lossy(&response.body)
+            );
+            let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+            assert_eq!(body["kind"], "payment", "{uri}");
+        }
+    }
 }

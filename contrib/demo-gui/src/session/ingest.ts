@@ -189,10 +189,21 @@ export const SAMPLE_PASTES: readonly SamplePaste[] = [
       "cHNidP8BAgQCAAAAAQQBAQEFAQIB+wQCAAAAAAEAUgIAAAABwaolbiFLlqGCL5PeQr/ztfP/jQUZMG41FddRWl6AWxIAAAAAAP////8BGMaaOwAAAAAWABSwo68UQghBJpPKfRZoUrUtsK7wbgAAAAABAR8Yxpo7AAAAABYAFLCjrxRCCEEmk8p9FmhStS2wrvBuAQ4gCwrZIUGcHIcZc11y3HOfnqngY40f5MHu8PmUQISBX8gBDwQAAAAAARAE/v///wAiAgLWAfhIRqZ1X3dr4A49nej7EKzJNfuDxF+wFi1MrVq3khj2nYc+VAAAgAEAAIAAAACAAAAAACoAAAABAwgACK8vAAAAAAEEFgAUxDD2TEdW2jENvRoIVXLvKZkmJywAIgIC42+/9T3VNAcM+P05ZhRoDzV6m4Xbc0C/HPp0XSrXs0AY9p2HPlQAAIABAACAAAAAgAEAAABkAAAAAQMIi73rCwAAAAABBBYAFE3Rk6yWSlasG54cyoRU/i9HT4UTAA==",
   },
   {
-    // The empty unordered PSBT the session tests seed with.
+    // Backend-minted (POST /api/create, ordering=unset, no inputs or
+    // outputs): the smallest PSBT ptj itself considers unordered and
+    // fully modifiable.
     name: "Minimal unordered PSBT",
     kind: "psbt",
-    value: "cHNidP8BAgQCAAAAAQMEAAAAAAEEAQABBQEAAQb8BHBzYnQBAA==",
+    value: "cHNidP8B+wQCAAAAAQIEAgAAAAEEAQABBQEAAQYBAxL8D2NvbmN1cnJlbnQtcHNidBABAwA=",
+  },
+  {
+    // Backend-minted (POST /api/create, ordering=unset) paying 0.001 BTC
+    // to the BIP 370 vector's first output address, so joining it with
+    // the vector above exercises a real merge.
+    name: "Unordered payment PSBT (1 out)",
+    kind: "psbt",
+    value:
+      "cHNidP8B+wQCAAAAAQIEAgAAAAEEAQABBQEBAQYBAxL8D2NvbmN1cnJlbnQtcHNidBABAwABAwighgEAAAAAAAEEFgAUxDD2TEdW2jENvRoIVXLvKZkmJywS/A9jb25jdXJyZW50LXBzYnQBENLh8ZqP4TAiSzRI7NmYVUAA",
   },
   {
     name: "Output descriptor (public)",
@@ -203,7 +214,10 @@ export const SAMPLE_PASTES: readonly SamplePaste[] = [
   {
     name: "Payment URI (BIP 21)",
     kind: "payment-uri",
-    value: "bitcoin:bcrt1qexample?amount=0.001&label=lunch",
+    // The address is the BIP 370 vector's first output script encoded
+    // for regtest — a checksum-valid bech32 address the classifier's
+    // payment-instructions parser accepts.
+    value: "bitcoin:bcrt1qcsc0vnz82mdrzrdargy92uh09xvjvfev50zrk2?amount=0.001&label=lunch",
   },
   {
     name: "Peer identity (npub)",
