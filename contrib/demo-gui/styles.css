@@ -2098,6 +2098,26 @@ h2 {
 /* --- detail ladder ---------------------------------------------------------- */
 
 /* The three-segment detail-mode toggle in the card header. */
+/* Disabled op buttons are transparent to the pointer so the toolbar itself
+   receives the press/hover in every engine (Firefox suppresses pointer
+   events on disabled controls); #opsHint takes over the tooltip duty. */
+.session-ops button:disabled {
+  pointer-events: none;
+}
+
+/* The keyboard/AT selection toggle in the card header (the card-background
+   click is pointer-only). */
+.session-select-toggle {
+  min-height: 22px;
+  padding: 0 8px;
+  font-size: 0.85em;
+}
+
+.session-select-toggle[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .session-detail-toggle {
   display: inline-flex;
   margin-left: auto;

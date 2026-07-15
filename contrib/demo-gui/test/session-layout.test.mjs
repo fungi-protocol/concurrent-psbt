@@ -88,10 +88,24 @@ test("disabled ops explain themselves on press, not only on hover", () => {
   assert.ok(hint >= 0, "the ops hint line is present");
   assert.ok(hint > html.indexOf('id="gateOverrides"'), "the hint follows the gate rows");
   assert.match(html, /id="opsHint"[^>]*role="status"/, "the hint is a live status region");
-  // The reason is stashed per button and surfaced by hit-testing the press
-  // (disabled buttons swallow their own pointer events).
+  // The reason is stashed per button and surfaced by rect-hit-testing the
+  // press on the toolbar: disabled buttons are pointer-events:none (Firefox
+  // suppresses their pointer events entirely), so the section receives the
+  // event and elementsFromPoint would skip the button.
   assert.match(app, /dataset\.why = why/);
-  assert.match(app, /elementsFromPoint\(event\.clientX, event\.clientY\)/);
+  assert.match(app, /querySelectorAll<HTMLButtonElement>\("button:disabled"\)/);
+  assert.match(app, /getBoundingClientRect\(\)/);
+  assert.match(styles, /\.session-ops button:disabled \{[^}]*pointer-events: none;/);
+});
+
+test("fragment selection has a keyboard path", () => {
+  // aria-pressed lives on a real toggle button (the <li> nests buttons and
+  // cannot take a button role); the card-background click stays pointer-only.
+  const cardStart = app.indexOf("function renderFragmentCard");
+  const card = app.slice(cardStart, app.indexOf("function renderFragmentGroup", cardStart) > 0 ? app.indexOf("function renderFragmentGroup", cardStart) : cardStart + 4000);
+  assert.match(card, /session-select-toggle/);
+  assert.match(card, /selectToggle\.setAttribute\("aria-pressed", String\(fragment\.selected\)\)/);
+  assert.doesNotMatch(card, /item\.setAttribute\("aria-pressed"/);
 });
 
 test("the wire drag advertises itself when idle", () => {

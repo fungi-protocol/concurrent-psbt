@@ -874,7 +874,6 @@ function renderFragmentCard(fragment) {
     // controls keep their own click meanings, and a completed drag-wire
     // gesture suppresses the click it would otherwise leave behind.
     item.classList.toggle("session-card-selected", fragment.selected);
-    item.setAttribute("aria-pressed", String(fragment.selected));
     item.addEventListener("click", (event) => {
         if (consumeSuppressedClick())
             return;
@@ -897,6 +896,22 @@ function renderFragmentCard(fragment) {
         head.append(badge(view.text, badgeToneClass(view.tone), view.emoji, view.title));
     }
     head.append(span("item-meta", fragment.origin));
+    // The keyboard/AT path to selection: the card-background click is
+    // pointer-only, and the <li> cannot own aria-pressed (that needs a button
+    // role, which the card cannot take — it nests real buttons). A real
+    // toggle button carries the pressed state instead.
+    const selectToggle = document.createElement("button");
+    selectToggle.type = "button";
+    selectToggle.className = "session-select-toggle";
+    selectToggle.textContent = fragment.selected ? "selected" : "select";
+    selectToggle.setAttribute("aria-pressed", String(fragment.selected));
+    selectToggle.title = `toggle selection of ${fragment.key}`;
+    selectToggle.addEventListener("click", () => {
+        session = setSelected(session, fragment.key, !fragment.selected);
+        overrides.clear();
+        render();
+    });
+    head.append(selectToggle);
     head.append(detailToggle(fragment.key));
     item.append(head);
     const note = lineage.get(fragment.key);
@@ -2602,19 +2617,29 @@ function wireDom() {
     el("addPeerQuick").addEventListener("click", () => setAddDrawer(true, true));
     el("manualPeerForm").addEventListener("submit", addManualPeer);
     initSamplesPalette();
-    // Disabled buttons never see clicks, so a press lands on the toolbar;
-    // hit-test the point for a disabled op and surface its stored reason in
-    // #opsHint (the same text the hover tooltip carries).
-    el("sessionOps").addEventListener("pointerdown", (event) => {
-        const hit = document
-            .elementsFromPoint(event.clientX, event.clientY)
-            .find((node) => node instanceof HTMLButtonElement && node.disabled && node.dataset.action !== undefined);
+    // Disabled controls swallow — and Firefox outright suppresses — their own
+    // pointer events, so disabled op buttons are pointer-events:none (styles)
+    // and the press/hover lands on the toolbar itself in every engine. The
+    // point is hit-tested against the disabled buttons' rects, because
+    // elementsFromPoint skips pointer-events:none nodes.
+    const disabledOpAt = (x, y) => Array.from(el("sessionOps").querySelectorAll("button:disabled")).find((node) => {
+        if (node.dataset.action === undefined)
+            return false;
+        const rect = node.getBoundingClientRect();
+        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    });
+    const surfaceDisabledOp = (event) => {
+        const hit = disabledOpAt(event.clientX, event.clientY);
         if (!hit)
             return;
         const hint = el("opsHint");
         hint.textContent = `${hit.textContent}: ${hit.dataset.why || "unavailable"}`;
         hint.hidden = false;
-    });
+    };
+    // Hover surfaces the reason too: pointer-events:none also disabled the
+    // native title tooltip, so the hint line takes over that duty.
+    el("sessionOps").addEventListener("pointerdown", surfaceDisabledOp);
+    el("sessionOps").addEventListener("pointermove", surfaceDisabledOp);
     el("opJoin").addEventListener("click", () => void joinSelected());
     el("opConcatenate").addEventListener("click", () => void concatenateSelected());
     el("opSort").addEventListener("click", () => void sortSelected());
