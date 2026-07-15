@@ -107,6 +107,17 @@ export interface RowDetailPair {
     value: string;
 }
 export declare function rowDetailPairs(inspect: InspectResponse | null, side: "input" | "output", index: number, network: Network): RowDetailPair[];
+export interface RawKeymapEntry {
+    keyHex: string;
+    valueHex: string;
+    kind: string;
+    name: string | null;
+}
+export interface RawKeymapSection {
+    title: string;
+    entries: RawKeymapEntry[];
+}
+export declare function rawKeymapSections(inspect: InspectResponse | null): RawKeymapSection[];
 export type DetailLevel = "collapsed" | "grouped" | "expanded";
 export declare const DETAIL_LEVELS: readonly DetailLevel[];
 export interface GroupAggregate {

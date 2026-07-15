@@ -2214,6 +2214,62 @@ h2 {
   margin-left: 0;
 }
 
+/* The raw view: one block per BIP 174/370 map, entries in serialization
+   order. Key and value are hex; the keytype name is an annotation. */
+.session-raw-map {
+  margin: 0 0 12px;
+}
+
+.session-raw-map h4 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.session-raw-entry {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 2fr;
+  gap: 4px 10px;
+  padding: 4px 6px;
+  border-top: 1px solid var(--line);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.session-raw-key {
+  overflow-wrap: anywhere;
+}
+
+.session-raw-name {
+  display: block;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.session-raw-value {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.session-raw-empty {
+  color: var(--muted);
+}
+
+.session-raw-computed {
+  margin-top: 10px;
+  border-top: 1px dashed var(--line);
+  padding-top: 8px;
+}
+
+.session-raw-computed summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .session-coin-side {
   flex: none;
   width: 26px;

@@ -442,6 +442,96 @@ export function rowDetailPairs(inspect, side, index, network) {
     }
     return pairs;
 }
+// Keytype → name tables per map kind (BIP 174 plus the BIP 370 additions).
+// Keyed by the first byte of key_hex: every assigned keytype fits one byte
+// of the compact-size varint, so a multi-byte keytype simply gets no name.
+const GLOBAL_KEYTYPE_NAMES = {
+    "00": "PSBT_GLOBAL_UNSIGNED_TX",
+    "01": "PSBT_GLOBAL_XPUB",
+    "02": "PSBT_GLOBAL_TX_VERSION",
+    "03": "PSBT_GLOBAL_FALLBACK_LOCKTIME",
+    "04": "PSBT_GLOBAL_INPUT_COUNT",
+    "05": "PSBT_GLOBAL_OUTPUT_COUNT",
+    "06": "PSBT_GLOBAL_TX_MODIFIABLE",
+    fb: "PSBT_GLOBAL_VERSION",
+    fc: "PSBT_GLOBAL_PROPRIETARY",
+};
+const INPUT_KEYTYPE_NAMES = {
+    "00": "PSBT_IN_NON_WITNESS_UTXO",
+    "01": "PSBT_IN_WITNESS_UTXO",
+    "02": "PSBT_IN_PARTIAL_SIG",
+    "03": "PSBT_IN_SIGHASH_TYPE",
+    "04": "PSBT_IN_REDEEM_SCRIPT",
+    "05": "PSBT_IN_WITNESS_SCRIPT",
+    "06": "PSBT_IN_BIP32_DERIVATION",
+    "07": "PSBT_IN_FINAL_SCRIPTSIG",
+    "08": "PSBT_IN_FINAL_SCRIPTWITNESS",
+    "09": "PSBT_IN_POR_COMMITMENT",
+    "0a": "PSBT_IN_RIPEMD160",
+    "0b": "PSBT_IN_SHA256",
+    "0c": "PSBT_IN_HASH160",
+    "0d": "PSBT_IN_HASH256",
+    "0e": "PSBT_IN_PREVIOUS_TXID",
+    "0f": "PSBT_IN_OUTPUT_INDEX",
+    "10": "PSBT_IN_SEQUENCE",
+    "11": "PSBT_IN_REQUIRED_TIME_LOCKTIME",
+    "12": "PSBT_IN_REQUIRED_HEIGHT_LOCKTIME",
+    "13": "PSBT_IN_TAP_KEY_SIG",
+    "14": "PSBT_IN_TAP_SCRIPT_SIG",
+    "15": "PSBT_IN_TAP_LEAF_SCRIPT",
+    "16": "PSBT_IN_TAP_BIP32_DERIVATION",
+    "17": "PSBT_IN_TAP_INTERNAL_KEY",
+    "18": "PSBT_IN_TAP_MERKLE_ROOT",
+    fc: "PSBT_IN_PROPRIETARY",
+};
+const OUTPUT_KEYTYPE_NAMES = {
+    "00": "PSBT_OUT_REDEEM_SCRIPT",
+    "01": "PSBT_OUT_WITNESS_SCRIPT",
+    "02": "PSBT_OUT_BIP32_DERIVATION",
+    "03": "PSBT_OUT_AMOUNT",
+    "04": "PSBT_OUT_SCRIPT",
+    "05": "PSBT_OUT_TAP_INTERNAL_KEY",
+    "06": "PSBT_OUT_TAP_TREE",
+    "07": "PSBT_OUT_TAP_BIP32_DERIVATION",
+    fc: "PSBT_OUT_PROPRIETARY",
+};
+function rawKeymapEntries(map, names) {
+    const entries = [];
+    for (const rawEntry of asArray(map) ?? []) {
+        const object = asObject(rawEntry);
+        const keyHex = asString(object?.key_hex);
+        if (keyHex === null)
+            continue;
+        const kind = asString(object?.kind) ?? "unknown";
+        const proprietary = asObject(object?.proprietary);
+        const prefix = asString(proprietary?.prefix_utf8) ?? asString(proprietary?.prefix_hex);
+        const subtype = asNumber(proprietary?.subtype);
+        entries.push({
+            keyHex,
+            valueHex: asString(object?.value_hex) ?? "",
+            kind,
+            name: kind === "proprietary" && prefix !== null
+                ? `${prefix}#${subtype ?? "?"}`
+                : (names[keyHex.slice(0, 2).toLowerCase()] ?? null),
+        });
+    }
+    return entries;
+}
+export function rawKeymapSections(inspect) {
+    const raw = asObject(asObject(inspect)?.raw);
+    if (!raw)
+        return [];
+    const sections = [
+        { title: "global map", entries: rawKeymapEntries(raw.global, GLOBAL_KEYTYPE_NAMES) },
+    ];
+    (asArray(raw.inputs) ?? []).forEach((map, index) => {
+        sections.push({ title: `input map ${index}`, entries: rawKeymapEntries(map, INPUT_KEYTYPE_NAMES) });
+    });
+    (asArray(raw.outputs) ?? []).forEach((map, index) => {
+        sections.push({ title: `output map ${index}`, entries: rawKeymapEntries(map, OUTPUT_KEYTYPE_NAMES) });
+    });
+    return sections;
+}
 export const DETAIL_LEVELS = ["collapsed", "grouped", "expanded"];
 export function groupAggregate(group) {
     return {

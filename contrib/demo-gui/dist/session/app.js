@@ -21,7 +21,7 @@ import { HttpBackend } from "../shared-frontend/backends/http.js";
 import { PtjBackendError } from "../shared-frontend/core/types.js";
 import { seedFromRandomBytes } from "../model.js";
 import { addFragment, asArray, asObject, asString, buildConfirmArgs, buildCreateRequest, buildPayArgs, buildSyncRequest, bytesToBase64, emptySession, fragmentSummary, negotiationView, pastedPsbt, removeFragment, selectedFragments, setSelected, } from "./state.js";
-import { amountBits, amountSpanParts, DETAIL_LEVELS, elisionLabel, fragmentBadges, fragmentCardModel, groupAggregate, rowDetailPairs, rowFacePairs, signedAmountSpanParts, } from "./display.js";
+import { amountBits, amountSpanParts, DETAIL_LEVELS, elisionLabel, fragmentBadges, fragmentCardModel, groupAggregate, rawKeymapSections, rowDetailPairs, rowFacePairs, signedAmountSpanParts, } from "./display.js";
 import { classifyPaste, mintFromPaste, SAMPLE_PASTES, } from "./ingest.js";
 import { actionState, addBridge, addFragmentToSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, enrichPayment, idleWire, mergeSessions, mineFragmentKeys, mintPeer, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, sessionByKey, sessionFocus, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
 import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, TX_MODIFIABLE_BITS, validateEditor, violationsFromServer, } from "./editor.js";
@@ -1005,7 +1005,7 @@ function renderFragmentCard(fragment) {
     // Footer: per-card actions.
     const foot = document.createElement("div");
     foot.className = "session-card-actions";
-    foot.append(button("Raw", "Everything, raw: the full inspect JSON dump in a dialog (not raw bytes — those live behind the export buttons)", () => {
+    foot.append(button("Raw", "The BIP 174/370 key-value maps in actual serialization order (the computed inspect JSON is tucked behind a fold)", () => {
         openRawModal(fragment, "card");
     }), button("Edit", "Field-by-field editor (liberal parsing; saving mints a new fragment)", () => {
         editor = editorModel(fragment.key, fragment.inspect, displayNetwork());
@@ -1308,22 +1308,58 @@ function outputRow(output, level) {
 // --- the level-4 dialog: everything, raw -------------------------------------
 //
 // One <dialog> serves every scope: a single row (rowDetailPairs — every
-// decoded field plus the raw keymap entries) or the whole card (the full
-// inspect JSON dump). Native showModal gives Esc and focus trapping;
-// clicking the backdrop closes.
+// decoded field plus the raw keymap entries) or the whole card. The card
+// scope is the faithful raw representation: the BIP 174/370 key-value
+// pairs of the global/input/output maps in actual serialization order
+// (rawKeymapSections). The computed inspect JSON — totals and other
+// derived fields — is demoted to a collapsed <details> below the maps so
+// it can never be mistaken for the wire format. Native showModal gives
+// Esc and focus trapping; clicking the backdrop closes.
 function openRawModal(fragment, scope) {
     const dialog = el("rawDialog");
     const title = el("rawDialogTitle");
     const dialogBody = el("rawDialogBody");
     dialogBody.textContent = "";
     if (scope === "card") {
-        title.textContent = `${fragment.key} — inspect JSON`;
-        const detail = document.createElement("pre");
-        detail.className = "session-fragment-detail";
-        detail.textContent = fragment.inspect
-            ? JSON.stringify(fragment.inspect, null, 2)
-            : "(not decoded)";
-        dialogBody.append(detail);
+        title.textContent = `${fragment.key} — raw PSBT maps`;
+        const sections = rawKeymapSections(fragment.inspect);
+        if (!sections.length) {
+            dialogBody.append(span("session-raw-empty", "(not decoded)"));
+        }
+        for (const section of sections) {
+            const block = document.createElement("section");
+            block.className = "session-raw-map";
+            const heading = document.createElement("h4");
+            heading.textContent = section.entries.length
+                ? section.title
+                : `${section.title} (empty)`;
+            block.append(heading);
+            for (const entry of section.entries) {
+                const row = document.createElement("div");
+                row.className = "session-raw-entry";
+                const key = span("session-raw-key", entry.keyHex);
+                if (entry.name) {
+                    key.append(span("session-raw-name", entry.name));
+                }
+                else if (entry.kind === "unknown") {
+                    key.append(span("session-raw-name", "(unknown keytype)"));
+                }
+                row.append(key, span("session-raw-value", entry.valueHex || "(empty value)"));
+                block.append(row);
+            }
+            dialogBody.append(block);
+        }
+        if (fragment.inspect) {
+            const computed = document.createElement("details");
+            computed.className = "session-raw-computed";
+            const summary = document.createElement("summary");
+            summary.textContent = "computed view (inspect JSON — derived fields, not the wire format)";
+            const detail = document.createElement("pre");
+            detail.className = "session-fragment-detail";
+            detail.textContent = JSON.stringify(fragment.inspect, null, 2);
+            computed.append(summary, detail);
+            dialogBody.append(computed);
+        }
     }
     else {
         title.textContent = `${fragment.key} — ${scope.side} ${scope.index}`;

@@ -16,6 +16,7 @@ import {
   groupAggregate,
   inputViews,
   outputViews,
+  rawKeymapSections,
   rowDetailPairs,
   rowFacePairs,
   scriptTemplate,
@@ -355,6 +356,76 @@ test("rowDetailPairs: every decoded field plus the raw keymap entries", () => {
   const bare = rowDetailPairs(INSPECT, "output", 1, "bitcoin");
   assert.ok(bare.length > 0);
   assert.ok(bare.every((pair) => !pair.label.startsWith("raw ")));
+});
+
+// --- the raw view (rawKeymapSections) ----------------------------------------
+
+test("rawKeymapSections: the three map kinds, faithful to serialization order", () => {
+  const withRaw = {
+    ...INSPECT,
+    raw: {
+      // Deliberately NOT sorted by keytype: the raw view must preserve the
+      // order the bytes actually appear in, not impose an interpretation.
+      global: [
+        { key_hex: "06", value_hex: "03", kind: "known" },
+        { key_hex: "fb", value_hex: "02000000", kind: "known" },
+        { key_hex: "04", value_hex: "01", kind: "known" },
+        {
+          key_hex: "fc0f636f6e63757272656e742d7073627410",
+          value_hex: "0100",
+          kind: "proprietary",
+          proprietary: { prefix_hex: "636f6e63757272656e742d70736274", prefix_utf8: "concurrent-psbt", subtype: 16, key_data_hex: "" },
+        },
+      ],
+      inputs: [[
+        { key_hex: "0e", value_hex: "aa".repeat(32), kind: "known" },
+        { key_hex: "ef01", value_hex: "beef", kind: "unknown" },
+      ]],
+      outputs: [
+        [{ key_hex: "03", value_hex: "1027000000000000", kind: "known" }],
+        [],
+      ],
+    },
+  };
+
+  const sections = rawKeymapSections(withRaw);
+  assert.deepEqual(
+    sections.map((section) => section.title),
+    ["global map", "input map 0", "output map 0", "output map 1"],
+  );
+
+  // Serialization order preserved verbatim; keytype names annotate the hex.
+  const [global, input0, output0, output1] = sections;
+  assert.deepEqual(
+    global.entries.map((entry) => entry.keyHex),
+    ["06", "fb", "04", "fc0f636f6e63757272656e742d7073627410"],
+  );
+  assert.deepEqual(
+    global.entries.map((entry) => entry.name),
+    [
+      "PSBT_GLOBAL_TX_MODIFIABLE",
+      "PSBT_GLOBAL_VERSION",
+      "PSBT_GLOBAL_INPUT_COUNT",
+      "concurrent-psbt#16",
+    ],
+  );
+
+  // Per-map-kind name tables: keytype 03 means AMOUNT in an output map…
+  assert.deepEqual(output0.entries, [
+    { keyHex: "03", valueHex: "1027000000000000", kind: "known", name: "PSBT_OUT_AMOUNT" },
+  ]);
+  // …and unknown keytypes keep their hex with no invented name.
+  assert.deepEqual(
+    input0.entries.map((entry) => [entry.name, entry.kind]),
+    [["PSBT_IN_PREVIOUS_TXID", "known"], [null, "unknown"]],
+  );
+
+  // Empty maps stay in the section list — the PSBT genuinely contains them.
+  assert.deepEqual(output1.entries, []);
+
+  // Defensive: no inspect / no raw projection yields no sections.
+  assert.deepEqual(rawKeymapSections(null), []);
+  assert.deepEqual(rawKeymapSections(INSPECT), []);
 });
 
 // --- detail ladder (signaturePresence, groupAggregate, rowFacePairs) --------
