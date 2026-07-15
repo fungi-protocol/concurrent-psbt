@@ -2814,6 +2814,29 @@ img.session-lifehash {
   font-size: 12px;
 }
 
+/* The success cousin of the rejection pulse: a join whose result deduped
+   onto this card — correct, but a visual no-op without the cue. Ink-toned,
+   not red: nothing went wrong. */
+.session-wire-absorbed {
+  animation: session-wire-absorbed-pulse 0.9s ease-in-out 2;
+}
+
+@keyframes session-wire-absorbed-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ink) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--ink) 35%, transparent);
+  }
+}
+
+.session-wire-reason-absorbed {
+  border-color: color-mix(in srgb, var(--ink) 55%, transparent);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  color: var(--ink);
+}
+
 /* Pending-wire queue (wiring lane): the queue panel under the wire status
    bar, and the animated pending-edge vocabulary on participating cards
    (the demo's .pending-wire orange dashes, card-shaped). */

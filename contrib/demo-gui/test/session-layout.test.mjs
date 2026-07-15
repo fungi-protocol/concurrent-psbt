@@ -163,6 +163,18 @@ test("a local 'peer' presents as a disk location, not an identity", () => {
   assert.match(html, /<option value="local">local \(disk path/);
 });
 
+test("a join absorbed by its operand reports itself instead of looking broken", () => {
+  // ⊥ ⊔ x = x: the result dedupes onto an operand's card, so every join
+  // path routes its outcome through the reporter…
+  assert.equal((app.match(/reportJoinOutcome\(joined,/g) ?? []).length, 3);
+  // …which states the containment in the status bar and pulses the
+  // surviving card with the ink-toned success cousin of the red pulse.
+  assert.match(app, /nothing new to add/);
+  assert.match(app, /"join absorbed — nothing new", "absorbed"/);
+  assert.match(styles, /\.session-wire-absorbed\s*\{[\s\S]*?session-wire-absorbed-pulse/);
+  assert.match(styles, /\.session-wire-reason-absorbed\s*\{/);
+});
+
 test("a lone side subtotal is elided — it would repeat the grand total", () => {
   // Per-side rule: a group shows a side's subtotal only when that side is
   // split across groups; a footer with nothing to say is skipped.

@@ -420,6 +420,26 @@ function fragmentByKey(key: string): SessionFragment | null {
   return session.fragments.find((fragment) => fragment.key === key) ?? null;
 }
 
+// ⊥ ⊔ x = x: a join whose result dedupes onto one of its operands is
+// mathematically a success and visually a no-op — every other operand was
+// already contained. Say so where the user looks (status bar + a chip on
+// the surviving card) instead of leaving "already loaded" buried in the
+// event log; a fresh result keeps the silent status clear.
+function reportJoinOutcome(joined: SessionFragment, sources: SessionFragment[]): void {
+  if (!sources.some((source) => source.key === joined.key)) {
+    showStatus("", false);
+    return;
+  }
+  const contained = sources
+    .filter((source) => source.key !== joined.key)
+    .map((source) => source.key);
+  const text =
+    `join: ${contained.join(", ")} ⊑ ${joined.key} — the result IS ${joined.key}, nothing new to add`;
+  showStatus(text, false);
+  logEvent(text);
+  flashWireNotice({ kind: "fragment", key: joined.key }, "join absorbed — nothing new", "absorbed");
+}
+
 // --- contextual enablement -----------------------------------------------------
 
 const ACTION_BUTTONS: [string, SessionAction][] = [
@@ -516,20 +536,27 @@ function nodeName(ref: NodeRef): string {
   return `${ref.kind} ${ref.key}`;
 }
 
-// Transient rejection feedback (the demo's red failure pulse, card-shaped):
-// tapping a blocked/unbacked target pulses the card and pins the reason chip
-// to it for a moment; the status bar carries the same text persistently.
-let wireRejection: { ref: NodeRef; text: string } | null = null;
+// Transient card feedback (the demo's failure pulse, card-shaped, plus an
+// ink-toned success cousin): the pulse pins a short chip to the card for a
+// moment; the status bar carries the full text persistently. "rejected" is
+// the red refusal pulse; "absorbed" marks a join whose result deduped onto
+// this card — correct, but visually a no-op without the cue.
+type WireFlashTone = "rejected" | "absorbed";
+let wireFlash: { ref: NodeRef; text: string; tone: WireFlashTone } | null = null;
 
-function flashWireRejection(ref: NodeRef, text: string): void {
-  const rejection = { ref, text };
-  wireRejection = rejection;
+function flashWireNotice(ref: NodeRef, text: string, tone: WireFlashTone): void {
+  const flash = { ref, text, tone };
+  wireFlash = flash;
   window.setTimeout(() => {
-    if (wireRejection === rejection) {
-      wireRejection = null;
+    if (wireFlash === flash) {
+      wireFlash = null;
       render();
     }
   }, 1800);
+}
+
+function flashWireRejection(ref: NodeRef, text: string): void {
+  flashWireNotice(ref, text, "rejected");
 }
 
 // --- drag-to-wire ------------------------------------------------------------
@@ -797,7 +824,10 @@ async function executeWire(
           `⊔ join of ${left.key}, ${right.key}`,
         );
         logEvent(`wired ${left.key} ⋈ ${right.key} → ${joined.key} (lattice join)`);
-        break;
+        // The absorbed-join outcome message must survive this function's
+        // generic status clear, so this case reports and returns itself.
+        reportJoinOutcome(joined, [left, right]);
+        return true;
       }
       case "fragment-into-session": {
         const sessionKey = source.kind === "session" ? source.key : target.key;
@@ -925,6 +955,7 @@ async function executeJoinGroup(group: FragmentJoinGroup): Promise<string | null
     logEvent(
       `wired ${members.map((fragment) => fragment.key).join(" ⋈ ")} → ${joined.key} (lattice join)`,
     );
+    reportJoinOutcome(joined, members);
     return joined.key;
   } catch (error) {
     reportError("wire fragment-join", error);
@@ -1752,9 +1783,9 @@ function decorateWireTarget(node: HTMLElement, ref: NodeRef): void {
   node.dataset.wireKind = ref.kind;
   node.dataset.wireKey = ref.key;
   armWireDrag(node, ref);
-  if (wireRejection && sameRef(wireRejection.ref, ref)) {
-    node.classList.add("session-wire-rejected");
-    node.append(span("session-wire-reason", wireRejection.text));
+  if (wireFlash && sameRef(wireFlash.ref, ref)) {
+    node.classList.add(`session-wire-${wireFlash.tone}`);
+    node.append(span(`session-wire-reason session-wire-reason-${wireFlash.tone}`, wireFlash.text));
   }
   // Cards with at least one queued wire wear the pending-edge vocabulary
   // (the demo's animated orange dashes, card-shaped).
@@ -2584,12 +2615,12 @@ async function joinSelected(): Promise<void> {
   const selected = requireEnabled("join");
   if (!selected) return;
   try {
-    await addResponse(
+    const joined = await addResponse(
       await backend.joinPsbts(selected.map((f) => f.psbt)),
       "join",
       `⊔ join of ${selected.map((f) => f.key).join(", ")}`,
     );
-    showStatus("", false);
+    reportJoinOutcome(joined, selected);
   } catch (error) {
     reportError("join", error);
   }
