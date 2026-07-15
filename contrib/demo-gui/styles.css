@@ -2905,31 +2905,19 @@ img.session-lifehash {
   font-size: 13px;
 }
 
-/* MINE band + session containers (wiring lane, Q6): the work area's
-   fragment panel holds one large peer-like Mine rectangle (local-only
-   fragments no register references); each session renders ONCE as a
-   container in the sessions region, so Mine -> session wiring reads as
-   a visible move between the two. */
+/* Session containers (registers): each session renders ONCE as a canvas
+   node holding its register's one card, so Mine -> session wiring reads
+   as a visible move between nodes. */
 
-.session-mine-area,
 .session-container {
   display: block;
+  margin: 0;
   padding: 10px 12px;
-  border-radius: 10px;
-  margin-bottom: 10px;
-}
-
-.session-mine-area {
-  border: 2px solid var(--ink);
-  background: var(--surface-2);
-}
-
-.session-container {
   border: 1.5px solid rgba(15, 123, 79, 0.42);
+  border-radius: 10px;
   background: rgba(15, 123, 79, 0.04);
 }
 
-.session-mine-area > .session-card-list,
 .session-container > .session-card-list {
   margin-top: 8px;
 }
@@ -2939,17 +2927,32 @@ img.session-lifehash {
   font-size: 12px;
 }
 
-/* Spatial shell: ephemeral peers on top, shared sessions beneath them, then
-   the Me/local-only workspace absorbing all remaining height so the Mine
-   strip stays a stable bottom band of the work area. */
+/* Chrome above the canvas: status + wire feedback, then the lane actions. */
+.session-chrome {
+  display: grid;
+  gap: 8px;
+  margin: 12px 14px 0;
+}
+
+.session-chrome:empty {
+  display: none;
+}
+
+.session-canvas-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 10px 14px 0;
+}
+
+/* The spatial canvas: a scrolling viewport over the positioned world.
+   Lanes top to bottom -- remote peers, session registers, the framed Mine
+   workspace of local-only drafts. */
 .session-spatial-workbench {
   position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  overflow: auto;
   min-height: min(760px, calc(100vh - 112px));
   margin: 12px 14px 0;
-  padding: 12px;
   border: 1px solid var(--line);
   border-radius: 16px;
   background:
@@ -2958,17 +2961,20 @@ img.session-lifehash {
   box-shadow: var(--shadow);
 }
 
-/* Standing wire edges (Mine → sessions, peer → authorized sessions):
-   pointer-transparent and drawn over the workbench so edges stay visible
-   across the opaque region backgrounds; endpoints anchor at card edges so
-   the curves mostly cross the gaps between regions. */
+.session-canvas-world {
+  position: relative;
+}
+
+/* Standing wire edges (Mine -> sessions, peer -> authorized sessions):
+   pointer-transparent and drawn UNDER the cards -- the canvas floor. The
+   layer scrolls with the world, so edges track their cards for free. */
 .session-wire-overlay {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   pointer-events: none;
-  z-index: 2;
+  z-index: 0;
 }
 
 .session-edge-mine {
@@ -2986,124 +2992,84 @@ img.session-lifehash {
   opacity: 0.45;
 }
 
-.session-spatial-workbench > .session-region {
-  flex: none;
+/* Canvas nodes: keyed wrappers positioned by the pure lane layout. The
+   wrapper survives re-renders, so position changes GLIDE via the transform
+   transition; widths are fixed per lane for stable measurement (heights
+   stay content-driven). */
+.session-canvas-node {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  transition: transform 180ms ease;
+}
+
+.session-canvas-node > .session-card {
   margin: 0;
-  box-shadow: none;
 }
 
-.session-spatial-workbench > [data-spatial-region="me"] {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 180px;
-  box-shadow: none;
+.session-node-peer {
+  width: 220px;
 }
 
-.session-spatial-workbench > .session-ops-panel {
-  flex: none;
+.session-node-session {
+  width: 400px;
 }
 
-/* Overview mode: the fragment list is the Mine strip pinned to the
-   bottom of whatever height the Me region absorbed. (Focus mode removes
-   this class and falls back to the card grid.) */
-.session-area-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  flex: 1 1 auto;
-}
-
-.session-area-list > .session-mine-area {
-  width: 100%;
-  margin-bottom: 0;
-}
-
-.session-area-list > .session-mine-area {
-  margin-top: auto;
-}
-
-/* Solo mode (no peers, no sessions): the shelves collapse to their
-   headings and Mine takes over the entire work area. */
-.session-workbench-solo .session-peer-list,
-.session-workbench-solo .session-list,
-.session-workbench-solo #peersEmpty,
-.session-workbench-solo #sessionsEmpty {
-  display: none;
-}
-
-.session-workbench-solo .session-region-heading {
-  margin-bottom: 0;
-}
-
-.session-workbench-solo .session-area-list > .session-mine-area {
-  flex: 1 0 auto;
-  margin-top: 0;
-}
-
-.session-region {
-  margin: 12px 14px 0;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface);
-  box-shadow: var(--shadow);
-}
-
-.session-peer-region {
-  border-top: 4px solid var(--ink);
-}
-
-.session-session-region {
-  border-top: 4px solid var(--green);
-}
-
-.session-region-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-}
-
-.session-peer-list,
-.session-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 8px;
-}
-
-.session-peer-card,
-.session-container {
-  margin: 0;
+.session-node-fragment {
+  width: 340px;
 }
 
 /* Peers are small nodes above the sessions: compact cards, tight type. */
-.session-peer-list {
-  grid-template-columns: repeat(auto-fit, minmax(180px, max-content));
-}
-
-.session-peer-list .session-card {
+.session-node-peer .session-card {
   padding: 6px 8px;
   font-size: 12px;
 }
 
-.session-peer-list .session-card .item-title {
+.session-node-peer .session-card .item-title {
   font-size: 12px;
 }
 
-.session-peer-list .session-card button {
+.session-node-peer .session-card button {
   padding: 2px 6px;
   font-size: 11px;
 }
 
-/* Session containers are the workbench's centrepiece: full-width rows,
-   one register card each. */
-.session-list {
-  grid-template-columns: 1fr;
+.session-lane-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  opacity: 0.55;
+  white-space: nowrap;
+  transition: transform 180ms ease;
 }
 
-/* Minting an empty register is a one-field action in the heading. */
+/* The Mine frame: the local workspace drawn behind its wrapped cards. */
+.session-mine-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  background: var(--surface-2);
+  transition: transform 180ms ease, width 180ms ease, height 180ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-canvas-node,
+  .session-lane-label,
+  .session-mine-frame {
+    transition: none;
+  }
+}
+
+/* Minting an empty register is a one-field action in the canvas bar. */
 .session-new-session {
   display: flex;
   gap: 6px;
@@ -3197,12 +3163,9 @@ body {
     padding: 8px;
   }
 
-  .session-region {
+  .session-chrome,
+  .session-canvas-bar {
     margin-inline: 8px;
-  }
-
-  .session-spatial-workbench > .session-region {
-    margin-inline: 0;
   }
 
   .session-add-grid {

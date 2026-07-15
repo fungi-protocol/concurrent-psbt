@@ -35,74 +35,65 @@
       </div>
     </header>
 
-    <main id="spatialWorkbench" class="session-spatial-workbench">
-    <!-- Standing wire edges: Mine → every session (the local peer sees all
-         local registers) and peer → each session it is authorized on.
-         Redrawn after every render; pointer-transparent. -->
-    <svg id="wireOverlay" class="session-wire-overlay" aria-hidden="true"></svg>
-    <section id="peerRegion" class="session-region session-peer-region" data-spatial-region="peers" aria-label="Ephemeral peers" data-focus-hide="">
-      <div class="session-region-heading">
-        <div>
-          <h2>Peers</h2>
-          <p class="item-meta">Ephemeral transport addresses for this page load. Adding does not pair, connect, or publish.</p>
-        </div>
-        <button id="addPeerQuick" type="button">Add peer</button>
-      </div>
-      <p id="peersEmpty" class="item-meta">No peers yet.</p>
-      <ul id="peerList" class="item-list session-peer-list"></ul>
-    </section>
-
-    <section id="sessionRegion" class="session-region session-session-region" data-spatial-region="sessions" aria-label="Shared sessions" data-focus-hide="">
-      <div class="session-region-heading">
-        <div>
-          <h2>Sessions</h2>
-          <p class="item-meta">Monotone shared registers for PSBT fragments. Wire a fragment in to write it (⊔); wire a peer in to authorize it.</p>
-        </div>
-        <!-- Minting an empty register needs nothing but a name — no
-             fragment/descriptor pickers, no transport (peers own those). -->
-        <form id="newSessionForm" class="session-new-session">
-          <input id="newSessionName" autocomplete="off" placeholder="name" aria-label="New session name">
-          <button type="submit">New session</button>
-        </form>
-      </div>
-      <p id="sessionsEmpty" class="item-meta">No sessions yet.</p>
-      <ul id="sessionList" class="item-list session-list"></ul>
-    </section>
-
+    <main class="session-main">
+    <!-- Chrome: status + wire feedback + focus bar, fixed above the canvas. -->
+    <div class="session-chrome">
       <!-- Focus bar: visible in single-session focus mode (mobile-first). -->
       <nav id="focusBar" class="session-focus-bar" hidden>
         <button id="focusBack" type="button">← All objects</button>
         <span id="focusTitle" class="item-title"></span>
       </nav>
-
-      <!-- The work area: a flat bottom band of local-only cards (Mine).
-           Sessions render once, as containers in the sessions region above;
-           local/unpublished is the default and carries no heading or badge
-           of its own. -->
-      <section class="control-section session-panel session-panel-wide" aria-label="PSBT work area" data-spatial-region="me" data-focus-hide="">
-        <div id="sessionStatus" class="session-status" role="status"></div>
-        <!-- The wire-status bar: an idle advertisement of the drag-to-wire
-             gesture whenever wireable cards exist, repainted imperatively
-             with live guidance while a drag is in flight. -->
-        <div id="wireStatus" class="session-wire-status" role="status" hidden>
-          <span id="wireStatusText"></span>
+      <div id="sessionStatus" class="session-status" role="status"></div>
+      <!-- The wire-status bar: an idle advertisement of the drag-to-wire
+           gesture whenever wireable cards exist, repainted imperatively
+           with live guidance while a drag is in flight. -->
+      <div id="wireStatus" class="session-wire-status" role="status" hidden>
+        <span id="wireStatusText"></span>
+      </div>
+      <!-- Pending-wire queue: completed wire gestures accumulate here as
+           visible edges instead of executing immediately. Each edge has
+           its own Join; the toolbar Join applies whole connected
+           components; Cancel wires discards the queue. -->
+      <div id="wireQueue" class="session-wire-queue" hidden>
+        <div class="session-wire-queue-head">
+          <span id="wireQueueSummary" class="item-meta"></span>
+          <button id="wireJoinAll" type="button" class="primary" title="Apply every pending wire, whole connected components at a time (fragment clusters join in one n-ary call)">Join</button>
+          <button id="wireClearAll" type="button" title="Discard all pending wires without applying them">Cancel wires</button>
         </div>
-        <!-- Pending-wire queue: completed wire gestures accumulate here as
-             visible edges instead of executing immediately. Each edge has
-             its own Join; the toolbar Join applies whole connected
-             components; Cancel wires discards the queue. -->
-        <div id="wireQueue" class="session-wire-queue" hidden>
-          <div class="session-wire-queue-head">
-            <span id="wireQueueSummary" class="item-meta"></span>
-            <button id="wireJoinAll" type="button" class="primary" title="Apply every pending wire, whole connected components at a time (fragment clusters join in one n-ary call)">Join</button>
-            <button id="wireClearAll" type="button" title="Discard all pending wires without applying them">Cancel wires</button>
-          </div>
-          <ul id="wireQueueList" class="session-wire-queue-list"></ul>
-        </div>
+        <ul id="wireQueueList" class="session-wire-queue-list"></ul>
+      </div>
+      <p id="fragmentEmpty" class="item-meta">No PSBTs loaded yet. Paste, upload, or create one.</p>
+    </div>
 
-        <p id="fragmentEmpty">No PSBTs loaded yet. Paste, upload, or create one.</p>
-        <ul id="fragmentList" class="item-list session-card-list"></ul>
-      </section>
+    <!-- Lane actions: minting an empty register needs nothing but a name —
+         no fragment/descriptor pickers, no transport (peers own those). -->
+    <div class="session-canvas-bar" data-focus-hide="">
+      <button id="addPeerQuick" type="button">Add peer</button>
+      <form id="newSessionForm" class="session-new-session">
+        <input id="newSessionName" autocomplete="off" placeholder="name" aria-label="New session name">
+        <button type="submit">New session</button>
+      </form>
+    </div>
+
+    <!-- The spatial canvas: a scrolling viewport over a positioned world.
+         Lanes top to bottom — remote peers, session registers, and the
+         framed Mine workspace of local-only drafts. Cards are HTML,
+         absolutely positioned by the pure lane layout; the SVG edge layer
+         beneath them carries the standing wires. -->
+    <div id="spatialWorkbench" class="session-spatial-workbench" data-focus-hide="">
+      <div id="canvasWorld" class="session-canvas-world">
+        <!-- Standing wire edges: Mine → every session (the local peer sees
+             all local registers) and peer → each session it is authorized
+             on. Redrawn after every render; pointer-transparent. -->
+        <svg id="wireOverlay" class="session-wire-overlay" aria-hidden="true"></svg>
+        <div id="nodeLayer" class="session-node-layer"></div>
+      </div>
+    </div>
+
+    <!-- Single-session focus: the register value as a flat card list. -->
+    <section class="control-section session-panel session-panel-wide" aria-label="Focused session" data-focus-show="" hidden>
+      <ul id="fragmentList" class="item-list session-card-list"></ul>
+    </section>
 
       <!-- Wire sources that are not fragments: pasted payment requests,
            spendable outputs, and descriptors live beside the cards they

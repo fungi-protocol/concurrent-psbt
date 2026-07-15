@@ -32,6 +32,8 @@ const SESSION_ENCODING_JS: &[u8] =
     include_bytes!("../../../contrib/demo-gui/dist/session/encoding.js");
 const SESSION_PALETTE_JS: &[u8] =
     include_bytes!("../../../contrib/demo-gui/dist/session/palette.js");
+const SESSION_LAYOUT_JS: &[u8] =
+    include_bytes!("../../../contrib/demo-gui/dist/session/layout.js");
 const INDEX_HTML: &[u8] = include_bytes!("../../../contrib/demo-gui/index.html");
 const STYLES_CSS: &[u8] = include_bytes!("../../../contrib/demo-gui/styles.css");
 const APP_JS: &[u8] = include_bytes!("../../../contrib/demo-gui/dist/app.js");
@@ -123,6 +125,10 @@ pub fn asset(path: &str) -> Option<Asset> {
         "/dist/session/palette.js" => Some(Asset {
             content_type: "text/javascript; charset=utf-8",
             body: SESSION_PALETTE_JS,
+        }),
+        "/dist/session/layout.js" => Some(Asset {
+            content_type: "text/javascript; charset=utf-8",
+            body: SESSION_LAYOUT_JS,
         }),
         "/styles.css" => Some(Asset {
             content_type: "text/css; charset=utf-8",
@@ -1894,6 +1900,15 @@ mod tests {
             String::from_utf8(session_state.body)
                 .unwrap()
                 .contains("buildSyncRequest")
+        );
+
+        let session_layout = response_for("GET", "/dist/session/layout.js?v=cache-busted", b"");
+        assert_eq!(session_layout.status, 200);
+        assert_eq!(session_layout.content_type, "text/javascript; charset=utf-8");
+        assert!(
+            String::from_utf8(session_layout.body)
+                .unwrap()
+                .contains("laneLayout")
         );
 
         let app = response_for("GET", "/dist/app.js?v=cache-busted", b"");

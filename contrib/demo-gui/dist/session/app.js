@@ -25,6 +25,7 @@ import { amountBits, amountSpanParts, DETAIL_LEVELS, elisionLabel, fragmentBadge
 import { addressFromScript } from "./encoding.js";
 import { classifyPaste, mintFromPaste, SAMPLE_PASTES, } from "./ingest.js";
 import { actionState, addBridge, authorizePeerOnSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, enrichPayment, idleWire, mergeSessions, mineFragmentKeys, writeSessionContent, mintPeer, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, sessionByKey, sessionFocus, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
+import { laneLayout } from "./layout.js";
 import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, toggledBitfieldValue, TX_MODIFIABLE_BITS, validateEditor, violationsFromServer, } from "./editor.js";
 import { descriptorColorKey, groupColorKey, paletteColor, paletteRegistry, peerColorKey, } from "./palette.js";
 const backend = new HttpBackend();
@@ -913,65 +914,142 @@ function clearPendingWires() {
     pendingWires = [];
     render();
 }
+// --- spatial canvas --------------------------------------------------------------
+// The workbench is a scrolling viewport over #canvasWorld: an SVG edge
+// layer under a layer of absolutely-positioned HTML cards. Positions come
+// from the pure laneLayout (measured sizes in, rects out); the wrappers
+// are KEYED and survive re-renders, so a position change is a transform
+// transition — cards glide instead of teleporting — while their contents
+// are rebuilt each render exactly like the old list items.
+const canvasNodes = new Map();
+let canvasLayout = null;
+function canvasWrapper(key, className) {
+    let wrapper = canvasNodes.get(key);
+    if (!wrapper) {
+        wrapper = document.createElement("div");
+        wrapper.className = className;
+        canvasNodes.set(key, wrapper);
+        el("nodeLayer").append(wrapper);
+    }
+    return wrapper;
+}
+function placeWrapper(wrapper, x, y) {
+    wrapper.style.transform = `translate(${x}px, ${y}px)`;
+}
+// Content pass + measure/place pass. Renders every canvas node (peers,
+// session containers, Mine fragments, lane furniture), measures the
+// wrappers, runs the pure layout, and paints the rects.
+function renderCanvas() {
+    const live = new Set();
+    const node = (key, className, card) => {
+        const wrapper = canvasWrapper(key, className);
+        wrapper.replaceChildren(card);
+        live.add(key);
+        return key;
+    };
+    const peerKeys = [];
+    for (const group of peerBridgeGroups(objects)) {
+        const members = group
+            .map((key) => peerByKey(objects, key))
+            .filter((member) => member !== null);
+        if (!members.length)
+            continue;
+        // A bridge group renders as ONE card keyed by its first member.
+        const card = members.length === 1 ? renderPeerCard(members[0]) : renderBridgeGroupCard(members);
+        peerKeys.push(node(`peer:${members[0].key}`, "session-canvas-node session-node-peer", card));
+    }
+    const sessionKeys = [];
+    for (const sessionObject of objects.sessions) {
+        sessionKeys.push(node(`session:${sessionObject.key}`, "session-canvas-node session-node-session", renderSessionContainer(sessionObject)));
+    }
+    // Mine: the local-only fragments no register references. Publishing
+    // (wiring Mine → session) is a visible MOVE out of the frame.
+    const mineKeys = [];
+    const mine = mineFragmentKeys(session.fragments.map((fragment) => fragment.key), objects);
+    for (const fragment of session.fragments) {
+        if (!mine.includes(fragment.key))
+            continue;
+        mineKeys.push(node(`fragment:${fragment.key}`, "session-canvas-node session-node-fragment", renderFragmentCard(fragment)));
+    }
+    // Lane furniture: labels above each lane, the frame behind Mine.
+    const label = (key, text, title) => {
+        const wrapper = canvasWrapper(key, "session-lane-label");
+        if (wrapper.textContent !== text)
+            wrapper.textContent = text;
+        wrapper.title = title;
+        live.add(key);
+        return wrapper;
+    };
+    const peersLabel = label("label:peers", peerKeys.length ? "peers" : "peers — none yet", "Ephemeral transport addresses for this page load. Adding does not pair, connect, or publish.");
+    const sessionsLabel = label("label:sessions", sessionKeys.length ? "sessions" : "sessions — none yet", "Monotone shared registers for PSBT fragments. Wire a fragment in to write it (⊔); wire a peer in to authorize it.");
+    const mineLabel = label("label:mine", mineKeys.length
+        ? "mine — not published to any session; wiring a card to a session publishes it"
+        : "mine — every loaded fragment is published", "Local-only drafts. Wiring a card to a session writes it into that register (a visible move).");
+    const frame = canvasWrapper("frame:mine", "session-mine-frame");
+    live.add("frame:mine");
+    for (const [key, wrapper] of canvasNodes) {
+        if (!live.has(key)) {
+            wrapper.remove();
+            canvasNodes.delete(key);
+        }
+    }
+    // Measure, lay out, place. Wrapper widths are fixed per lane (CSS);
+    // heights are whatever the cards need.
+    const workbench = el("spatialWorkbench");
+    const world = el("canvasWorld");
+    const measure = (key) => {
+        const wrapper = canvasNodes.get(key);
+        return {
+            key,
+            width: wrapper?.offsetWidth ?? 0,
+            height: wrapper?.offsetHeight ?? 0,
+        };
+    };
+    const layout = laneLayout({
+        peerGroups: peerKeys.map((key) => [measure(key)]),
+        sessions: sessionKeys.map(measure),
+        mine: mineKeys.map(measure),
+        minWidth: workbench.clientWidth,
+    });
+    canvasLayout = layout;
+    world.style.width = `${layout.world.width}px`;
+    world.style.height = `${layout.world.height}px`;
+    for (const [key, rect] of layout.positions) {
+        const wrapper = canvasNodes.get(key);
+        if (wrapper)
+            placeWrapper(wrapper, rect.x, rect.y);
+    }
+    placeWrapper(peersLabel, layout.mineFrame.x, Math.max(0, layout.lanes.peersY - 22));
+    placeWrapper(sessionsLabel, layout.mineFrame.x, layout.lanes.sessionsY - 22);
+    placeWrapper(mineLabel, layout.mineFrame.x + 14, layout.lanes.mineY + 8);
+    placeWrapper(frame, layout.mineFrame.x, layout.mineFrame.y);
+    frame.style.width = `${layout.mineFrame.width}px`;
+    frame.style.height = `${layout.mineFrame.height}px`;
+    el("fragmentEmpty").hidden = session.fragments.length > 0;
+}
 // --- fragment cards --------------------------------------------------------------
 const INPUT_ROWS_SHOWN = 3;
 const OUTPUT_ROWS_SHOWN = 3;
-function renderFragments() {
+// Single-session focus: the register's value as a flat card list (the
+// canvas is hidden; this list is the whole view).
+function renderFocusFragments() {
     const list = el("fragmentList");
     list.textContent = "";
-    // Solo mode: with no peers and no sessions the spatial regions collapse
-    // to their headings and the Mine strip takes over the whole work area.
-    el("spatialWorkbench").classList.toggle("session-workbench-solo", objects.peers.length === 0 && objects.sessions.length === 0);
     const focused = focus.mode === "session" && focus.sessionKey ? sessionByKey(objects, focus.sessionKey) : null;
-    // Overview stacks full-width area strips (sessions above, Mine pinned to
-    // the bottom); focus mode is a flat card grid. The list element is shared,
-    // so the layout class flips with the mode.
-    list.classList.toggle("session-area-list", !focused);
-    if (focused) {
-        // Single-session focus shows the register's value as a flat card.
-        const visible = session.fragments.filter((fragment) => focused.contentKey === fragment.key);
-        for (const fragment of visible) {
-            list.append(renderFragmentCard(fragment));
-        }
-        if (!visible.length) {
-            // An empty REGISTER, not an empty workspace — the generic "No PSBTs
-            // loaded yet" hint would be misleading (Mine may well hold fragments).
-            const hint = document.createElement("li");
-            hint.append(span("item-meta session-area-hint", "empty register — wire a fragment in"));
-            list.append(hint);
-        }
-        el("fragmentEmpty").hidden = true;
+    if (!focused)
         return;
+    const visible = session.fragments.filter((fragment) => focused.contentKey === fragment.key);
+    for (const fragment of visible) {
+        list.append(renderFragmentCard(fragment));
     }
-    // Overview: each session renders EXACTLY ONCE, as a container in the
-    // sessions region (renderSessionContainers) — the work area holds only
-    // MINE, the local-only fragments no register references. Publishing
-    // (wiring Mine → session) is a visible MOVE from this band into the
-    // session's container.
-    if (session.fragments.length) {
-        const mineKeys = mineFragmentKeys(session.fragments.map((fragment) => fragment.key), objects);
-        list.append(renderMineArea(session.fragments.filter((fragment) => mineKeys.includes(fragment.key))));
+    if (!visible.length) {
+        // An empty REGISTER, not an empty workspace — the generic "No PSBTs
+        // loaded yet" hint would be misleading (Mine may well hold fragments).
+        const hint = document.createElement("li");
+        hint.append(span("item-meta session-area-hint", "empty register — wire a fragment in"));
+        list.append(hint);
     }
-    el("fragmentEmpty").hidden = session.fragments.length > 0;
-}
-// The bottom band of the work area: the sessionless local fragments (Q6).
-// Being local/unpublished is the DEFAULT, so — like unattributed rows —
-// the band carries no title and no badge: published session areas are the
-// labelled exception, and everything else in the panel is simply yours.
-// The element survives purely for layout (bottom pinning, solo expansion).
-function renderMineArea(fragments) {
-    const item = document.createElement("li");
-    item.className = "session-mine-area";
-    const inner = document.createElement("ul");
-    inner.className = "item-list session-card-list";
-    for (const fragment of fragments) {
-        inner.append(renderFragmentCard(fragment));
-    }
-    item.append(inner);
-    item.append(span("item-meta session-area-hint", fragments.length
-        ? "not published to any session — wiring a card to a session publishes it"
-        : "every loaded fragment is published"));
-    return item;
+    el("fragmentEmpty").hidden = true;
 }
 function renderFragmentCard(fragment) {
     const card = fragmentCardModel(fragment.inspect, displayNetwork());
@@ -1535,62 +1613,44 @@ function decorateWireTarget(node, ref) {
 // holding the register's value as a full fragment card (or an empty-register
 // hint), plus the session's own actions. There is no second, published-area
 // copy in the work area.
-function renderSessionContainers() {
-    const list = el("sessionList");
-    list.textContent = "";
-    for (const sessionObject of objects.sessions) {
-        const item = document.createElement("li");
-        item.className = "list-item session-card session-container";
-        const ref = { kind: "session", key: sessionObject.key };
-        decorateWireTarget(item, ref);
-        const head = document.createElement("div");
-        head.className = "session-fragment-row";
-        head.append(span("item-title", sessionObject.name), badge("session", "session-badge"), span("item-meta", `${sessionObject.contentKey ? `register: ${sessionObject.contentKey}` : "empty register"} · ` +
-            `${sessionObject.peerKeys.length} peer(s)`));
-        item.append(head);
-        // The register's one growing value, as the card itself.
-        const content = sessionObject.contentKey
-            ? (session.fragments.find((fragment) => fragment.key === sessionObject.contentKey) ?? null)
-            : null;
-        if (content) {
-            const inner = document.createElement("ul");
-            inner.className = "item-list session-card-list";
-            inner.append(renderFragmentCard(content));
-            item.append(inner);
-        }
-        else {
-            item.append(span("item-meta session-area-hint", "empty register — wire a fragment in"));
-        }
-        const actions = document.createElement("div");
-        actions.className = "session-card-actions";
-        actions.append(button("Focus", "Fill the viewport with this session", () => {
-            focus = sessionFocus(sessionObject.key);
-            render();
-        }), ...wireQueueChip(ref), button("Sync now", "Sync this session's register value over its peers' transports", () => {
-            void syncSessionOverPeer(sessionObject.key, null);
-        }));
-        item.append(actions);
-        list.append(item);
+function renderSessionContainer(sessionObject) {
+    const item = document.createElement("li");
+    item.className = "list-item session-card session-container";
+    const ref = { kind: "session", key: sessionObject.key };
+    decorateWireTarget(item, ref);
+    const head = document.createElement("div");
+    head.className = "session-fragment-row";
+    head.append(span("item-title", sessionObject.name), badge("session", "session-badge"), span("item-meta", `${sessionObject.contentKey ? `register: ${sessionObject.contentKey}` : "empty register"} · ` +
+        `${sessionObject.peerKeys.length} peer(s)`));
+    item.append(head);
+    // The register's one growing value, as the card itself.
+    const content = sessionObject.contentKey
+        ? (session.fragments.find((fragment) => fragment.key === sessionObject.contentKey) ?? null)
+        : null;
+    if (content) {
+        const inner = document.createElement("ul");
+        inner.className = "item-list session-card-list";
+        inner.append(renderFragmentCard(content));
+        item.append(inner);
     }
-    el("sessionsEmpty").hidden = objects.sessions.length > 0;
+    else {
+        item.append(span("item-meta session-area-hint", "empty register — wire a fragment in"));
+    }
+    const actions = document.createElement("div");
+    actions.className = "session-card-actions";
+    actions.append(button("Focus", "Fill the viewport with this session", () => {
+        focus = sessionFocus(sessionObject.key);
+        render();
+    }), ...wireQueueChip(ref), button("Sync now", "Sync this session's register value over its peers' transports", () => {
+        void syncSessionOverPeer(sessionObject.key, null);
+    }));
+    item.append(actions);
+    return item;
 }
 function unavailablePairButton() {
     const pair = button("Pair unavailable", "Pair unavailable until the ptj adapter exposes session pairing", () => { });
     pair.disabled = true;
     return pair;
-}
-function renderPeerRegion() {
-    const list = el("peerList");
-    list.textContent = "";
-    for (const group of peerBridgeGroups(objects)) {
-        const members = group
-            .map((key) => peerByKey(objects, key))
-            .filter((member) => member !== null);
-        if (!members.length)
-            continue;
-        list.append(members.length === 1 ? renderPeerCard(members[0]) : renderBridgeGroupCard(members));
-    }
-    el("peersEmpty").hidden = objects.peers.length > 0;
 }
 function renderObjects() {
     const list = el("objectList");
@@ -1817,9 +1877,11 @@ function renderFocus() {
         }
     }
     for (const panel of Array.from(document.querySelectorAll("[data-focus-hide]"))) {
-        // The fragments panel stays: in focus mode it shows the session subset.
-        const keep = panel.querySelector("#fragmentList") !== null;
-        panel.hidden = inFocus && !keep;
+        panel.hidden = inFocus;
+    }
+    // The focused-session panel is the inverse: overview never shows it.
+    for (const panel of Array.from(document.querySelectorAll("[data-focus-show]"))) {
+        panel.hidden = !inFocus;
     }
 }
 // --- editor panel -----------------------------------------------------------------
@@ -2888,12 +2950,12 @@ function drawWireOverlay() {
     const overlay = document.getElementById("wireOverlay");
     if (!overlay)
         return;
-    const workbench = el("spatialWorkbench");
-    const base = workbench.getBoundingClientRect();
+    const world = el("canvasWorld");
+    const base = world.getBoundingClientRect();
     overlay.setAttribute("viewBox", `0 0 ${base.width} ${base.height}`);
     overlay.textContent = "";
-    // Focus mode hides the peers and sessions regions; hidden endpoints
-    // measure as zero-rects, so the standing edges stand down with them.
+    // Focus mode hides the whole canvas; hidden endpoints measure as
+    // zero-rects, so the standing edges stand down with it.
     if (focus.mode === "session")
         return;
     const anchor = (node, edge) => {
@@ -2913,21 +2975,21 @@ function drawWireOverlay() {
         path.setAttribute("class", cls);
         overlay.append(path);
     };
-    const mine = workbench.querySelector(".session-mine-area");
+    const mine = world.querySelector(".session-mine-frame");
     const seen = new Set();
     for (const sessionObject of objects.sessions) {
-        const container = workbench.querySelector(`[data-wire-kind="session"][data-wire-key="${sessionObject.key}"]`);
+        const container = world.querySelector(`[data-wire-kind="session"][data-wire-key="${sessionObject.key}"]`);
         if (!container)
             continue;
-        // Mine sits BELOW the sessions; its edges rise from the band's top.
+        // Mine sits BELOW the sessions; its edges rise from the frame's top.
         if (mine)
             addEdge(anchor(mine, "top"), anchor(container, "bottom"), "session-edge-mine");
         for (const peerKey of sessionObject.peerKeys) {
             // A bridged peer group renders as ONE card keyed by its first member.
-            const cardKey = workbench.querySelector(`[data-wire-kind="peer"][data-wire-key="${peerKey}"]`)
+            const cardKey = world.querySelector(`[data-wire-kind="peer"][data-wire-key="${peerKey}"]`)
                 ? peerKey
                 : bridgeGroupContaining(objects, peerKey)[0];
-            const peerCard = workbench.querySelector(`[data-wire-kind="peer"][data-wire-key="${cardKey}"]`);
+            const peerCard = world.querySelector(`[data-wire-kind="peer"][data-wire-key="${cardKey}"]`);
             if (!peerCard)
                 continue;
             const edgeKey = `${cardKey}→${sessionObject.key}`;
@@ -2946,9 +3008,14 @@ function render() {
     if (wireDrag)
         cancelWireDrag();
     renderFocus();
-    renderPeerRegion();
-    renderSessionContainers();
-    renderFragments();
+    // Focus hides the canvas (display:none measures as zero), so exactly one
+    // of the two fragment surfaces renders per pass.
+    if (focus.mode === "session" && focus.sessionKey !== null) {
+        renderFocusFragments();
+    }
+    else {
+        renderCanvas();
+    }
     renderObjects();
     // After the card passes: the idle wire hint asks the DOM whether any
     // wireable card exists.

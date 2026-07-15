@@ -6,75 +6,85 @@ const html = readFileSync(new URL("../session.html", import.meta.url), "utf8");
 const app = readFileSync(new URL("../src/session/app.ts", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 
-test("the primary objects share one bounded spatial workbench", () => {
+test("the canvas is a scrolling viewport over a positioned world", () => {
   const workbenchStart = html.indexOf('id="spatialWorkbench"');
-  const workbenchEnd = html.indexOf("</main>", workbenchStart);
+  const workbenchEnd = html.indexOf("</div>", html.indexOf('id="nodeLayer"'));
   const drawerBar = html.indexOf('id="drawerBar"');
 
   assert.ok(workbenchStart >= 0, "the spatial workbench is present");
-  assert.ok(workbenchEnd > workbenchStart, "the spatial workbench is bounded");
   const workbench = html.slice(workbenchStart, workbenchEnd);
-  assert.ok(
-    workbench.indexOf('data-spatial-region="peers"') <
-      workbench.indexOf('data-spatial-region="sessions"'),
-    "peers are above sessions inside the workbench",
-  );
-  assert.ok(
-    workbench.indexOf('data-spatial-region="sessions"') <
-      workbench.indexOf('data-spatial-region="me"'),
-    "sessions are above the Me workspace inside the workbench",
-  );
-  assert.ok(drawerBar > workbenchEnd, "the drawer bar follows the workbench");
-  assert.match(
-    styles,
-    /\.session-spatial-workbench\s*\{[\s\S]*?flex-direction:\s*column;/,
-    "the workbench stacks its regions as a column",
-  );
-  assert.match(
-    styles,
-    /\.session-spatial-workbench\s*>\s*\[data-spatial-region="me"\]\s*\{[\s\S]*?flex:\s*1 1 auto;/,
-    "the Me region absorbs the workbench's remaining height",
-  );
+  // Edge SVG under the node layer, both inside the world.
+  const world = workbench.indexOf('id="canvasWorld"');
+  const overlay = workbench.indexOf('id="wireOverlay"');
+  const nodes = workbench.indexOf('id="nodeLayer"');
+  assert.ok(world >= 0, "the canvas world is present");
+  assert.ok(world < overlay && overlay < nodes, "edges render under the node layer");
+  assert.ok(drawerBar > workbenchStart, "the drawer bar follows the workbench");
+  // Scroll, not zoom: the viewport pans natively (no transform scaling).
+  assert.match(styles, /\.session-spatial-workbench\s*\{[\s\S]*?overflow:\s*auto;/);
+  assert.match(styles, /\.session-canvas-world\s*\{[\s\S]*?position:\s*relative;/);
+  // Keyed wrappers are absolutely positioned and GLIDE between positions.
+  assert.match(styles, /\.session-canvas-node\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?transition:\s*transform/);
+  assert.match(styles, /prefers-reduced-motion/);
 });
 
-test("the Mine strip is the bottom band and owns an empty workbench", () => {
-  // Overview's fragment list holds ONLY the Mine band: sessions render
-  // once, as containers in the sessions region, never as a second
-  // published-area copy in the work area.
-  const overview = app.slice(app.indexOf("function renderFragments"));
-  assert.ok(overview.indexOf("renderMineArea(") >= 0, "Mine renders in overview");
+test("canvas nodes are keyed: wrappers survive, contents rebuild", () => {
+  const canvas = app.slice(app.indexOf("const canvasNodes"), app.indexOf("function renderFocusFragments"));
+  // Create-once wrappers, per-render replaceChildren — element identity
+  // survives so transform transitions animate the moves.
+  assert.match(canvas, /canvasNodes\.get\(key\)/);
+  assert.match(canvas, /wrapper\.replaceChildren\(card\)/);
+  // Vanished keys are pruned, not leaked.
+  assert.match(canvas, /wrapper\.remove\(\);\s*\n\s*canvasNodes\.delete\(key\)/);
+  // Positions come from the PURE layout over MEASURED sizes — no
+  // hard-coded lane heights (the mockup's mistake).
+  assert.match(canvas, /laneLayout\(\{/);
+  assert.match(canvas, /offsetWidth/);
+  assert.match(canvas, /offsetHeight/);
+  assert.match(canvas, /minWidth: workbench\.clientWidth/);
+});
+
+test("Mine is a framed canvas lane of local-only drafts", () => {
+  const canvas = app.slice(app.indexOf("function renderCanvas"), app.indexOf("function renderFocusFragments"));
+  // Mine holds ONLY fragments no register references; sessions render
+  // once, as containers — publishing reads as a move between nodes.
+  assert.match(canvas, /mineFragmentKeys\(/);
   assert.doesNotMatch(app, /renderSessionArea/);
   assert.doesNotMatch(styles, /session-published-area/);
-  // Mine is a full-width strip pinned to the bottom of the Me region.
-  assert.match(styles, /\.session-area-list\s*\{[\s\S]*?flex-direction:\s*column;/);
-  assert.match(styles, /\.session-area-list\s*>\s*\.session-mine-area\s*\{[\s\S]*?margin-top:\s*auto;/);
-  // With no peers and no sessions the regions collapse and Mine expands.
-  assert.match(app, /"session-workbench-solo",\s*objects\.peers\.length === 0 && objects\.sessions\.length === 0/);
-  assert.match(styles, /\.session-workbench-solo \.session-area-list\s*>\s*\.session-mine-area\s*\{[\s\S]*?flex:\s*1 0 auto;/);
-  // The band is layout only — no nested pseudo-peer: local/unpublished is
-  // the default, so it wears no title and no badge (session containers do).
-  const mine = app.slice(app.indexOf("function renderMineArea"), app.indexOf("function renderFragmentCard"));
-  assert.doesNotMatch(mine, /item-title/);
-  assert.doesNotMatch(mine, /badge\(/);
+  // The frame is furniture BEHIND the cards (canvas floor z-order).
+  assert.match(canvas, /"frame:mine", "session-mine-frame"/);
+  assert.match(styles, /\.session-mine-frame\s*\{[\s\S]*?z-index:\s*0;/);
+  // The label states the publishing rule instead of a pseudo-peer title.
+  assert.match(canvas, /not published to any session/);
+  assert.match(canvas, /every loaded fragment is published/);
 });
 
-test("the real shell keeps peers above sessions and the Me workspace", () => {
-  const peers = html.indexOf('data-spatial-region="peers"');
-  const sessions = html.indexOf('data-spatial-region="sessions"');
-  const me = html.indexOf('data-spatial-region="me"');
-
-  assert.ok(peers >= 0, "peer region is present");
-  assert.ok(sessions > peers, "sessions follow peers");
-  assert.ok(me > sessions, "Me/local-only workspace follows sessions");
-  assert.match(html, /id="peerList"/);
-  assert.match(app, /renderPeerRegion\(\)/);
+test("the lanes stack peers over sessions over Mine", () => {
+  const canvas = app.slice(app.indexOf("function renderCanvas"), app.indexOf("function renderFocusFragments"));
+  // One content pass per lane, in lane order, all feeding one layout call.
+  const peers = canvas.indexOf("peerBridgeGroups(objects)");
+  const sessions = canvas.indexOf("renderSessionContainer(sessionObject)");
+  const mine = canvas.indexOf("mineFragmentKeys(");
+  assert.ok(peers >= 0 && peers < sessions && sessions < mine, "lane passes run top to bottom");
+  assert.match(canvas, /peerGroups: peerKeys\.map/);
+  assert.match(canvas, /sessions: sessionKeys\.map\(measure\)/);
+  assert.match(canvas, /mine: mineKeys\.map\(measure\)/);
+  // Fixed per-lane wrapper widths keep measurement stable.
+  for (const lane of ["session-node-peer", "session-node-session", "session-node-fragment"]) {
+    assert.match(styles, new RegExp(`\\.${lane}\\s*\\{[^}]*width:`), `${lane} has a fixed width`);
+  }
 });
 
-test("single-session focus hides both overview regions", () => {
-  const peerRegion = html.match(/<section id="peerRegion"[^>]*>/)?.[0] ?? "";
-  const sessionRegion = html.match(/<section id="sessionRegion"[^>]*>/)?.[0] ?? "";
-  assert.match(peerRegion, /data-focus-hide/);
-  assert.match(sessionRegion, /data-focus-hide/);
+test("single-session focus swaps the canvas for the flat register list", () => {
+  // The canvas (and its bar) hide in focus; the focused panel is the
+  // inverse — overview never shows it.
+  const workbenchTag = html.match(/<div id="spatialWorkbench"[^>]*>/)?.[0] ?? "";
+  assert.match(workbenchTag, /data-focus-hide/);
+  const focusPanel = html.match(/<section[^>]*data-focus-show[^>]*>/)?.[0] ?? "";
+  assert.match(focusPanel, /aria-label="Focused session"/);
+  assert.match(app, /\[data-focus-hide\]/);
+  assert.match(app, /\[data-focus-show\]/);
+  assert.match(app, /panel\.hidden = !inFocus/);
 });
 
 test("peer cards preserve bridging while Pair stays visibly unavailable", () => {
@@ -90,7 +100,7 @@ test("peer cards preserve bridging while Pair stays visibly unavailable", () => 
 });
 
 test("session containers hold the register card and explicit sync — never a transport", () => {
-  const start = app.indexOf("function renderSessionContainers");
+  const start = app.indexOf("function renderSessionContainer(");
   const end = app.indexOf("function unavailablePairButton", start);
   assert.ok(start >= 0 && end > start, "session-container renderer is present");
   const container = app.slice(start, end);
@@ -106,13 +116,14 @@ test("session containers hold the register card and explicit sync — never a tr
   assert.match(container, /button\("Sync now"/);
 });
 
-test("new session is a one-field action in the sessions heading, not a utilities panel", () => {
-  // The form lives inside the sessions region…
-  const regionStart = html.indexOf('id="sessionRegion"');
-  const regionEnd = html.indexOf("</section>", regionStart);
-  const region = html.slice(regionStart, regionEnd);
-  assert.match(region, /id="newSessionForm"/);
-  assert.match(region, /id="newSessionName"/);
+test("new session is a one-field action in the canvas bar, not a utilities panel", () => {
+  // The form lives in the lane-actions bar above the canvas…
+  const barStart = html.indexOf('class="session-canvas-bar"');
+  const barEnd = html.indexOf("</div>", html.indexOf("</form>", barStart));
+  const bar = html.slice(barStart, barEnd);
+  assert.match(bar, /id="newSessionForm"/);
+  assert.match(bar, /id="newSessionName"/);
+  assert.match(bar, /id="addPeerQuick"/);
   // …and the utilities "Create session" panel is gone (minting an empty
   // register needs no fragment/descriptor pickers).
   assert.doesNotMatch(html, /Create session/);
