@@ -2617,25 +2617,25 @@ async function runSync(event) {
 // the fallback is the session's first member peer with a usable transport,
 // and "local" (the disk) only as the last resort. The transport parameters
 // ride the sync form so the manual-signaling transports stay configurable;
-// iroh peers bring their ticket along.
-function usableTransport(peer) {
-    if (!peer || peer.transport === "nostr" || peer.transport === "unknown")
-        return null;
-    return peer.transport;
+// iroh peers bring their ticket along — whichever peer supplied the
+// transport, explicit or member fallback, supplies its ticket too.
+function usablePeerForSync(peer) {
+    return peer && peerUsableForSync(peer) ? peer : null;
 }
 async function syncSessionOverPeer(sessionKey, peerKey) {
     const sessionObject = sessionByKey(objects, sessionKey);
     if (!sessionObject)
         return;
     const peer = peerKey ? peerByKey(objects, peerKey) : null;
-    const memberTransport = sessionObject.peerKeys
-        .map((key) => usableTransport(peerByKey(objects, key)))
+    const memberPeer = sessionObject.peerKeys
+        .map((key) => usablePeerForSync(peerByKey(objects, key)))
         .find((candidate) => candidate !== null);
-    const transport = usableTransport(peer) ?? memberTransport ?? "local";
+    const carrier = usablePeerForSync(peer) ?? memberPeer ?? null;
+    const transport = carrier?.transport ?? "local";
     el("syncTransport").value = transport;
     renderSyncFields();
-    if (peer && peer.transport === "iroh" && peer.identity) {
-        el("syncIrohTicket").value = peer.identity;
+    if (carrier && carrier.transport === "iroh" && carrier.identity) {
+        el("syncIrohTicket").value = carrier.identity;
         el("syncIrohTicketOut").checked = false;
     }
     const members = sessionObject.fragmentKeys

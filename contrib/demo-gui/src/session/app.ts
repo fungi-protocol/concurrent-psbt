@@ -3165,24 +3165,25 @@ async function runSync(event: Event): Promise<void> {
 // the fallback is the session's first member peer with a usable transport,
 // and "local" (the disk) only as the last resort. The transport parameters
 // ride the sync form so the manual-signaling transports stay configurable;
-// iroh peers bring their ticket along.
-function usableTransport(peer: PeerObject | null): SyncTransport | null {
-  if (!peer || peer.transport === "nostr" || peer.transport === "unknown") return null;
-  return peer.transport;
+// iroh peers bring their ticket along — whichever peer supplied the
+// transport, explicit or member fallback, supplies its ticket too.
+function usablePeerForSync(peer: PeerObject | null): PeerObject | null {
+  return peer && peerUsableForSync(peer) ? peer : null;
 }
 
 async function syncSessionOverPeer(sessionKey: string, peerKey: string | null): Promise<void> {
   const sessionObject = sessionByKey(objects, sessionKey);
   if (!sessionObject) return;
   const peer = peerKey ? peerByKey(objects, peerKey) : null;
-  const memberTransport = sessionObject.peerKeys
-    .map((key) => usableTransport(peerByKey(objects, key)))
-    .find((candidate): candidate is SyncTransport => candidate !== null);
-  const transport = usableTransport(peer) ?? memberTransport ?? "local";
+  const memberPeer = sessionObject.peerKeys
+    .map((key) => usablePeerForSync(peerByKey(objects, key)))
+    .find((candidate): candidate is PeerObject => candidate !== null);
+  const carrier = usablePeerForSync(peer) ?? memberPeer ?? null;
+  const transport = carrier?.transport ?? "local";
   el<HTMLSelectElement>("syncTransport").value = transport;
   renderSyncFields();
-  if (peer && peer.transport === "iroh" && peer.identity) {
-    el<HTMLTextAreaElement>("syncIrohTicket").value = peer.identity;
+  if (carrier && carrier.transport === "iroh" && carrier.identity) {
+    el<HTMLTextAreaElement>("syncIrohTicket").value = carrier.identity;
     el<HTMLInputElement>("syncIrohTicketOut").checked = false;
   }
   const members = sessionObject.fragmentKeys
