@@ -265,15 +265,56 @@ function reportError(context: string, error: unknown): void {
   logEvent(`ERROR ${context}: ${detail}`);
 }
 
-// Opening a panel must be VISIBLE: the wide panels live below the fold, and
-// unhiding one without scrolling reads as a dead button (the live-review
-// symptom on Edit). Reveal = unhide + scroll into view + move focus to the
-// panel so keyboard/AT users land where the action went.
-function revealPanel(id: string): void {
+// --- bottom drawers ----------------------------------------------------------
+// Every utility docks at the bottom of the page as a drawer behind the
+// drawer bar. ONE drawer opens at a time; Esc, the backdrop, a [×], or
+// re-pressing the bar button closes it.
+const DRAWER_IDS = [
+  "addDrawer",
+  "createDrawer",
+  "syncDrawer",
+  "negotiateDrawer",
+  "editorDrawer",
+  "assignIdsDrawer",
+  "exportDrawer",
+  "logDrawer",
+] as const;
+type DrawerId = (typeof DRAWER_IDS)[number];
+
+function openDrawerId(): DrawerId | null {
+  return DRAWER_IDS.find((id) => !el<HTMLElement>(id).hidden) ?? null;
+}
+
+function setDrawer(id: DrawerId | null): void {
+  for (const drawerId of DRAWER_IDS) {
+    el<HTMLElement>(drawerId).hidden = drawerId !== id;
+  }
+  for (const toggle of Array.from(
+    document.querySelectorAll<HTMLButtonElement>("[data-drawer]"),
+  )) {
+    toggle.setAttribute("aria-expanded", String(toggle.dataset.drawer === id));
+  }
+}
+
+function closeDrawer(id: DrawerId): void {
+  if (openDrawerId() === id) setDrawer(null);
+}
+
+// Opening a panel must be VISIBLE: unhiding something below the fold reads
+// as a dead button (the live-review symptom on Edit). Every utility panel
+// is a bottom drawer now, so reveal = open its drawer (which floats above
+// the fold by construction) + move focus to the panel so keyboard/AT users
+// land where the action went.
+const PANEL_DRAWERS = {
+  editorPanel: "editorDrawer",
+  assignIdsPanel: "assignIdsDrawer",
+  outputPanel: "exportDrawer",
+} as const;
+
+function revealPanel(id: keyof typeof PANEL_DRAWERS): void {
+  setDrawer(PANEL_DRAWERS[id]);
   const panel = el<HTMLElement>(id);
-  panel.hidden = false;
   panel.tabIndex = -1;
-  panel.scrollIntoView({ behavior: "smooth", block: "start" });
   panel.focus({ preventScroll: true });
 }
 
@@ -2164,7 +2205,9 @@ function renderWireStatus(): void {
   // (render() calls this after the card passes so the DOM query sees them.)
   const host = el<HTMLElement>("wireStatus");
   host.classList.add("session-wire-status-idle");
-  host.hidden = document.querySelector("[data-wire-kind]") === null;
+  // The drawer-bar Create button is a standing wire node; it alone should
+  // not advertise the gesture (nothing draggable exists yet).
+  host.hidden = document.querySelector("[data-wire-kind]:not([data-drawer])") === null;
   // Write the standing hint only on change: the bar is role="status", and
   // rewriting identical text every render can re-announce in screen readers.
   const hint = "drag a card onto another to wire them — Esc cancels a drag";
@@ -2455,7 +2498,7 @@ async function saveEditor(): Promise<void> {
     pendingEditorFixes.clear();
     editorOverrides.clear();
     editor = null;
-    el<HTMLElement>("editorPanel").hidden = true;
+    closeDrawer("editorDrawer");
     showStatus(lastWarning ?? "", lastWarning !== null);
   } catch (error) {
     reportError("editor save", error);
@@ -2494,9 +2537,8 @@ function classifyPasteToPsbt(raw: string): string | null {
 }
 
 function setAddDrawer(open: boolean, focusPeer = false): void {
-  el<HTMLElement>("addDrawer").hidden = !open;
-  const toggle = el<HTMLButtonElement>("addDrawerToggle");
-  toggle.setAttribute("aria-expanded", String(open));
+  if (open) setDrawer("addDrawer");
+  else closeDrawer("addDrawer");
   if (open) {
     if (focusPeer) el<HTMLInputElement>("manualPeerAddress").focus();
     else el<HTMLTextAreaElement>("pasteInput").focus();
@@ -2895,7 +2937,7 @@ async function runAssignIds(): Promise<void> {
   const fragment = assignIdsTarget ? fragmentByKey(assignIdsTarget) : null;
   if (!fragment) {
     assignIdsTarget = null;
-    el<HTMLElement>("assignIdsPanel").hidden = true;
+    closeDrawer("assignIdsDrawer");
     return;
   }
   const ids = Array.from(
@@ -2924,7 +2966,7 @@ async function runAssignIds(): Promise<void> {
         ` (${ids.length} manual id(s), auto=${auto}, overwrite=${overwrite})`,
     );
     assignIdsTarget = null;
-    el<HTMLElement>("assignIdsPanel").hidden = true;
+    closeDrawer("assignIdsDrawer");
     showStatus("", false);
   } catch (error) {
     reportError("assign ids", error);
@@ -3455,8 +3497,38 @@ function wireDom(): void {
     if (event.target === sortSeedDialog) settleSortSeed(null);
   });
   sortSeedDialog.addEventListener("cancel", () => settleSortSeed(null));
-  el<HTMLButtonElement>("addDrawerToggle").addEventListener("click", () => {
-    setAddDrawer(el<HTMLElement>("addDrawer").hidden);
+  // The drawer bar: each button toggles its drawer (one at a time). A bar
+  // button that is ALSO a declared wire node (Create fragment ⋄ utxo) lands
+  // an armed wire gesture instead of toggling.
+  for (const toggle of Array.from(
+    document.querySelectorAll<HTMLButtonElement>("[data-drawer]"),
+  )) {
+    toggle.addEventListener("click", () => {
+      const id = toggle.dataset.drawer as DrawerId;
+      if (toggle.dataset.wireKind === "create" && wire.source?.kind === "utxo") {
+        wireTo({ kind: "create", key: "create" });
+        return;
+      }
+      if (id === "addDrawer") {
+        setAddDrawer(openDrawerId() !== "addDrawer");
+        return;
+      }
+      setDrawer(openDrawerId() === id ? null : id);
+    });
+  }
+  // Backdrop click and the shared [×] close whatever drawer is open.
+  for (const drawerId of DRAWER_IDS) {
+    el<HTMLElement>(drawerId).addEventListener("click", (event) => {
+      if (event.target === el<HTMLElement>(drawerId)) setDrawer(null);
+    });
+  }
+  for (const close of Array.from(
+    document.querySelectorAll<HTMLElement>("[data-drawer-close]"),
+  )) {
+    close.addEventListener("click", () => setDrawer(null));
+  }
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && openDrawerId()) setDrawer(null);
   });
   el<HTMLButtonElement>("addDrawerClose").addEventListener("click", () => setAddDrawer(false));
   el<HTMLButtonElement>("addPeerQuick").addEventListener("click", () => setAddDrawer(true, true));
@@ -3498,7 +3570,7 @@ function wireDom(): void {
   el<HTMLButtonElement>("opAssignIds").addEventListener("click", openAssignIds);
   el<HTMLButtonElement>("assignIdsRun").addEventListener("click", () => void runAssignIds());
   el<HTMLButtonElement>("assignIdsClose").addEventListener("click", () => {
-    el<HTMLElement>("assignIdsPanel").hidden = true;
+    closeDrawer("assignIdsDrawer");
   });
 
   el<HTMLSelectElement>("displayNetwork").addEventListener("change", render);
@@ -3554,7 +3626,7 @@ function wireDom(): void {
     editor = null;
     pendingEditorFixes.clear();
     editorOverrides.clear();
-    el<HTMLElement>("editorPanel").hidden = true;
+    closeDrawer("editorDrawer");
   });
   el<HTMLButtonElement>("editorValidate").addEventListener("click", () => {
     if (!editor) return;
@@ -3563,7 +3635,7 @@ function wireDom(): void {
   el<HTMLButtonElement>("editorSave").addEventListener("click", () => void saveEditor());
 
   el<HTMLButtonElement>("outputClose").addEventListener("click", () => {
-    el<HTMLElement>("outputPanel").hidden = true;
+    closeDrawer("exportDrawer");
   });
   el<HTMLButtonElement>("outputCopy").addEventListener("click", () => {
     copyText(el<HTMLTextAreaElement>("outputBody").value, "output");

@@ -9,7 +9,7 @@ const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 test("the primary objects share one bounded spatial workbench", () => {
   const workbenchStart = html.indexOf('id="spatialWorkbench"');
   const workbenchEnd = html.indexOf("</main>", workbenchStart);
-  const utilities = html.indexOf('id="sessionUtilities"');
+  const drawerBar = html.indexOf('id="drawerBar"');
 
   assert.ok(workbenchStart >= 0, "the spatial workbench is present");
   assert.ok(workbenchEnd > workbenchStart, "the spatial workbench is bounded");
@@ -24,7 +24,7 @@ test("the primary objects share one bounded spatial workbench", () => {
       workbench.indexOf('data-spatial-region="me"'),
     "sessions are above the Me workspace inside the workbench",
   );
-  assert.ok(utilities > workbenchEnd, "secondary utilities follow the workbench");
+  assert.ok(drawerBar > workbenchEnd, "the drawer bar follows the workbench");
   assert.match(
     styles,
     /\.session-spatial-workbench\s*\{[\s\S]*?flex-direction:\s*column;/,
@@ -121,13 +121,40 @@ test("new session is a one-field action in the sessions heading, not a utilities
 
 test("one shared bottom Add drawer owns quick paste and manual peer creation", () => {
   assert.equal((html.match(/id="pasteInput"/g) ?? []).length, 1);
-  assert.match(html, /id="addDrawer"[^>]*class="[^"]*session-add-drawer/);
+  assert.match(html, /id="addDrawer"[^>]*class="[^"]*session-drawer/);
   assert.match(html, /id="manualPeerForm"/);
   assert.match(html, /id="manualPeerTransport"/);
   for (const transport of ["nostr", "iroh", "str0m", "webrtc-rs"]) {
     assert.match(html, new RegExp(`<option value="${transport}">`));
   }
   assert.match(app, /Pair unavailable until the ptj adapter exposes session pairing/);
+});
+
+test("every utility docks in the bottom drawer bar, one drawer at a time", () => {
+  // The old utilities column is gone; the bar exposes each drawer.
+  assert.doesNotMatch(html, /id="sessionUtilities"/);
+  for (const drawer of [
+    "addDrawer",
+    "createDrawer",
+    "syncDrawer",
+    "negotiateDrawer",
+    "editorDrawer",
+    "assignIdsDrawer",
+    "exportDrawer",
+    "logDrawer",
+  ]) {
+    assert.match(html, new RegExp(`data-drawer="${drawer}"`), `${drawer} has a bar toggle`);
+    assert.match(html, new RegExp(`<section id="${drawer}" class="session-drawer"`), `${drawer} is a drawer`);
+  }
+  // One drawer at a time: the manager hides every drawer that is not the
+  // requested one (a single setter owns all drawer visibility).
+  assert.match(app, /el<HTMLElement>\(drawerId\)\.hidden = drawerId !== id;/);
+  // The Create-fragment bar button doubles as the utxo drop target while
+  // its drawer is closed.
+  assert.match(html, /data-drawer="createDrawer" data-wire-kind="create" data-wire-key="create"/);
+  // The ops toolbar stays attached to the work area, not a drawer.
+  const main = html.slice(html.indexOf("<main"), html.indexOf("</main>"));
+  assert.match(main, /session-ops-panel/);
 });
 
 test("disabled ops explain themselves on press, not only on hover", () => {

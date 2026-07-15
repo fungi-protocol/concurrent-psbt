@@ -3106,8 +3106,10 @@ img.session-lifehash {
   width: 10em;
 }
 
-/* One shared Add surface for fast universal paste and manual palettes. */
-.session-add-drawer {
+/* Bottom drawers: every utility panel docks behind the drawer bar as a
+   fixed bottom sheet. One drawer opens at a time; the translucent backdrop
+   and Esc close it. (The Add surface pioneered this pattern.) */
+.session-drawer {
   position: fixed;
   inset: 0;
   z-index: 30;
@@ -3116,19 +3118,62 @@ img.session-lifehash {
   background: rgba(20, 24, 28, 0.38);
 }
 
-.session-add-drawer[hidden] {
+.session-drawer[hidden] {
   display: none;
 }
 
-.session-add-drawer-card {
+.session-drawer-card {
+  position: relative;
   width: 100%;
   max-height: min(78vh, 720px);
   overflow: auto;
   padding: 18px max(18px, calc((100vw - 1180px) / 2));
+  /* Clear the drawer bar so its buttons stay pressable while open. */
+  margin-bottom: 46px;
   border-top: 1px solid var(--line);
   border-radius: 18px 18px 0 0;
   background: var(--surface);
   box-shadow: 0 -12px 40px rgba(20, 24, 28, 0.24);
+}
+
+/* Panels moved into drawers keep their markup; the drawer card provides
+   the chrome, so the inner panel sheds its own. */
+.session-drawer-card .session-panel {
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+.session-drawer-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 1;
+}
+
+/* The drawer bar: a fixed strip of toggles along the bottom edge. */
+.session-drawer-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 31;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 14px;
+  overflow-x: auto;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: 0 -6px 20px rgba(20, 24, 28, 0.12);
+}
+
+/* Keep page content clear of the fixed bar. */
+body {
+  padding-bottom: 52px;
 }
 
 .session-add-grid {

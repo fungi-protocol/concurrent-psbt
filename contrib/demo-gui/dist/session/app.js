@@ -135,15 +135,49 @@ function reportError(context, error) {
     showStatus(`${context}: ${detail}`, true);
     logEvent(`ERROR ${context}: ${detail}`);
 }
-// Opening a panel must be VISIBLE: the wide panels live below the fold, and
-// unhiding one without scrolling reads as a dead button (the live-review
-// symptom on Edit). Reveal = unhide + scroll into view + move focus to the
-// panel so keyboard/AT users land where the action went.
+// --- bottom drawers ----------------------------------------------------------
+// Every utility docks at the bottom of the page as a drawer behind the
+// drawer bar. ONE drawer opens at a time; Esc, the backdrop, a [×], or
+// re-pressing the bar button closes it.
+const DRAWER_IDS = [
+    "addDrawer",
+    "createDrawer",
+    "syncDrawer",
+    "negotiateDrawer",
+    "editorDrawer",
+    "assignIdsDrawer",
+    "exportDrawer",
+    "logDrawer",
+];
+function openDrawerId() {
+    return DRAWER_IDS.find((id) => !el(id).hidden) ?? null;
+}
+function setDrawer(id) {
+    for (const drawerId of DRAWER_IDS) {
+        el(drawerId).hidden = drawerId !== id;
+    }
+    for (const toggle of Array.from(document.querySelectorAll("[data-drawer]"))) {
+        toggle.setAttribute("aria-expanded", String(toggle.dataset.drawer === id));
+    }
+}
+function closeDrawer(id) {
+    if (openDrawerId() === id)
+        setDrawer(null);
+}
+// Opening a panel must be VISIBLE: unhiding something below the fold reads
+// as a dead button (the live-review symptom on Edit). Every utility panel
+// is a bottom drawer now, so reveal = open its drawer (which floats above
+// the fold by construction) + move focus to the panel so keyboard/AT users
+// land where the action went.
+const PANEL_DRAWERS = {
+    editorPanel: "editorDrawer",
+    assignIdsPanel: "assignIdsDrawer",
+    outputPanel: "exportDrawer",
+};
 function revealPanel(id) {
+    setDrawer(PANEL_DRAWERS[id]);
     const panel = el(id);
-    panel.hidden = false;
     panel.tabIndex = -1;
-    panel.scrollIntoView({ behavior: "smooth", block: "start" });
     panel.focus({ preventScroll: true });
 }
 function showOutput(title, body) {
@@ -1718,7 +1752,9 @@ function renderWireStatus() {
     // (render() calls this after the card passes so the DOM query sees them.)
     const host = el("wireStatus");
     host.classList.add("session-wire-status-idle");
-    host.hidden = document.querySelector("[data-wire-kind]") === null;
+    // The drawer-bar Create button is a standing wire node; it alone should
+    // not advertise the gesture (nothing draggable exists yet).
+    host.hidden = document.querySelector("[data-wire-kind]:not([data-drawer])") === null;
     // Write the standing hint only on change: the bar is role="status", and
     // rewriting identical text every render can re-announce in screen readers.
     const hint = "drag a card onto another to wire them — Esc cancels a drag";
@@ -1983,7 +2019,7 @@ async function saveEditor() {
         pendingEditorFixes.clear();
         editorOverrides.clear();
         editor = null;
-        el("editorPanel").hidden = true;
+        closeDrawer("editorDrawer");
         showStatus(lastWarning ?? "", lastWarning !== null);
     }
     catch (error) {
@@ -2023,9 +2059,10 @@ function classifyPasteToPsbt(raw) {
     return pasted.kind === "psbt" ? pasted.payload : null;
 }
 function setAddDrawer(open, focusPeer = false) {
-    el("addDrawer").hidden = !open;
-    const toggle = el("addDrawerToggle");
-    toggle.setAttribute("aria-expanded", String(open));
+    if (open)
+        setDrawer("addDrawer");
+    else
+        closeDrawer("addDrawer");
     if (open) {
         if (focusPeer)
             el("manualPeerAddress").focus();
@@ -2379,7 +2416,7 @@ async function runAssignIds() {
     const fragment = assignIdsTarget ? fragmentByKey(assignIdsTarget) : null;
     if (!fragment) {
         assignIdsTarget = null;
-        el("assignIdsPanel").hidden = true;
+        closeDrawer("assignIdsDrawer");
         return;
     }
     const ids = Array.from(el("assignIdsRows").querySelectorAll("input[data-index]"))
@@ -2400,7 +2437,7 @@ async function runAssignIds() {
         logEvent(`assign-ids minted ${added.key} from ${fragment.key}` +
             ` (${ids.length} manual id(s), auto=${auto}, overwrite=${overwrite})`);
         assignIdsTarget = null;
-        el("assignIdsPanel").hidden = true;
+        closeDrawer("assignIdsDrawer");
         showStatus("", false);
     }
     catch (error) {
@@ -2889,8 +2926,36 @@ function wireDom() {
             settleSortSeed(null);
     });
     sortSeedDialog.addEventListener("cancel", () => settleSortSeed(null));
-    el("addDrawerToggle").addEventListener("click", () => {
-        setAddDrawer(el("addDrawer").hidden);
+    // The drawer bar: each button toggles its drawer (one at a time). A bar
+    // button that is ALSO a declared wire node (Create fragment ⋄ utxo) lands
+    // an armed wire gesture instead of toggling.
+    for (const toggle of Array.from(document.querySelectorAll("[data-drawer]"))) {
+        toggle.addEventListener("click", () => {
+            const id = toggle.dataset.drawer;
+            if (toggle.dataset.wireKind === "create" && wire.source?.kind === "utxo") {
+                wireTo({ kind: "create", key: "create" });
+                return;
+            }
+            if (id === "addDrawer") {
+                setAddDrawer(openDrawerId() !== "addDrawer");
+                return;
+            }
+            setDrawer(openDrawerId() === id ? null : id);
+        });
+    }
+    // Backdrop click and the shared [×] close whatever drawer is open.
+    for (const drawerId of DRAWER_IDS) {
+        el(drawerId).addEventListener("click", (event) => {
+            if (event.target === el(drawerId))
+                setDrawer(null);
+        });
+    }
+    for (const close of Array.from(document.querySelectorAll("[data-drawer-close]"))) {
+        close.addEventListener("click", () => setDrawer(null));
+    }
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && openDrawerId())
+            setDrawer(null);
     });
     el("addDrawerClose").addEventListener("click", () => setAddDrawer(false));
     el("addPeerQuick").addEventListener("click", () => setAddDrawer(true, true));
@@ -2929,7 +2994,7 @@ function wireDom() {
     el("opAssignIds").addEventListener("click", openAssignIds);
     el("assignIdsRun").addEventListener("click", () => void runAssignIds());
     el("assignIdsClose").addEventListener("click", () => {
-        el("assignIdsPanel").hidden = true;
+        closeDrawer("assignIdsDrawer");
     });
     el("displayNetwork").addEventListener("change", render);
     // Escape cancels a live drag-to-wire gesture.
@@ -2980,7 +3045,7 @@ function wireDom() {
         editor = null;
         pendingEditorFixes.clear();
         editorOverrides.clear();
-        el("editorPanel").hidden = true;
+        closeDrawer("editorDrawer");
     });
     el("editorValidate").addEventListener("click", () => {
         if (!editor)
@@ -2989,7 +3054,7 @@ function wireDom() {
     });
     el("editorSave").addEventListener("click", () => void saveEditor());
     el("outputClose").addEventListener("click", () => {
-        el("outputPanel").hidden = true;
+        closeDrawer("exportDrawer");
     });
     el("outputCopy").addEventListener("click", () => {
         copyText(el("outputBody").value, "output");
