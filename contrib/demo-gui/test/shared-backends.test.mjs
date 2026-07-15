@@ -108,6 +108,40 @@ test("applyPsbtEdits still throws PtjBackendError on non-violation errors", asyn
   );
 });
 
+// A response whose body is NOT JSON — what real fetch yields for the e2e
+// harness's plain-text 404 "not found": response.json() rejects with the
+// same SyntaxError the browser raises.
+function textResponse(status, text) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async json() {
+      return JSON.parse(text);
+    },
+  };
+}
+
+test("postJson surfaces a non-JSON error body as PtjBackendError, not SyntaxError", async () => {
+  const { fetch } = recordingFetch(textResponse(404, "not found"));
+  const backend = new HttpBackend(fetch);
+  await assert.rejects(
+    backend.inspectPsbt("cHNidP..."),
+    (error) =>
+      error instanceof PtjBackendError &&
+      error.status === 404 &&
+      /HTTP 404/.test(error.message),
+  );
+});
+
+test("applyPsbtEdits surfaces a non-JSON error body as PtjBackendError too", async () => {
+  const { fetch } = recordingFetch(textResponse(404, "not found"));
+  const backend = new HttpBackend(fetch);
+  await assert.rejects(
+    backend.applyPsbtEdits("cHNidP...", []),
+    (error) => error instanceof PtjBackendError && error.status === 404,
+  );
+});
+
 test("classifyPaste posts {payload, network} to /api/classify", async () => {
   const classified = {
     kind: "descriptor",
