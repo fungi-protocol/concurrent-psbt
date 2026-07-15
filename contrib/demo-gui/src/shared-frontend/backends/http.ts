@@ -57,6 +57,19 @@ function errorMessage(status: number, payload: unknown): string {
   return isErrorPayload(payload) ? payload.error : `ptj backend request failed with HTTP ${status}`;
 }
 
+// Error bodies parse leniently: a non-JSON body (a static file server's
+// plain-text 404, a proxy's HTML error page) must still surface as
+// PtjBackendError, never as the JSON parser's SyntaxError — every caller
+// filters on PtjBackendError. Success bodies stay strict: an ok response
+// that isn't JSON is a real bug worth throwing on.
+async function errorPayload(response: FetchResponse): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
 function isErrorPayload(payload: unknown): payload is { error: string } {
   return typeof payload === "object"
     && payload !== null
@@ -91,11 +104,11 @@ export class HttpBackend implements Backend {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    const payload = await response.json();
     if (!response.ok) {
+      const payload = await errorPayload(response);
       throw new PtjBackendError(response.status, errorMessage(response.status, payload));
     }
-    return payload as T;
+    return (await response.json()) as T;
   }
 
   inspectPsbt(psbt: string): Promise<InspectResponse> {
@@ -175,8 +188,8 @@ export class HttpBackend implements Backend {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    const payload = await response.json();
     if (!response.ok) {
+      const payload = await errorPayload(response);
       // A 400 carrying violations[] is the seam's structured validation
       // outcome (violation -> fix -> revalidate), not a transport error.
       if (isViolationPayload(payload)) {
@@ -184,7 +197,7 @@ export class HttpBackend implements Backend {
       }
       throw new PtjBackendError(response.status, errorMessage(response.status, payload));
     }
-    return payload as ApplyEditsResponse;
+    return (await response.json()) as ApplyEditsResponse;
   }
 
   classifyPaste(payload: string, network?: string): Promise<ClassifyResponse> {

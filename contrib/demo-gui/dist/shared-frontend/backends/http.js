@@ -13,6 +13,19 @@ import { PtjBackendError, } from "../core/types.js";
 function errorMessage(status, payload) {
     return isErrorPayload(payload) ? payload.error : `ptj backend request failed with HTTP ${status}`;
 }
+// Error bodies parse leniently: a non-JSON body (a static file server's
+// plain-text 404, a proxy's HTML error page) must still surface as
+// PtjBackendError, never as the JSON parser's SyntaxError — every caller
+// filters on PtjBackendError. Success bodies stay strict: an ok response
+// that isn't JSON is a real bug worth throwing on.
+async function errorPayload(response) {
+    try {
+        return await response.json();
+    }
+    catch {
+        return null;
+    }
+}
 function isErrorPayload(payload) {
     return typeof payload === "object"
         && payload !== null
@@ -42,11 +55,11 @@ export class HttpBackend {
             headers: { "content-type": "application/json" },
             body: JSON.stringify(body),
         });
-        const payload = await response.json();
         if (!response.ok) {
+            const payload = await errorPayload(response);
             throw new PtjBackendError(response.status, errorMessage(response.status, payload));
         }
-        return payload;
+        return (await response.json());
     }
     inspectPsbt(psbt) {
         return this.postJson("/api/inspect", { psbt });
@@ -111,8 +124,8 @@ export class HttpBackend {
             headers: { "content-type": "application/json" },
             body: JSON.stringify(body),
         });
-        const payload = await response.json();
         if (!response.ok) {
+            const payload = await errorPayload(response);
             // A 400 carrying violations[] is the seam's structured validation
             // outcome (violation -> fix -> revalidate), not a transport error.
             if (isViolationPayload(payload)) {
@@ -120,7 +133,7 @@ export class HttpBackend {
             }
             throw new PtjBackendError(response.status, errorMessage(response.status, payload));
         }
-        return payload;
+        return (await response.json());
     }
     classifyPaste(payload, network) {
         return this.postJson("/api/classify", { payload, network });
