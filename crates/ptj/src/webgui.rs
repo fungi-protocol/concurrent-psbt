@@ -740,40 +740,13 @@ fn sync_json(
     Ok(body.to_string().into_bytes())
 }
 
-/// `GET /api/capabilities`: what THIS binary was compiled with, so the UI can
-/// mark unavailable transports with the rebuild hint instead of letting them
-/// fail on use. `transports` maps the sync transport kinds the browser can
-/// select to their cargo-feature booleans (`local` is unconditional);
-/// `features` lists every enabled optional feature by its cargo name.
+/// `GET /api/capabilities`: the capability catalog (see `crate::capabilities`)
+/// — the versioned, typed transport surface of THIS binary, so the UI can
+/// mark unavailable transports with a typed reason instead of letting them
+/// fail on use. Identical to `ptj capabilities` on the CLI: one wire value
+/// across shells.
 fn capabilities_response() -> Response {
-    const FEATURES: [(&str, bool); 11] = [
-        ("webgui", cfg!(feature = "webgui")),
-        ("tui", cfg!(feature = "tui")),
-        ("iroh-sync", cfg!(feature = "iroh-sync")),
-        ("arti", cfg!(feature = "arti")),
-        ("nym", cfg!(feature = "nym")),
-        ("emissary", cfg!(feature = "emissary")),
-        ("mdk", cfg!(feature = "mdk")),
-        ("str0m", cfg!(feature = "str0m")),
-        ("webrtc-rs", cfg!(feature = "webrtc-rs")),
-        ("payjoin-dir", cfg!(feature = "payjoin-dir")),
-        ("plugin-transports", cfg!(feature = "plugin-transports")),
-    ];
-    let features: Vec<&str> = FEATURES
-        .iter()
-        .filter(|(_, enabled)| *enabled)
-        .map(|(name, _)| *name)
-        .collect();
-    let body = serde_json::json!({
-        "transports": {
-            "local": true,
-            "iroh": cfg!(feature = "iroh-sync"),
-            "str0m": cfg!(feature = "str0m"),
-            "webrtc_rs": cfg!(feature = "webrtc-rs"),
-            "payjoin_dir": cfg!(feature = "payjoin-dir"),
-        },
-        "features": features,
-    });
+    let body = crate::capabilities::catalog_json();
     Response {
         status: 200,
         reason: "OK",
@@ -3311,31 +3284,26 @@ mod tests {
         assert!(body.contains("arti"), "expected arti rebuild hint, got: {body}");
     }
 
-    /// `/api/capabilities` reports the compile-time transport surface: the
-    /// booleans track this build's cfg! exactly (feature-agnostic assertion)
-    /// and the features list carries the enabled cargo names.
+    /// `/api/capabilities` serves the capability catalog byte-identically to
+    /// what the CLI's `ptj capabilities` prints (one wire value across
+    /// shells); the catalog's own invariants are tested in `capabilities`.
     #[test]
     fn capabilities_endpoint_reports_compile_time_surface() {
         let response = response_for("GET", "/api/capabilities", b"");
         assert_eq!(response.status, 200);
         let value: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
-        let transports = value.get("transports").expect("transports object");
-        assert_eq!(transports["local"], serde_json::json!(true));
+        assert_eq!(value, crate::capabilities::catalog_json());
+        // Spot-check the fields the session UI's loadCapabilities reads.
+        assert_eq!(value["version"], serde_json::json!(1));
+        let iroh = value["transports"]
+            .as_array()
+            .expect("transports array")
+            .iter()
+            .find(|entry| entry["kind"] == serde_json::json!("iroh"))
+            .expect("iroh entry");
         assert_eq!(
-            transports["iroh"],
+            iroh["available"],
             serde_json::json!(cfg!(feature = "iroh-sync"))
-        );
-        assert_eq!(
-            transports["str0m"],
-            serde_json::json!(cfg!(feature = "str0m"))
-        );
-        assert_eq!(
-            transports["webrtc_rs"],
-            serde_json::json!(cfg!(feature = "webrtc-rs"))
-        );
-        assert_eq!(
-            transports["payjoin_dir"],
-            serde_json::json!(cfg!(feature = "payjoin-dir"))
         );
         let features: Vec<&str> = value["features"]
             .as_array()
@@ -3346,10 +3314,6 @@ mod tests {
         // This test only builds with the webgui feature on (webgui.rs is
         // gated behind it), so the list must name it.
         assert!(features.contains(&"webgui"), "got: {features:?}");
-        assert_eq!(
-            features.contains(&"iroh-sync"),
-            cfg!(feature = "iroh-sync")
-        );
 
         // HEAD mirrors GET minus the body; POST is not a capability query.
         let head = response_for("HEAD", "/api/capabilities", b"");

@@ -32,6 +32,9 @@ pub(crate) fn run_with_stdin(command: Command, stdin: Option<&[u8]>) -> Result<S
             assign_ids::run(config, stdin).map(|psbt| crate::io::encode_psbt(&psbt))
         }
         Command::Atomize(config) => atomize::run(config, stdin),
+        // The same wire value GET /api/capabilities serves — one catalog
+        // across shells. `{:#}` is serde_json::Value's pretty form.
+        Command::Capabilities(_) => Ok(format!("{:#}", crate::capabilities::catalog_json())),
         Command::Concatenate(config) => {
             concatenate::run(config, stdin).map(|psbt| crate::io::encode_psbt(&psbt))
         }

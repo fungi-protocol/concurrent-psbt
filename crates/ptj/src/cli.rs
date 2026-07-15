@@ -27,6 +27,8 @@ pub enum Command {
     AssignIds(AssignIdsConfig),
     /// Split a constructor PSBT into atomic unordered fragments
     Atomize(AtomizeConfig),
+    /// Print the capability catalog: this build's typed transport surface
+    Capabilities(CapabilitiesConfig),
     /// Create a new PSBT with inputs and outputs
     Create(CreateConfig),
     /// Join two or more PSBTs
@@ -82,6 +84,7 @@ impl Command {
             Command::Sync(config) => {
                 !config.ongoing && config.sources.iter().any(|path| is_stdin_path(path))
             }
+            Command::Capabilities(_) => false,
             Command::Create(_) => false,
             #[cfg(feature = "webgui")]
             Command::Webgui(_) => false,
@@ -118,6 +121,7 @@ impl Command {
                 .iter()
                 .filter(|path| is_stdin_path(path))
                 .count(),
+            Command::Capabilities(_) => 0,
             Command::Create(_) => 0,
             #[cfg(feature = "webgui")]
             Command::Webgui(_) => 0,
@@ -130,6 +134,11 @@ impl Command {
 fn is_stdin_path(path: &Path) -> bool {
     path == Path::new("-")
 }
+
+/// No options: the catalog is a compile-time fact of this binary (see
+/// `crate::capabilities`), so there is nothing to configure.
+#[derive(Args, Debug, Clone)]
+pub struct CapabilitiesConfig {}
 
 #[derive(Args, Debug, Clone)]
 pub struct AssignIdsConfig {
