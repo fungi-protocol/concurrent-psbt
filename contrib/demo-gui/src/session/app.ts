@@ -1196,12 +1196,19 @@ function renderFragments(): void {
   // so the layout class flips with the mode.
   list.classList.toggle("session-area-list", !focused);
   if (focused) {
-    // Single-session focus keeps the flat member list.
+    // Single-session focus shows the register's value as a flat card.
     const visible = session.fragments.filter((fragment) => focused.contentKey === fragment.key);
     for (const fragment of visible) {
       list.append(renderFragmentCard(fragment));
     }
-    el<HTMLElement>("fragmentEmpty").hidden = visible.length > 0;
+    if (!visible.length) {
+      // An empty REGISTER, not an empty workspace — the generic "No PSBTs
+      // loaded yet" hint would be misleading (Mine may well hold fragments).
+      const hint = document.createElement("li");
+      hint.append(span("item-meta session-area-hint", "empty register — wire a fragment in"));
+      list.append(hint);
+    }
+    el<HTMLElement>("fragmentEmpty").hidden = true;
     return;
   }
   // Overview: each session renders EXACTLY ONCE, as a container in the
