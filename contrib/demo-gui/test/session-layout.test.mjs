@@ -163,6 +163,16 @@ test("a local 'peer' presents as a disk location, not an identity", () => {
   assert.match(html, /<option value="local">local \(disk path/);
 });
 
+test("a lone side subtotal is elided — it would repeat the grand total", () => {
+  // Per-side rule: a group shows a side's subtotal only when that side is
+  // split across groups; a footer with nothing to say is skipped.
+  assert.match(app, /group\.inputs\.length > 0 && inputGroupCount > 1/);
+  assert.match(app, /group\.outputs\.length > 0 && outputGroupCount > 1/);
+  assert.match(app, /showInputSubtotal \|\| showOutputSubtotal/);
+  // The old all-or-nothing gate (groups.length > 1) is gone.
+  assert.doesNotMatch(app, /card\.groups\.length > 1/);
+});
+
 test("coins wear the mockup's boundary", () => {
   // The mockup draws every coin as rect.coin-body (thin ink stroke,
   // radius 5); the session coin items carry the CSS equivalent.

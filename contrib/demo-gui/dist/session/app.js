@@ -925,6 +925,11 @@ function renderFragmentCard(fragment) {
     // Body: groups with subtotals; details elided, structure shown.
     const body = document.createElement("div");
     body.className = "session-card-body";
+    // A subtotal earns its place only when its side is actually split
+    // across groups — a lone group's side subtotal would just repeat the
+    // grand total directly below it.
+    const inputGroupCount = card.groups.filter((group) => group.inputs.length > 0).length;
+    const outputGroupCount = card.groups.filter((group) => group.outputs.length > 0).length;
     for (const group of card.groups) {
         // Attribution is the exception, not the default: only attributed groups
         // (descriptor / pseudo-descriptor provenance) earn a wrapper, title, and
@@ -984,12 +989,14 @@ function renderFragmentCard(fragment) {
             columns.append(inputColumn, outputColumn);
             groupNode.append(columns);
         }
-        // Per-group subtotals at the BOTTOM of the columns. With a single
-        // group the card-level report directly below would repeat them (the
+        // Per-group subtotals at the BOTTOM of the columns, per SIDE: a side
+        // shows a subtotal only when that side is split across groups (the
         // demo's grand-total elision rule, inverted for the card layout); at
         // the collapsed mode the aggregate line IS the subtotal.
-        if (level !== "collapsed" && card.groups.length > 1) {
-            groupNode.append(groupBalanceFooter(group));
+        const showInputSubtotal = group.inputs.length > 0 && inputGroupCount > 1;
+        const showOutputSubtotal = group.outputs.length > 0 && outputGroupCount > 1;
+        if (level !== "collapsed" && (showInputSubtotal || showOutputSubtotal)) {
+            groupNode.append(groupBalanceFooter(group, showInputSubtotal, showOutputSubtotal));
         }
         if (attributed)
             body.append(groupNode);
@@ -1115,14 +1122,14 @@ function balanceCell(side, label, sats, why, roleLabel) {
     return cell;
 }
 const PARTIAL_SUBTOTAL_WHY = "member amounts unknown — a partial sum is not shown as a total";
-function groupBalanceFooter(group) {
+function groupBalanceFooter(group, showInputs, showOutputs) {
     const footer = span("session-balance session-balance-group", "");
     footer.append(span("session-balance-sumline", ""));
     const totals = span("session-balance-row session-balance-totals", "");
-    if (group.inputs.length > 0) {
+    if (showInputs) {
         totals.append(balanceCell("input", "in", group.inputSubtotalSats, PARTIAL_SUBTOTAL_WHY, "subtotal"));
     }
-    if (group.outputs.length > 0) {
+    if (showOutputs) {
         totals.append(balanceCell("output", "out", group.outputSubtotalSats, PARTIAL_SUBTOTAL_WHY, "subtotal"));
     }
     footer.append(totals);
