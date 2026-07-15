@@ -102,3 +102,16 @@ test("the wire drag advertises itself when idle", () => {
   assert.match(app, /session-wire-status-idle/);
   assert.match(app, /drag a card onto another to wire them/);
 });
+
+test("the sync dropdown consumes the capability catalog, not a local mapping", () => {
+  // Version gate: an unknown catalog version degrades to everything-enabled.
+  assert.match(app, /CAPABILITY_CATALOG_VERSION = 1/);
+  assert.match(app, /catalog\?\.version !== CAPABILITY_CATALOG_VERSION/);
+  // Copy is branched on the typed reason codes, never parsed from prose.
+  assert.match(app, /reasonCode === "feature-disabled"/);
+  assert.match(app, /reasonCode === "unauthored"/);
+  // The hand-maintained transport→feature table (and its webrtc_rs key
+  // mismatch) is gone: kinds arrive under their select-value names.
+  assert.doesNotMatch(app, /SYNC_TRANSPORT_CAPABILITY/);
+  assert.doesNotMatch(app, /webrtc_rs/);
+});

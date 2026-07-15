@@ -2729,37 +2729,51 @@ function syncTransportValue(): SyncTransport {
 // --- compile-time capabilities (GET /api/capabilities) ----------------------
 //
 // Which transports THIS ptj binary can drive is a compile-time fact; the
-// Sync dropdown reflects it up front (disabled option + the rebuild hint)
-// instead of failing on use. Fetched directly rather than through the
-// Backend seam: this is deployment metadata of the HTTP shell, not a PSBT
-// operation. An older server without the route degrades to
-// everything-enabled with precise use-time errors.
+// Sync dropdown reflects it up front (disabled option + a typed reason)
+// instead of failing on use. The route serves the versioned capability
+// catalog (crates/ptj/src/capabilities.rs): each recognized kind carries an
+// availability bit and, when unusable, a reason CODE — copy is assembled
+// here from the code, not parsed from server prose. Fetched directly rather
+// than through the Backend seam: this is deployment metadata of the HTTP
+// shell, not a PSBT operation. A missing route or an unknown catalog
+// version degrades to everything-enabled with precise use-time errors.
 
-const SYNC_TRANSPORT_CAPABILITY: Record<string, { key: string; feature: string }> = {
-  iroh: { key: "iroh", feature: "iroh-sync" },
-  str0m: { key: "str0m", feature: "str0m" },
-  "webrtc-rs": { key: "webrtc_rs", feature: "webrtc-rs" },
+const CAPABILITY_CATALOG_VERSION = 1;
+
+type TransportCapability = {
+  browserSelectable: boolean;
+  reasonCode: string | null;
+  feature: string | null;
 };
 
-let transportCapabilities: Record<string, boolean> | null = null;
+let transportCapabilities: Map<string, TransportCapability> | null = null;
 
+// The full-sentence refusal for the sync path (and the event log); null
+// when the kind is selectable or the catalog never loaded.
 function transportUnavailable(transport: string): string | null {
-  const mapping = SYNC_TRANSPORT_CAPABILITY[transport];
-  if (!mapping || !transportCapabilities) return null;
-  return transportCapabilities[mapping.key] === false
-    ? `${transport} is unavailable in this build — rebuild ptj with --features ${mapping.feature}`
-    : null;
+  const capability = transportCapabilities?.get(transport);
+  if (!capability || capability.browserSelectable) return null;
+  if (capability.reasonCode === "feature-disabled" && capability.feature) {
+    return `${transport} is unavailable in this build — rebuild ptj with --features ${capability.feature}`;
+  }
+  if (capability.reasonCode === "unauthored") {
+    return `${transport} is recognized but not implemented by any build yet`;
+  }
+  // Available to the host but not browser input (plugin executables are
+  // host configuration), or a reason code this UI predates.
+  return `${transport} is not selectable from the browser`;
 }
 
 function markSyncTransportOptions(): void {
   if (!transportCapabilities) return;
   const select = el<HTMLSelectElement>("syncTransport");
   for (const option of Array.from(select.options)) {
-    const mapping = SYNC_TRANSPORT_CAPABILITY[option.value];
-    if (!mapping || transportCapabilities[mapping.key] !== false) continue;
+    const reason = transportUnavailable(option.value);
+    if (reason === null) continue;
     option.disabled = true;
-    if (!option.text.includes("unavailable")) {
-      option.text = `${option.text} — unavailable in this build (rebuild with --features ${mapping.feature})`;
+    if (!option.text.includes(" — ")) {
+      // Strip the leading "<kind> is" — the option already names the kind.
+      option.text = `${option.text} — ${reason.replace(`${option.value} is `, "")}`;
     }
     if (select.value === option.value) {
       select.value = "local";
@@ -2772,19 +2786,28 @@ async function loadCapabilities(): Promise<void> {
   try {
     const response = await fetch("/api/capabilities");
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const transports = asObject(asObject((await response.json()) as unknown)?.transports);
-    if (!transports) return;
-    const capabilities: Record<string, boolean> = {};
-    for (const [key, value] of Object.entries(transports)) {
-      capabilities[key] = value === true;
+    const catalog = asObject((await response.json()) as unknown);
+    const entries = asArray(catalog?.transports);
+    if (catalog?.version !== CAPABILITY_CATALOG_VERSION || !entries) return;
+    const capabilities = new Map<string, TransportCapability>();
+    for (const raw of entries) {
+      const entry = asObject(raw);
+      const kind = asString(entry?.kind);
+      if (!entry || kind === null) continue;
+      const reason = asObject(entry.reason);
+      capabilities.set(kind, {
+        browserSelectable: entry.browserSelectable === true,
+        reasonCode: asString(reason?.code) ?? null,
+        feature: asString(reason?.feature) ?? null,
+      });
     }
     transportCapabilities = capabilities;
     markSyncTransportOptions();
-    const off = Object.entries(SYNC_TRANSPORT_CAPABILITY)
-      .filter(([, mapping]) => capabilities[mapping.key] === false)
-      .map(([name, mapping]) => `${name} (rebuild with --features ${mapping.feature})`);
+    const off = Array.from(el<HTMLSelectElement>("syncTransport").options)
+      .map((option) => transportUnavailable(option.value))
+      .filter((reason): reason is string => reason !== null);
     if (off.length) {
-      logEvent(`this build lacks sync transports: ${off.join(", ")}`);
+      logEvent(`this build lacks sync transports: ${off.join("; ")}`);
     }
   } catch (error) {
     logEvent(
