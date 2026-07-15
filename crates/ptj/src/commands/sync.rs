@@ -115,9 +115,7 @@ fn build_plugin_transport(config: &SyncConfig) -> Result<Box<dyn Transport>> {
 
 #[cfg(not(feature = "plugin-transports"))]
 fn build_plugin_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
-    Err(Error::new(
-        "ptj was built without transport plugin support; rebuild with --features plugin-transports",
-    ))
+    Err(Error::new(crate::capabilities::rebuild_hint("plugin")))
 }
 
 #[cfg(feature = "iroh-sync")]
@@ -160,9 +158,7 @@ fn build_iroh_transport(config: &SyncConfig) -> Result<Box<dyn Transport>> {
 
 #[cfg(not(feature = "iroh-sync"))]
 fn build_iroh_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
-    Err(Error::new(
-        "ptj was built without iroh sync support; rebuild with --features iroh-sync",
-    ))
+    Err(Error::new(crate::capabilities::rebuild_hint("iroh")))
 }
 
 #[cfg(feature = "arti")]
@@ -175,9 +171,7 @@ fn build_arti_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
 
 #[cfg(not(feature = "arti"))]
 fn build_arti_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
-    Err(Error::new(
-        "ptj was built without arti sync support; rebuild with --features arti",
-    ))
+    Err(Error::new(crate::capabilities::rebuild_hint("arti")))
 }
 
 #[cfg(feature = "nym")]
@@ -189,9 +183,7 @@ fn build_nym_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
 
 #[cfg(not(feature = "nym"))]
 fn build_nym_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
-    Err(Error::new(
-        "ptj was built without nym sync support; rebuild with --features nym",
-    ))
+    Err(Error::new(crate::capabilities::rebuild_hint("nym")))
 }
 
 #[cfg(feature = "emissary")]
@@ -204,9 +196,7 @@ fn build_emissary_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> 
 
 #[cfg(not(feature = "emissary"))]
 fn build_emissary_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
-    Err(Error::new(
-        "ptj was built without emissary sync support; rebuild with --features emissary",
-    ))
+    Err(Error::new(crate::capabilities::rebuild_hint("emissary")))
 }
 
 #[cfg(feature = "mdk")]
@@ -219,9 +209,7 @@ fn build_mdk_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
 
 #[cfg(not(feature = "mdk"))]
 fn build_mdk_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
-    Err(Error::new(
-        "ptj was built without mdk sync support; rebuild with --features mdk",
-    ))
+    Err(Error::new(crate::capabilities::rebuild_hint("mdk")))
 }
 
 // The WebRTC transports (str0m / webrtc-rs) need an out-of-band SIGNALING
@@ -405,9 +393,7 @@ impl<T: Transport> Transport for Primed<T> {
 
 #[cfg(not(feature = "str0m"))]
 fn build_str0m_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
-    Err(Error::new(
-        "ptj was built without str0m sync support; rebuild with --features str0m",
-    ))
+    Err(Error::new(crate::capabilities::rebuild_hint("str0m")))
 }
 
 #[cfg(feature = "webrtc-rs")]
@@ -449,9 +435,7 @@ fn webrtc_rs_config(
 
 #[cfg(not(feature = "webrtc-rs"))]
 fn build_webrtc_rs_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
-    Err(Error::new(
-        "ptj was built without webrtc-rs sync support; rebuild with --features webrtc-rs",
-    ))
+    Err(Error::new(crate::capabilities::rebuild_hint("webrtc-rs")))
 }
 
 // TODO(transport-payjoin-dir): OWNED EXTERNALLY (Damola). Do NOT wire this arm
@@ -473,9 +457,7 @@ fn build_payjoin_dir_transport(_config: &SyncConfig) -> Result<Box<dyn Transport
 
 #[cfg(not(feature = "payjoin-dir"))]
 fn build_payjoin_dir_transport(_config: &SyncConfig) -> Result<Box<dyn Transport>> {
-    Err(Error::new(
-        "ptj was built without payjoin-dir sync support; rebuild with --features payjoin-dir",
-    ))
+    Err(Error::new(crate::capabilities::rebuild_hint("payjoin-dir")))
 }
 
 // TODO(transport-nostr): unauthored — when the transport-nostr crate exists,

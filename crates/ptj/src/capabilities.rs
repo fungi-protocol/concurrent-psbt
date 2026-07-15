@@ -235,6 +235,26 @@ pub fn enabled_features() -> Vec<&'static str> {
         .collect()
 }
 
+/// The runtime refusal for a transport this build cannot drive, assembled
+/// from the catalog so builder errors, route errors, and catalog reasons
+/// never drift. Callers are the feature-off builder arms, so the kind is
+/// always catalog-listed and feature-gated; the fallback arm keeps the
+/// function total anyway.
+pub fn rebuild_hint(kind: &str) -> String {
+    let feature = catalog().iter().find(|c| c.kind == kind).and_then(|c| {
+        match c.unavailable {
+            Some(Unavailable::FeatureDisabled { feature }) => Some(feature),
+            _ => None,
+        }
+    });
+    match feature {
+        Some(feature) => {
+            format!("ptj was built without {kind} sync support; rebuild with --features {feature}")
+        }
+        None => format!("ptj was built without {kind} sync support"),
+    }
+}
+
 /// The single wire shape every shell emits. Field names are the contract;
 /// see the session UI's `loadCapabilities` and the webgui route test.
 pub fn catalog_json() -> serde_json::Value {

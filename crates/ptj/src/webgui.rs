@@ -700,9 +700,7 @@ fn write_ticket_tempfile(ticket: &str) -> Result<std::path::PathBuf> {
 // this helper first — so it reports the same clear rebuild error.
 #[cfg(not(feature = "iroh-sync"))]
 fn write_ticket_tempfile(_ticket: &str) -> Result<std::path::PathBuf> {
-    Err(Error::new(
-        "ptj webgui was built without iroh sync support; rebuild with feature `iroh-sync`",
-    ))
+    Err(Error::new(crate::capabilities::rebuild_hint("iroh")))
 }
 
 /// Serialize a sync result: converged PSBT plus any out-of-band negotiation
