@@ -2351,13 +2351,13 @@ h2 {
    the scaffold. `.session-amount-digits` deliberately has no rule: the
    significant digits fully inherit color, opacity, and weight. */
 .session-amount-symbol {
-  opacity: 0.68;
-  font-weight: 700;
+  opacity: 0.45;
+  font-weight: 600;
 }
 
 .session-amount-scale {
-  opacity: 0.42;
-  font-weight: 500;
+  opacity: 0.2;
+  font-weight: 400;
 }
 
 .session-fee-line {
@@ -2419,6 +2419,14 @@ h2 {
 
 .session-balance-cell .session-amount {
   margin-left: auto;
+}
+
+/* Totals are commentary on the coins, not more coins: a step smaller and
+   quieter than the full-opacity 13px coin-row amounts. Opacity (not a grey
+   color) so deficit-red rows dim the same way (the ead6ca05 rule). */
+.session-balance .session-amount {
+  font-size: 12px;
+  opacity: 0.78;
 }
 
 .session-balance-cell-input {
