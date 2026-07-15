@@ -1189,7 +1189,7 @@ const OUTPUT_ROWS_SHOWN = 3;
 function renderFragments(): void {
   const list = el<HTMLUListElement>("fragmentList");
   list.textContent = "";
-  // Solo mode: with no peers and no sessions the spatial shelves collapse
+  // Solo mode: with no peers and no sessions the spatial regions collapse
   // to their headings and the Mine strip takes over the whole work area.
   el<HTMLElement>("spatialWorkbench").classList.toggle(
     "session-workbench-solo",
@@ -1892,7 +1892,7 @@ function decorateWireTarget(node: HTMLElement, ref: NodeRef): void {
 // hint), plus the session's own actions. There is no second, published-area
 // copy in the work area.
 function renderSessionContainers(): void {
-  const list = el<HTMLUListElement>("sessionShelfList");
+  const list = el<HTMLUListElement>("sessionList");
   list.textContent = "";
   for (const sessionObject of objects.sessions) {
     const item = document.createElement("li");
@@ -1938,7 +1938,7 @@ function renderSessionContainers(): void {
     item.append(actions);
     list.append(item);
   }
-  el<HTMLElement>("sessionShelfEmpty").hidden = objects.sessions.length > 0;
+  el<HTMLElement>("sessionsEmpty").hidden = objects.sessions.length > 0;
 }
 
 function unavailablePairButton(): HTMLButtonElement {
@@ -1951,8 +1951,8 @@ function unavailablePairButton(): HTMLButtonElement {
   return pair;
 }
 
-function renderPeerShelf(): void {
-  const list = el<HTMLUListElement>("peerShelfList");
+function renderPeerRegion(): void {
+  const list = el<HTMLUListElement>("peerList");
   list.textContent = "";
   for (const group of peerBridgeGroups(objects)) {
     const members = group
@@ -1961,7 +1961,7 @@ function renderPeerShelf(): void {
     if (!members.length) continue;
     list.append(members.length === 1 ? renderPeerCard(members[0]) : renderBridgeGroupCard(members));
   }
-  el<HTMLElement>("peerShelfEmpty").hidden = objects.peers.length > 0;
+  el<HTMLElement>("peersEmpty").hidden = objects.peers.length > 0;
 }
 
 function renderObjects(): void {
@@ -3520,7 +3520,7 @@ function render(): void {
   // sync completing mid-gesture) cancel the gesture instead.
   if (wireDrag) cancelWireDrag();
   renderFocus();
-  renderPeerShelf();
+  renderPeerRegion();
   renderSessionContainers();
   renderFragments();
   renderObjects();

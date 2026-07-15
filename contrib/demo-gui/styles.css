@@ -1654,14 +1654,6 @@ h2 {
 
 /* --- session UI (session.html — the real webgui page) ---------------------- */
 
-.session-layout {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-  gap: 16px;
-  padding: 16px;
-  align-items: start;
-}
-
 .session-panel {
   background: var(--surface);
   border: 1px solid var(--line);
@@ -1802,10 +1794,6 @@ h2 {
 /* The disabled-op explainer under the toolbar (filled on press). */
 .session-ops-hint {
   margin: 6px 0 0;
-}
-
-.session-seed {
-  max-width: 180px;
 }
 
 .session-rows {
@@ -2489,7 +2477,7 @@ h2 {
   opacity: 0.55;
 }
 
-.session-wire-target-chip,
+
 .session-wire-target {
   scroll-margin: 60px;
 }
@@ -2702,11 +2690,6 @@ button.session-overridden {
 }
 
 @media (max-width: 760px) {
-  .session-layout {
-    grid-template-columns: 1fr;
-    padding: 10px;
-  }
-
   /* The selection-scoped operations become a bottom bar (thumb reach). */
   .session-ops-panel {
     position: fixed;
@@ -2977,7 +2960,7 @@ img.session-lifehash {
 
 /* Standing wire edges (Mine → sessions, peer → authorized sessions):
    pointer-transparent and drawn over the workbench so edges stay visible
-   across the opaque shelf backgrounds; endpoints anchor at card edges so
+   across the opaque region backgrounds; endpoints anchor at card edges so
    the curves mostly cross the gaps between regions. */
 .session-wire-overlay {
   position: absolute;
@@ -3003,7 +2986,7 @@ img.session-lifehash {
   opacity: 0.45;
 }
 
-.session-spatial-workbench > .session-spatial-shelf {
+.session-spatial-workbench > .session-region {
   flex: none;
   margin: 0;
   box-shadow: none;
@@ -3042,14 +3025,14 @@ img.session-lifehash {
 
 /* Solo mode (no peers, no sessions): the shelves collapse to their
    headings and Mine takes over the entire work area. */
-.session-workbench-solo .session-peer-shelf-list,
-.session-workbench-solo .session-session-shelf-list,
-.session-workbench-solo #peerShelfEmpty,
-.session-workbench-solo #sessionShelfEmpty {
+.session-workbench-solo .session-peer-list,
+.session-workbench-solo .session-list,
+.session-workbench-solo #peersEmpty,
+.session-workbench-solo #sessionsEmpty {
   display: none;
 }
 
-.session-workbench-solo .session-shelf-heading {
+.session-workbench-solo .session-region-heading {
   margin-bottom: 0;
 }
 
@@ -3058,11 +3041,7 @@ img.session-lifehash {
   margin-top: 0;
 }
 
-.session-utilities {
-  padding-top: 12px;
-}
-
-.session-spatial-shelf {
+.session-region {
   margin: 12px 14px 0;
   padding: 10px 12px;
   border: 1px solid var(--line);
@@ -3071,15 +3050,15 @@ img.session-lifehash {
   box-shadow: var(--shadow);
 }
 
-.session-peer-shelf {
+.session-peer-region {
   border-top: 4px solid var(--ink);
 }
 
-.session-session-shelf {
+.session-session-region {
   border-top: 4px solid var(--green);
 }
 
-.session-shelf-heading {
+.session-region-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3087,8 +3066,8 @@ img.session-lifehash {
   margin-bottom: 8px;
 }
 
-.session-peer-shelf-list,
-.session-session-shelf-list {
+.session-peer-list,
+.session-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 8px;
@@ -3100,27 +3079,27 @@ img.session-lifehash {
 }
 
 /* Peers are small nodes above the sessions: compact cards, tight type. */
-.session-peer-shelf-list {
+.session-peer-list {
   grid-template-columns: repeat(auto-fit, minmax(180px, max-content));
 }
 
-.session-peer-shelf-list .session-card {
+.session-peer-list .session-card {
   padding: 6px 8px;
   font-size: 12px;
 }
 
-.session-peer-shelf-list .session-card .item-title {
+.session-peer-list .session-card .item-title {
   font-size: 12px;
 }
 
-.session-peer-shelf-list .session-card button {
+.session-peer-list .session-card button {
   padding: 2px 6px;
   font-size: 11px;
 }
 
 /* Session containers are the workbench's centrepiece: full-width rows,
    one register card each. */
-.session-session-shelf-list {
+.session-list {
   grid-template-columns: 1fr;
 }
 
@@ -3218,39 +3197,11 @@ body {
     padding: 8px;
   }
 
-  .session-spatial-shelf {
+  .session-region {
     margin-inline: 8px;
   }
 
-  /* Standing wire edges (Mine → sessions, peer → authorized sessions):
-   pointer-transparent and drawn over the workbench so edges stay visible
-   across the opaque shelf backgrounds; endpoints anchor at card edges so
-   the curves mostly cross the gaps between regions. */
-.session-wire-overlay {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  z-index: 2;
-}
-
-.session-edge-mine {
-  fill: none;
-  stroke: var(--ink);
-  stroke-width: 1.5;
-  stroke-dasharray: 6 4;
-  opacity: 0.3;
-}
-
-.session-edge-auth {
-  fill: none;
-  stroke: var(--green);
-  stroke-width: 1.5;
-  opacity: 0.45;
-}
-
-.session-spatial-workbench > .session-spatial-shelf {
+  .session-spatial-workbench > .session-region {
     margin-inline: 0;
   }
 

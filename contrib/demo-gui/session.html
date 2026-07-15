@@ -40,20 +40,20 @@
          local registers) and peer → each session it is authorized on.
          Redrawn after every render; pointer-transparent. -->
     <svg id="wireOverlay" class="session-wire-overlay" aria-hidden="true"></svg>
-    <section id="peerShelf" class="session-spatial-shelf session-peer-shelf" data-spatial-region="peers" aria-label="Ephemeral peers" data-focus-hide="">
-      <div class="session-shelf-heading">
+    <section id="peerRegion" class="session-region session-peer-region" data-spatial-region="peers" aria-label="Ephemeral peers" data-focus-hide="">
+      <div class="session-region-heading">
         <div>
           <h2>Peers</h2>
           <p class="item-meta">Ephemeral transport addresses for this page load. Adding does not pair, connect, or publish.</p>
         </div>
         <button id="addPeerQuick" type="button">Add peer</button>
       </div>
-      <p id="peerShelfEmpty" class="item-meta">No peers yet.</p>
-      <ul id="peerShelfList" class="item-list session-peer-shelf-list"></ul>
+      <p id="peersEmpty" class="item-meta">No peers yet.</p>
+      <ul id="peerList" class="item-list session-peer-list"></ul>
     </section>
 
-    <section id="sessionShelf" class="session-spatial-shelf session-session-shelf" data-spatial-region="sessions" aria-label="Shared sessions" data-focus-hide="">
-      <div class="session-shelf-heading">
+    <section id="sessionRegion" class="session-region session-session-region" data-spatial-region="sessions" aria-label="Shared sessions" data-focus-hide="">
+      <div class="session-region-heading">
         <div>
           <h2>Sessions</h2>
           <p class="item-meta">Monotone shared registers for PSBT fragments. Wire a fragment in to write it (⊔); wire a peer in to authorize it.</p>
@@ -65,8 +65,8 @@
           <button type="submit">New session</button>
         </form>
       </div>
-      <p id="sessionShelfEmpty" class="item-meta">No sessions yet.</p>
-      <ul id="sessionShelfList" class="item-list session-session-shelf-list"></ul>
+      <p id="sessionsEmpty" class="item-meta">No sessions yet.</p>
+      <ul id="sessionList" class="item-list session-list"></ul>
     </section>
 
       <!-- Focus bar: visible in single-session focus mode (mobile-first). -->

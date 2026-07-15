@@ -28,7 +28,7 @@ test("the primary objects share one bounded spatial workbench", () => {
   assert.match(
     styles,
     /\.session-spatial-workbench\s*\{[\s\S]*?flex-direction:\s*column;/,
-    "the workbench stacks its shelves as a column",
+    "the workbench stacks its regions as a column",
   );
   assert.match(
     styles,
@@ -48,7 +48,7 @@ test("the Mine strip is the bottom band and owns an empty workbench", () => {
   // Mine is a full-width strip pinned to the bottom of the Me region.
   assert.match(styles, /\.session-area-list\s*\{[\s\S]*?flex-direction:\s*column;/);
   assert.match(styles, /\.session-area-list\s*>\s*\.session-mine-area\s*\{[\s\S]*?margin-top:\s*auto;/);
-  // With no peers and no sessions the shelves collapse and Mine expands.
+  // With no peers and no sessions the regions collapse and Mine expands.
   assert.match(app, /"session-workbench-solo",\s*objects\.peers\.length === 0 && objects\.sessions\.length === 0/);
   assert.match(styles, /\.session-workbench-solo \.session-area-list\s*>\s*\.session-mine-area\s*\{[\s\S]*?flex:\s*1 0 auto;/);
   // The band is layout only — no nested pseudo-peer: local/unpublished is
@@ -63,18 +63,18 @@ test("the real shell keeps peers above sessions and the Me workspace", () => {
   const sessions = html.indexOf('data-spatial-region="sessions"');
   const me = html.indexOf('data-spatial-region="me"');
 
-  assert.ok(peers >= 0, "peer shelf is present");
+  assert.ok(peers >= 0, "peer region is present");
   assert.ok(sessions > peers, "sessions follow peers");
   assert.ok(me > sessions, "Me/local-only workspace follows sessions");
-  assert.match(html, /id="peerShelfList"/);
-  assert.match(app, /renderPeerShelf\(\)/);
+  assert.match(html, /id="peerList"/);
+  assert.match(app, /renderPeerRegion\(\)/);
 });
 
-test("single-session focus hides both overview shelves", () => {
-  const peerShelf = html.match(/<section id="peerShelf"[^>]*>/)?.[0] ?? "";
-  const sessionShelf = html.match(/<section id="sessionShelf"[^>]*>/)?.[0] ?? "";
-  assert.match(peerShelf, /data-focus-hide/);
-  assert.match(sessionShelf, /data-focus-hide/);
+test("single-session focus hides both overview regions", () => {
+  const peerRegion = html.match(/<section id="peerRegion"[^>]*>/)?.[0] ?? "";
+  const sessionRegion = html.match(/<section id="sessionRegion"[^>]*>/)?.[0] ?? "";
+  assert.match(peerRegion, /data-focus-hide/);
+  assert.match(sessionRegion, /data-focus-hide/);
 });
 
 test("peer cards preserve bridging while Pair stays visibly unavailable", () => {
@@ -108,11 +108,11 @@ test("session containers hold the register card and explicit sync — never a tr
 
 test("new session is a one-field action in the sessions heading, not a utilities panel", () => {
   // The form lives inside the sessions region…
-  const shelfStart = html.indexOf('id="sessionShelf"');
-  const shelfEnd = html.indexOf("</section>", shelfStart);
-  const shelf = html.slice(shelfStart, shelfEnd);
-  assert.match(shelf, /id="newSessionForm"/);
-  assert.match(shelf, /id="newSessionName"/);
+  const regionStart = html.indexOf('id="sessionRegion"');
+  const regionEnd = html.indexOf("</section>", regionStart);
+  const region = html.slice(regionStart, regionEnd);
+  assert.match(region, /id="newSessionForm"/);
+  assert.match(region, /id="newSessionName"/);
   // …and the utilities "Create session" panel is gone (minting an empty
   // register needs no fragment/descriptor pickers).
   assert.doesNotMatch(html, /Create session/);

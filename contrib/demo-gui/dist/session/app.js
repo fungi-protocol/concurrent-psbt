@@ -919,7 +919,7 @@ const OUTPUT_ROWS_SHOWN = 3;
 function renderFragments() {
     const list = el("fragmentList");
     list.textContent = "";
-    // Solo mode: with no peers and no sessions the spatial shelves collapse
+    // Solo mode: with no peers and no sessions the spatial regions collapse
     // to their headings and the Mine strip takes over the whole work area.
     el("spatialWorkbench").classList.toggle("session-workbench-solo", objects.peers.length === 0 && objects.sessions.length === 0);
     const focused = focus.mode === "session" && focus.sessionKey ? sessionByKey(objects, focus.sessionKey) : null;
@@ -1536,7 +1536,7 @@ function decorateWireTarget(node, ref) {
 // hint), plus the session's own actions. There is no second, published-area
 // copy in the work area.
 function renderSessionContainers() {
-    const list = el("sessionShelfList");
+    const list = el("sessionList");
     list.textContent = "";
     for (const sessionObject of objects.sessions) {
         const item = document.createElement("li");
@@ -1572,15 +1572,15 @@ function renderSessionContainers() {
         item.append(actions);
         list.append(item);
     }
-    el("sessionShelfEmpty").hidden = objects.sessions.length > 0;
+    el("sessionsEmpty").hidden = objects.sessions.length > 0;
 }
 function unavailablePairButton() {
     const pair = button("Pair unavailable", "Pair unavailable until the ptj adapter exposes session pairing", () => { });
     pair.disabled = true;
     return pair;
 }
-function renderPeerShelf() {
-    const list = el("peerShelfList");
+function renderPeerRegion() {
+    const list = el("peerList");
     list.textContent = "";
     for (const group of peerBridgeGroups(objects)) {
         const members = group
@@ -1590,7 +1590,7 @@ function renderPeerShelf() {
             continue;
         list.append(members.length === 1 ? renderPeerCard(members[0]) : renderBridgeGroupCard(members));
     }
-    el("peerShelfEmpty").hidden = objects.peers.length > 0;
+    el("peersEmpty").hidden = objects.peers.length > 0;
 }
 function renderObjects() {
     const list = el("objectList");
@@ -2946,7 +2946,7 @@ function render() {
     if (wireDrag)
         cancelWireDrag();
     renderFocus();
-    renderPeerShelf();
+    renderPeerRegion();
     renderSessionContainers();
     renderFragments();
     renderObjects();
