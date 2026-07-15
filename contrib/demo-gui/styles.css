@@ -2624,11 +2624,6 @@ button.session-overridden {
   word-break: break-all;
 }
 
-.session-new-object {
-  align-items: end;
-  margin-bottom: 10px;
-}
-
 /* Field editor. */
 
 .session-editor-sections {
@@ -2927,13 +2922,14 @@ img.session-lifehash {
   font-size: 13px;
 }
 
-/* MINE pseudo-peer + published-session areas (wiring lane, Q6): the
-   fragments panel partitions into a large peer-like Mine rectangle
-   (sessionless local fragments) and one container per session with
-   published members, so Mine -> session wiring reads as a visible move. */
+/* MINE band + session containers (wiring lane, Q6): the work area's
+   fragment panel holds one large peer-like Mine rectangle (local-only
+   fragments no register references); each session renders ONCE as a
+   container in the sessions region, so Mine -> session wiring reads as
+   a visible move between the two. */
 
 .session-mine-area,
-.session-published-area {
+.session-container {
   display: block;
   padding: 10px 12px;
   border-radius: 10px;
@@ -2945,13 +2941,13 @@ img.session-lifehash {
   background: var(--surface-2);
 }
 
-.session-published-area {
+.session-container {
   border: 1.5px solid rgba(15, 123, 79, 0.42);
   background: rgba(15, 123, 79, 0.04);
 }
 
 .session-mine-area > .session-card-list,
-.session-published-area > .session-card-list {
+.session-container > .session-card-list {
   margin-top: 8px;
 }
 
@@ -2996,10 +2992,9 @@ img.session-lifehash {
   flex: none;
 }
 
-/* Overview mode: the fragment list stacks full-width area strips —
-   published-session containers first, then Mine pinned to the bottom of
-   whatever height the Me region absorbed. (Focus mode removes this class
-   and falls back to the card grid.) */
+/* Overview mode: the fragment list is the Mine strip pinned to the
+   bottom of whatever height the Me region absorbed. (Focus mode removes
+   this class and falls back to the card grid.) */
 .session-area-list {
   display: flex;
   flex-direction: column;
@@ -3007,8 +3002,7 @@ img.session-lifehash {
   flex: 1 1 auto;
 }
 
-.session-area-list > .session-mine-area,
-.session-area-list > .session-published-area {
+.session-area-list > .session-mine-area {
   width: 100%;
   margin-bottom: 0;
 }
@@ -3072,8 +3066,44 @@ img.session-lifehash {
 }
 
 .session-peer-card,
-.session-shelf-card {
+.session-container {
   margin: 0;
+}
+
+/* Peers are small nodes above the sessions: compact cards, tight type. */
+.session-peer-shelf-list {
+  grid-template-columns: repeat(auto-fit, minmax(180px, max-content));
+}
+
+.session-peer-shelf-list .session-card {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.session-peer-shelf-list .session-card .item-title {
+  font-size: 12px;
+}
+
+.session-peer-shelf-list .session-card button {
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+/* Session containers are the workbench's centrepiece: full-width rows,
+   one register card each. */
+.session-session-shelf-list {
+  grid-template-columns: 1fr;
+}
+
+/* Minting an empty register is a one-field action in the heading. */
+.session-new-session {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.session-new-session input {
+  width: 10em;
 }
 
 /* One shared Add surface for fast universal paste and manual palettes. */

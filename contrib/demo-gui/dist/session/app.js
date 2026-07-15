@@ -902,21 +902,13 @@ function renderFragments() {
         el("fragmentEmpty").hidden = visible.length > 0;
         return;
     }
-    // Overview partitions the fragment set by WHERE each fragment lives (Q6):
-    // the MINE pseudo-peer holds every sessionless local fragment (loaded and
-    // created fragments default there), and each session with loaded members
-    // gets its own container — so publishing (wiring Mine → session) is a
-    // visible MOVE between areas.
+    // Overview: each session renders EXACTLY ONCE, as a container in the
+    // sessions region (renderSessionContainers) — the work area holds only
+    // MINE, the local-only fragments no register references. Publishing
+    // (wiring Mine → session) is a visible MOVE from this band into the
+    // session's container.
     if (session.fragments.length) {
         const mineKeys = mineFragmentKeys(session.fragments.map((fragment) => fragment.key), objects);
-        for (const sessionObject of objects.sessions) {
-            const members = session.fragments.filter((fragment) => sessionObject.contentKey === fragment.key);
-            if (members.length) {
-                list.append(renderSessionArea(sessionObject, members));
-            }
-        }
-        // Mine renders LAST: it is the static full-width strip at the bottom
-        // of the work area, beneath every published-session container.
         list.append(renderMineArea(session.fragments.filter((fragment) => mineKeys.includes(fragment.key))));
     }
     el("fragmentEmpty").hidden = session.fragments.length > 0;
@@ -938,26 +930,6 @@ function renderMineArea(fragments) {
     item.append(span("item-meta session-area-hint", fragments.length
         ? "not published to any session — wiring a card to a session publishes it"
         : "every loaded fragment is published"));
-    return item;
-}
-// One container per session with loaded member fragments: the published
-// side of the Mine → session move.
-function renderSessionArea(sessionObject, members) {
-    const item = document.createElement("li");
-    item.className = "session-published-area";
-    const head = document.createElement("div");
-    head.className = "session-fragment-row";
-    head.append(span("item-title", sessionObject.name), badge("session", "session-badge session-badge-good"), span("item-meta", `${members.length} published fragment(s) · ${sessionObject.peerKeys.length} peer(s)`), button("Focus", "Fill the viewport with this session (mobile view)", () => {
-        focus = sessionFocus(sessionObject.key);
-        render();
-    }));
-    item.append(head);
-    const inner = document.createElement("ul");
-    inner.className = "item-list session-card-list";
-    for (const fragment of members) {
-        inner.append(renderFragmentCard(fragment));
-    }
-    item.append(inner);
     return item;
 }
 function renderFragmentCard(fragment) {
@@ -1518,12 +1490,16 @@ function decorateWireTarget(node, ref) {
     }
 }
 // --- spatial shelves and remaining objects -----------------------------------------
-function renderSessionShelf() {
+// The ONE place a session renders: a container in the sessions region
+// holding the register's value as a full fragment card (or an empty-register
+// hint), plus the session's own actions. There is no second, published-area
+// copy in the work area.
+function renderSessionContainers() {
     const list = el("sessionShelfList");
     list.textContent = "";
     for (const sessionObject of objects.sessions) {
         const item = document.createElement("li");
-        item.className = "list-item session-card session-shelf-card";
+        item.className = "list-item session-card session-container";
         const ref = { kind: "session", key: sessionObject.key };
         decorateWireTarget(item, ref);
         const head = document.createElement("div");
@@ -1531,12 +1507,25 @@ function renderSessionShelf() {
         head.append(span("item-title", sessionObject.name), badge("session", "session-badge"), span("item-meta", `${sessionObject.contentKey ? `register: ${sessionObject.contentKey}` : "empty register"} · ` +
             `${sessionObject.peerKeys.length} peer(s)`));
         item.append(head);
+        // The register's one growing value, as the card itself.
+        const content = sessionObject.contentKey
+            ? (session.fragments.find((fragment) => fragment.key === sessionObject.contentKey) ?? null)
+            : null;
+        if (content) {
+            const inner = document.createElement("ul");
+            inner.className = "item-list session-card-list";
+            inner.append(renderFragmentCard(content));
+            item.append(inner);
+        }
+        else {
+            item.append(span("item-meta session-area-hint", "empty register — wire a fragment in"));
+        }
         const actions = document.createElement("div");
         actions.className = "session-card-actions";
         actions.append(button("Focus", "Fill the viewport with this session", () => {
             focus = sessionFocus(sessionObject.key);
             render();
-        }), ...wireQueueChip(ref), button("Sync now", "Sync this session's fragments over its peers' transports", () => {
+        }), ...wireQueueChip(ref), button("Sync now", "Sync this session's register value over its peers' transports", () => {
             void syncSessionOverPeer(sessionObject.key, null);
         }));
         item.append(actions);
@@ -2849,7 +2838,7 @@ function render() {
         cancelWireDrag();
     renderFocus();
     renderPeerShelf();
-    renderSessionShelf();
+    renderSessionContainers();
     renderFragments();
     renderObjects();
     // After the card passes: the idle wire hint asks the DOM whether any

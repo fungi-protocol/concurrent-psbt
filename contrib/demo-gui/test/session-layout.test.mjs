@@ -38,20 +38,22 @@ test("the primary objects share one bounded spatial workbench", () => {
 });
 
 test("the Mine strip is the bottom band and owns an empty workbench", () => {
-  // Overview renders published-session areas first and Mine last…
+  // Overview's fragment list holds ONLY the Mine band: sessions render
+  // once, as containers in the sessions region, never as a second
+  // published-area copy in the work area.
   const overview = app.slice(app.indexOf("function renderFragments"));
-  const sessionsLoop = overview.indexOf("renderSessionArea(sessionObject, members)");
-  const mineAppend = overview.indexOf("renderMineArea(");
-  assert.ok(sessionsLoop >= 0 && mineAppend > sessionsLoop, "Mine renders after the session areas");
-  // …as full-width strips with Mine pinned to the bottom of the Me region.
+  assert.ok(overview.indexOf("renderMineArea(") >= 0, "Mine renders in overview");
+  assert.doesNotMatch(app, /renderSessionArea/);
+  assert.doesNotMatch(styles, /session-published-area/);
+  // Mine is a full-width strip pinned to the bottom of the Me region.
   assert.match(styles, /\.session-area-list\s*\{[\s\S]*?flex-direction:\s*column;/);
-  assert.match(styles, /\.session-area-list\s*>\s*\.session-mine-area\s*\{\s*margin-top:\s*auto;/);
+  assert.match(styles, /\.session-area-list\s*>\s*\.session-mine-area\s*\{[\s\S]*?margin-top:\s*auto;/);
   // With no peers and no sessions the shelves collapse and Mine expands.
   assert.match(app, /"session-workbench-solo",\s*objects\.peers\.length === 0 && objects\.sessions\.length === 0/);
   assert.match(styles, /\.session-workbench-solo \.session-area-list\s*>\s*\.session-mine-area\s*\{[\s\S]*?flex:\s*1 0 auto;/);
   // The band is layout only — no nested pseudo-peer: local/unpublished is
-  // the default, so it wears no title and no badge (published areas do).
-  const mine = app.slice(app.indexOf("function renderMineArea"), app.indexOf("function renderSessionArea"));
+  // the default, so it wears no title and no badge (session containers do).
+  const mine = app.slice(app.indexOf("function renderMineArea"), app.indexOf("function renderFragmentCard"));
   assert.doesNotMatch(mine, /item-title/);
   assert.doesNotMatch(mine, /badge\(/);
 });
@@ -87,18 +89,34 @@ test("peer cards preserve bridging while Pair stays visibly unavailable", () => 
   assert.match(app, /Pair unavailable until the ptj adapter exposes session pairing/);
 });
 
-test("session shelf cards show the register value and explicit sync — never a transport", () => {
-  const start = app.indexOf("function renderSessionShelf");
+test("session containers hold the register card and explicit sync — never a transport", () => {
+  const start = app.indexOf("function renderSessionContainers");
   const end = app.indexOf("function unavailablePairButton", start);
-  assert.ok(start >= 0 && end > start, "session-shelf renderer is present");
-  const sessionShelf = app.slice(start, end);
-  // Sessions have no transport (peers do): the card must not claim one.
-  assert.doesNotMatch(sessionShelf, /sessionObject\.transport/);
-  // A session is a single-value register, not a member list.
-  assert.match(sessionShelf, /register: \$\{sessionObject\.contentKey\}/);
-  assert.match(sessionShelf, /empty register/);
-  assert.doesNotMatch(sessionShelf, /fragmentKeys/);
-  assert.match(sessionShelf, /button\("Sync now"/);
+  assert.ok(start >= 0 && end > start, "session-container renderer is present");
+  const container = app.slice(start, end);
+  // Sessions have no transport (peers do): the container must not claim one.
+  assert.doesNotMatch(container, /sessionObject\.transport/);
+  // A session is a single-value register, not a member list: the container
+  // shows the register's value as a full fragment card, or an honest
+  // empty-register hint.
+  assert.match(container, /register: \$\{sessionObject\.contentKey\}/);
+  assert.match(container, /renderFragmentCard\(content\)/);
+  assert.match(container, /empty register — wire a fragment in/);
+  assert.doesNotMatch(container, /fragmentKeys/);
+  assert.match(container, /button\("Sync now"/);
+});
+
+test("new session is a one-field action in the sessions heading, not a utilities panel", () => {
+  // The form lives inside the sessions region…
+  const shelfStart = html.indexOf('id="sessionShelf"');
+  const shelfEnd = html.indexOf("</section>", shelfStart);
+  const shelf = html.slice(shelfStart, shelfEnd);
+  assert.match(shelf, /id="newSessionForm"/);
+  assert.match(shelf, /id="newSessionName"/);
+  // …and the utilities "Create session" panel is gone (minting an empty
+  // register needs no fragment/descriptor pickers).
+  assert.doesNotMatch(html, /Create session/);
+  assert.equal((html.match(/id="newSessionForm"/g) ?? []).length, 1);
 });
 
 test("one shared bottom Add drawer owns quick paste and manual peer creation", () => {

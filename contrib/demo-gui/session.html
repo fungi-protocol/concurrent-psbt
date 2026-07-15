@@ -53,8 +53,14 @@
       <div class="session-shelf-heading">
         <div>
           <h2>Sessions</h2>
-          <p class="item-meta">Shared monotonic PSBT state. Multiple sessions remain visible in overview.</p>
+          <p class="item-meta">Monotone shared registers for PSBT fragments. Wire a fragment in to write it (⊔); wire a peer in to authorize it.</p>
         </div>
+        <!-- Minting an empty register needs nothing but a name — no
+             fragment/descriptor pickers, no transport (peers own those). -->
+        <form id="newSessionForm" class="session-new-session">
+          <input id="newSessionName" autocomplete="off" placeholder="name" aria-label="New session name">
+          <button type="submit">New session</button>
+        </form>
       </div>
       <p id="sessionShelfEmpty" class="item-meta">No sessions yet.</p>
       <ul id="sessionShelfList" class="item-list session-session-shelf-list"></ul>
@@ -66,10 +72,10 @@
         <span id="focusTitle" class="item-title"></span>
       </nav>
 
-      <!-- The work area: published session containers plus a flat bottom
-           band of sessionless local cards. Local/unpublished is the default
-           and carries no heading or badge of its own — published session
-           areas are the labelled exception. -->
+      <!-- The work area: a flat bottom band of local-only cards (Mine).
+           Sessions render once, as containers in the sessions region above;
+           local/unpublished is the default and carries no heading or badge
+           of its own. -->
       <section class="control-section session-panel session-panel-wide" aria-label="PSBT work area" data-spatial-region="me" data-focus-hide="">
         <div id="sessionStatus" class="session-status" role="status"></div>
         <!-- The wire-status bar: an idle advertisement of the drag-to-wire
@@ -121,18 +127,9 @@
 
     <div class="session-layout session-utilities" id="sessionUtilities">
 
-      <section class="control-section session-panel" aria-label="Sessions and other objects" data-focus-hide="">
-        <h2>Create session</h2>
-        <p class="item-meta">Sessions appear in the spatial shelf above. Other pasted objects remain below.</p>
-        <form id="newSessionForm" class="split-row session-new-object">
-          <label class="field-label" for="newSessionName">
-            New session
-            <input id="newSessionName" autocomplete="off" placeholder="name">
-          </label>
-          <!-- No transport field: sessions have none. Transports belong to
-               the peers wired into the session. -->
-          <button type="submit">Create</button>
-        </form>
+      <section class="control-section session-panel" aria-label="Other pasted objects" data-focus-hide="">
+        <h2>Other objects</h2>
+        <p class="item-meta">Pasted payment requests, spendable outputs, and descriptors.</p>
         <ul id="objectList" class="item-list session-card-list"></ul>
       </section>
 
