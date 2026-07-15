@@ -9,9 +9,6 @@ export interface SessionObject {
     key: string;
     name: string;
     fragmentKeys: string[];
-    transport: SyncTransport;
-    irohTicket: string;
-    stateFile: string;
     peerKeys: string[];
 }
 export interface PeerObject {
@@ -68,7 +65,7 @@ export interface ObjectsState {
     counter: number;
 }
 export declare function emptyObjects(): ObjectsState;
-export declare function mintSession(state: ObjectsState, name: string, transport: SyncTransport): {
+export declare function mintSession(state: ObjectsState, name: string): {
     state: ObjectsState;
     session: SessionObject;
 };

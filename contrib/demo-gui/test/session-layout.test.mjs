@@ -82,12 +82,13 @@ test("peer cards preserve bridging while Pair stays visibly unavailable", () => 
   assert.match(app, /Pair unavailable until the ptj adapter exposes session pairing/);
 });
 
-test("session shelf cards retain transport, members, and explicit sync", () => {
+test("session shelf cards show members and explicit sync — never a transport", () => {
   const start = app.indexOf("function renderSessionShelf");
   const end = app.indexOf("function unavailablePairButton", start);
   assert.ok(start >= 0 && end > start, "session-shelf renderer is present");
   const sessionShelf = app.slice(start, end);
-  assert.match(sessionShelf, /sessionObject\.transport/);
+  // Sessions have no transport (peers do): the card must not claim one.
+  assert.doesNotMatch(sessionShelf, /sessionObject\.transport/);
   assert.match(sessionShelf, /sessionObject\.fragmentKeys\.join\(", "\)/);
   assert.match(sessionShelf, /button\("Sync now"/);
 });

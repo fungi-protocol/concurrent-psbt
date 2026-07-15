@@ -859,8 +859,7 @@ function renderSessionArea(sessionObject, members) {
     item.className = "session-published-area";
     const head = document.createElement("div");
     head.className = "session-fragment-row";
-    head.append(span("item-title", sessionObject.name), badge("session", "session-badge session-badge-good"), span("item-meta", `${sessionObject.transport} · ${members.length} published fragment(s) · ` +
-        `${sessionObject.peerKeys.length} peer(s)`), button("Focus", "Fill the viewport with this session (mobile view)", () => {
+    head.append(span("item-title", sessionObject.name), badge("session", "session-badge session-badge-good"), span("item-meta", `${members.length} published fragment(s) · ${sessionObject.peerKeys.length} peer(s)`), button("Focus", "Fill the viewport with this session (mobile view)", () => {
         focus = sessionFocus(sessionObject.key);
         render();
     }));
@@ -1434,7 +1433,7 @@ function renderSessionShelf() {
         decorateWireTarget(item, ref);
         const head = document.createElement("div");
         head.className = "session-fragment-row";
-        head.append(span("item-title", sessionObject.name), badge("session", "session-badge"), span("item-meta", `${sessionObject.transport} · ${sessionObject.fragmentKeys.length} fragment(s) · ` +
+        head.append(span("item-title", sessionObject.name), badge("session", "session-badge"), span("item-meta", `${sessionObject.fragmentKeys.length} fragment(s) · ` +
             `${sessionObject.peerKeys.length} peer(s)`));
         item.append(head);
         if (sessionObject.fragmentKeys.length) {
@@ -1445,7 +1444,7 @@ function renderSessionShelf() {
         actions.append(button("Focus", "Fill the viewport with this session", () => {
             focus = sessionFocus(sessionObject.key);
             render();
-        }), ...wireQueueChip(ref), button("Sync now", "Sync this session's fragments over its transport", () => {
+        }), ...wireQueueChip(ref), button("Sync now", "Sync this session's fragments over its peers' transports", () => {
             void syncSessionOverPeer(sessionObject.key, null);
         }));
         item.append(actions);
@@ -1673,7 +1672,7 @@ function renderFocus() {
                 .map((key) => peerByKey(objects, key)?.name ?? key)
                 .join(", ");
             el("focusTitle").textContent =
-                `${focused.name} · ${focused.transport} · ${focused.fragmentKeys.length} fragment(s)` +
+                `${focused.name} · ${focused.fragmentKeys.length} fragment(s)` +
                     (peers ? ` · peers: ${peers}` : "");
         }
     }
@@ -2600,17 +2599,25 @@ async function runSync(event) {
     await runSyncRequest(psbts, `sync of ${psbts.length} selected fragment(s)`);
 }
 // Peer→session wiring: sync the session's member fragments over the peer's
-// transport (or the session's own transport when no peer is given). The
-// transport parameters ride the sync form so the manual-signaling transports
-// stay configurable; iroh peers bring their ticket along.
+// transport. Sessions have no transport of their own, so with no peer given
+// the fallback is the session's first member peer with a usable transport,
+// and "local" (the disk) only as the last resort. The transport parameters
+// ride the sync form so the manual-signaling transports stay configurable;
+// iroh peers bring their ticket along.
+function usableTransport(peer) {
+    if (!peer || peer.transport === "nostr" || peer.transport === "unknown")
+        return null;
+    return peer.transport;
+}
 async function syncSessionOverPeer(sessionKey, peerKey) {
     const sessionObject = sessionByKey(objects, sessionKey);
     if (!sessionObject)
         return;
     const peer = peerKey ? peerByKey(objects, peerKey) : null;
-    const transport = peer && peer.transport !== "nostr" && peer.transport !== "unknown"
-        ? peer.transport
-        : sessionObject.transport;
+    const memberTransport = sessionObject.peerKeys
+        .map((key) => usableTransport(peerByKey(objects, key)))
+        .find((candidate) => candidate !== null);
+    const transport = usableTransport(peer) ?? memberTransport ?? "local";
     el("syncTransport").value = transport;
     renderSyncFields();
     if (peer && peer.transport === "iroh" && peer.identity) {
@@ -2832,10 +2839,10 @@ function wireDom() {
     });
     el("newSessionForm").addEventListener("submit", (event) => {
         event.preventDefault();
-        const minted = mintSession(objects, inputValue("newSessionName"), selectValue("newSessionTransport"));
+        const minted = mintSession(objects, inputValue("newSessionName"));
         objects = minted.state;
         el("newSessionName").value = "";
-        logEvent(`created ${minted.session.key} (${minted.session.name}, ${minted.session.transport})`);
+        logEvent(`created ${minted.session.key} (${minted.session.name}) — wire peers in to make it reachable`);
         render();
     });
     el("createForm").addEventListener("submit", (event) => void createPsbt(event));

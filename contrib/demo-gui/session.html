@@ -128,15 +128,8 @@
             New session
             <input id="newSessionName" autocomplete="off" placeholder="name">
           </label>
-          <label class="field-label compact" for="newSessionTransport">
-            transport
-            <select id="newSessionTransport">
-              <option value="local" selected>local</option>
-              <option value="iroh">iroh</option>
-              <option value="str0m">str0m</option>
-              <option value="webrtc-rs">webrtc-rs</option>
-            </select>
-          </label>
+          <!-- No transport field: sessions have none. Transports belong to
+               the peers wired into the session. -->
           <button type="submit">Create</button>
         </form>
         <ul id="objectList" class="item-list session-card-list"></ul>

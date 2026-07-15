@@ -55,15 +55,12 @@ function nextKey(state, prefix) {
     const counter = state.counter + 1;
     return { state: { ...state, counter }, key: `${prefix}-${counter}` };
 }
-export function mintSession(state, name, transport) {
+export function mintSession(state, name) {
     const next = nextKey(state, "session");
     const session = {
         key: next.key,
         name: name.trim() || next.key,
         fragmentKeys: [],
-        transport,
-        irohTicket: "",
-        stateFile: "",
         peerKeys: [],
     };
     return {
@@ -297,14 +294,6 @@ export function mergeSessions(state, leftKey, rightKey) {
         return { state, merged: null, notes: [] };
     }
     const notes = [];
-    if (right.transport !== left.transport) {
-        notes.push(`transport conflict: ${left.name} uses ${left.transport}, ${right.name} uses ` +
-            `${right.transport}; the merged session keeps ${left.transport}`);
-    }
-    if (left.irohTicket && right.irohTicket && left.irohTicket !== right.irohTicket) {
-        notes.push(`both sessions carry an iroh ticket; the merged session keeps ${left.name}'s ` +
-            "(the other document is no longer addressed)");
-    }
     notes.push("server-side session state (if any) is NOT merged — the UI-model merge joins " +
         "fragment states via /api/join and unions peer connections; a backend " +
         "session-state merge seam would own the converging state itself");
@@ -316,9 +305,6 @@ export function mergeSessions(state, leftKey, rightKey) {
             ...left.fragmentKeys,
             ...right.fragmentKeys.filter((key) => !left.fragmentKeys.includes(key)),
         ],
-        transport: left.transport,
-        irohTicket: left.irohTicket || right.irohTicket,
-        stateFile: left.stateFile || right.stateFile,
         peerKeys: [...left.peerKeys, ...right.peerKeys.filter((key) => !left.peerKeys.includes(key))],
     };
     return {

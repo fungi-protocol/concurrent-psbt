@@ -1135,8 +1135,7 @@ function renderSessionArea(
     badge("session", "session-badge session-badge-good"),
     span(
       "item-meta",
-      `${sessionObject.transport} · ${members.length} published fragment(s) · ` +
-        `${sessionObject.peerKeys.length} peer(s)`,
+      `${members.length} published fragment(s) · ${sessionObject.peerKeys.length} peer(s)`,
     ),
     button("Focus", "Fill the viewport with this session (mobile view)", () => {
       focus = sessionFocus(sessionObject.key);
@@ -1789,7 +1788,7 @@ function renderSessionShelf(): void {
       badge("session", "session-badge"),
       span(
         "item-meta",
-        `${sessionObject.transport} · ${sessionObject.fragmentKeys.length} fragment(s) · ` +
+        `${sessionObject.fragmentKeys.length} fragment(s) · ` +
           `${sessionObject.peerKeys.length} peer(s)`,
       ),
     );
@@ -1805,7 +1804,7 @@ function renderSessionShelf(): void {
         render();
       }),
       ...wireQueueChip(ref),
-      button("Sync now", "Sync this session's fragments over its transport", () => {
+      button("Sync now", "Sync this session's fragments over its peers' transports", () => {
         void syncSessionOverPeer(sessionObject.key, null);
       }),
     );
@@ -2123,7 +2122,7 @@ function renderFocus(): void {
         .map((key) => peerByKey(objects, key)?.name ?? key)
         .join(", ");
       el<HTMLElement>("focusTitle").textContent =
-        `${focused.name} · ${focused.transport} · ${focused.fragmentKeys.length} fragment(s)` +
+        `${focused.name} · ${focused.fragmentKeys.length} fragment(s)` +
         (peers ? ` · peers: ${peers}` : "");
     }
   }
@@ -3139,16 +3138,24 @@ async function runSync(event: Event): Promise<void> {
 }
 
 // Peer→session wiring: sync the session's member fragments over the peer's
-// transport (or the session's own transport when no peer is given). The
-// transport parameters ride the sync form so the manual-signaling transports
-// stay configurable; iroh peers bring their ticket along.
+// transport. Sessions have no transport of their own, so with no peer given
+// the fallback is the session's first member peer with a usable transport,
+// and "local" (the disk) only as the last resort. The transport parameters
+// ride the sync form so the manual-signaling transports stay configurable;
+// iroh peers bring their ticket along.
+function usableTransport(peer: PeerObject | null): SyncTransport | null {
+  if (!peer || peer.transport === "nostr" || peer.transport === "unknown") return null;
+  return peer.transport;
+}
+
 async function syncSessionOverPeer(sessionKey: string, peerKey: string | null): Promise<void> {
   const sessionObject = sessionByKey(objects, sessionKey);
   if (!sessionObject) return;
   const peer = peerKey ? peerByKey(objects, peerKey) : null;
-  const transport = peer && peer.transport !== "nostr" && peer.transport !== "unknown"
-    ? peer.transport
-    : sessionObject.transport;
+  const memberTransport = sessionObject.peerKeys
+    .map((key) => usableTransport(peerByKey(objects, key)))
+    .find((candidate): candidate is SyncTransport => candidate !== null);
+  const transport = usableTransport(peer) ?? memberTransport ?? "local";
   el<HTMLSelectElement>("syncTransport").value = transport;
   renderSyncFields();
   if (peer && peer.transport === "iroh" && peer.identity) {
@@ -3388,14 +3395,10 @@ function wireDom(): void {
 
   el<HTMLFormElement>("newSessionForm").addEventListener("submit", (event) => {
     event.preventDefault();
-    const minted = mintSession(
-      objects,
-      inputValue("newSessionName"),
-      selectValue("newSessionTransport") as SyncTransport,
-    );
+    const minted = mintSession(objects, inputValue("newSessionName"));
     objects = minted.state;
     el<HTMLInputElement>("newSessionName").value = "";
-    logEvent(`created ${minted.session.key} (${minted.session.name}, ${minted.session.transport})`);
+    logEvent(`created ${minted.session.key} (${minted.session.name}) — wire peers in to make it reachable`);
     render();
   });
 

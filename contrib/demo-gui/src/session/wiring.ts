@@ -64,18 +64,16 @@ export interface NodeRef {
   key: string;
 }
 
-// A session binds a fragment subset to a transport/sync configuration. The
-// converging state itself lives server-side (or on peers); this object is
-// the UI-model handle the wire gesture manipulates.
+// A session is a named set of fragments and peer connections — nothing
+// more. It has NO transport of its own: transports and their identity
+// material (tickets, addresses, disk paths) belong to the PEERS, and
+// reaching the session goes over each peer's own transport. The converging
+// state itself lives server-side (or on peers); this object is the UI-model
+// handle the wire gesture manipulates.
 export interface SessionObject {
   key: string;
   name: string;
   fragmentKeys: string[];
-  transport: SyncTransport;
-  // Transport identity material, kept raw: an iroh document ticket, or the
-  // manual signaling params for the WebRTC transports.
-  irohTicket: string;
-  stateFile: string;
   peerKeys: string[];
 }
 
@@ -185,16 +183,12 @@ function nextKey(state: ObjectsState, prefix: string): { state: ObjectsState; ke
 export function mintSession(
   state: ObjectsState,
   name: string,
-  transport: SyncTransport,
 ): { state: ObjectsState; session: SessionObject } {
   const next = nextKey(state, "session");
   const session: SessionObject = {
     key: next.key,
     name: name.trim() || next.key,
     fragmentKeys: [],
-    transport,
-    irohTicket: "",
-    stateFile: "",
     peerKeys: [],
   };
   return {
@@ -503,8 +497,9 @@ export function mineFragmentKeys(
 export interface SessionMergeResult {
   state: ObjectsState;
   merged: SessionObject | null;
-  // Honest-logging notes: what the UI-model merge decided (transport
-  // conflicts, dropped identity material) and what it cannot do.
+  // Honest-logging notes: what the UI-model merge cannot do (server-side
+  // converging state). Transports live on peers, and the peer union carries
+  // every connection along — there is no transport to conflict.
   notes: string[];
 }
 
@@ -519,18 +514,6 @@ export function mergeSessions(
     return { state, merged: null, notes: [] };
   }
   const notes: string[] = [];
-  if (right.transport !== left.transport) {
-    notes.push(
-      `transport conflict: ${left.name} uses ${left.transport}, ${right.name} uses ` +
-        `${right.transport}; the merged session keeps ${left.transport}`,
-    );
-  }
-  if (left.irohTicket && right.irohTicket && left.irohTicket !== right.irohTicket) {
-    notes.push(
-      `both sessions carry an iroh ticket; the merged session keeps ${left.name}'s ` +
-        "(the other document is no longer addressed)",
-    );
-  }
   notes.push(
     "server-side session state (if any) is NOT merged — the UI-model merge joins " +
       "fragment states via /api/join and unions peer connections; a backend " +
@@ -544,9 +527,6 @@ export function mergeSessions(
       ...left.fragmentKeys,
       ...right.fragmentKeys.filter((key) => !left.fragmentKeys.includes(key)),
     ],
-    transport: left.transport,
-    irohTicket: left.irohTicket || right.irohTicket,
-    stateFile: left.stateFile || right.stateFile,
     peerKeys: [...left.peerKeys, ...right.peerKeys.filter((key) => !left.peerKeys.includes(key))],
   };
   return {
