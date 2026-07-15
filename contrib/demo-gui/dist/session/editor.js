@@ -19,10 +19,13 @@
 //   returns structured violations with fix offers and named overrides. The
 //   shell sends the raw rows that CHANGED (rawEditsForSave below) — no
 //   client-side byte re-encoding.
-// - Decoded convenience fields (amount, txid, ordering, ...) still validate
-//   locally only: translating them into raw key/value bytes is a backend
-//   concern (a typed-edit request shape /api/edit does not take yet), so
-//   their edits do NOT travel on save — the shell says so explicitly.
+// - Decoded convenience fields whose values ARE the raw bytes travel on
+//   save as raw-keymap edits under their constant keys: the tx-modifiable
+//   bitfield (global 0x06) and per-output unique ids (proprietary
+//   concurrent-psbt#1). Other decoded fields (amount, txid, script, ...)
+//   still validate locally only — translating them into raw bytes is a
+//   backend concern (a typed-edit request shape /api/edit does not take
+//   yet), so their edits do NOT travel — the shell says so explicitly.
 // - Edits NEVER mutate the source fragment: a saved edit mints a NEW
 //   fragment (grow-only, like every other operation result).
 import { asArray, asNumber, asObject, asString } from "./state.js";
@@ -31,6 +34,20 @@ import { bytesToHex, parseFlexible } from "./encoding.js";
 // psbt + raw-keymap edits -> validated, re-encoded psbt). Named here so the
 // shell and the report speak the same name.
 export const EDIT_SAVE_SEAM = "applyPsbtEdits";
+// PSBT_GLOBAL_TX_MODIFIABLE (BIP 370 keytype 0x06): full raw key hex and the
+// bits the spec defines. Unknown bits survive round-trips through the hex
+// escape hatch untouched.
+export const TX_MODIFIABLE_KEY_HEX = "06";
+export const TX_MODIFIABLE_BITS = [
+    { bit: 0, label: "inputs modifiable" },
+    { bit: 1, label: "outputs modifiable" },
+    { bit: 2, label: "has SIGHASH_SINGLE" },
+];
+// The psbt.md per-output unique id: proprietary keytype 0xFC, prefix
+// "concurrent-psbt" (15 bytes), subtype 0x01, no subkeydata. The value IS
+// the id bytes, so a decoded unique-id edit translates byte-for-byte into a
+// raw-keymap edit — no client-side re-encoding beyond quoting the key.
+export const OUTPUT_UNIQUE_ID_KEY_HEX = "fc0f636f6e63757272656e742d7073627401";
 function field(path, label, value, context) {
     return { path, label, value, context, error: null, note: null };
 }
@@ -42,12 +59,20 @@ export function editorModel(fragmentKey, inspect, network) {
     const sort = asObject(root?.sort);
     const modifiability = asObject(root?.modifiability);
     const flags = asNumber(modifiability?.flags);
+    // The REAL field, byte-faithful: raw global 0x06's value hex when present
+    // (any length — a future spec may define more bytes), the interpreted
+    // flags number only as a fallback for inspect payloads without raw maps.
+    const rawGlobalEntries = asArray(asObject(root?.raw)?.global) ?? [];
+    const txModifiableRaw = rawGlobalEntries
+        .map((entry) => asObject(entry))
+        .find((entry) => asString(entry?.key_hex) === TX_MODIFIABLE_KEY_HEX);
+    const txModifiableHex = asString(txModifiableRaw?.value_hex) ??
+        (flags === null ? "" : flags.toString(16).padStart(2, "0"));
     const globalSection = {
         key: "global",
         title: "Global",
         fields: [
-            field("global.flags", "tx-modifiable flags", flags === null ? "" : String(flags), "flags"),
-            field("global.ordering", "ordering", asString(root?.ordering) ?? "", "ordering"),
+            field("global.tx_modifiable", "tx modifiable (PSBT_GLOBAL_TX_MODIFIABLE, hex)", txModifiableHex, "bitfield"),
             field("global.sort_mode", "sort mode", asString(sort?.mode) ?? "", "sort-mode"),
             field("global.sort_seed", "sort seed", asString(sort?.seed_hex) ?? "", "hex"),
         ],
@@ -79,13 +104,18 @@ export function editorModel(fragmentKey, inspect, network) {
             fields: [
                 field(`output.${index}.amount`, "amount (sats)", amount === null ? "" : String(amount), "integer"),
                 field(`output.${index}.script`, "scriptPubKey", asString(output?.script_pubkey_hex) ?? "", "script"),
-                field(`output.${index}.unique_id`, "unique id", asString(output?.unique_id_hex) ?? "", "hex32-optional"),
+                field(`output.${index}.unique_id`, "unique id", asString(output?.unique_id_hex) ?? "", "uid"),
             ],
         };
     });
     return {
         fragmentKey,
         network,
+        ordering: asString(root?.ordering) === "unordered"
+            ? "unordered"
+            : asString(root?.ordering) === "ordered"
+                ? "ordered"
+                : null,
         sections: [globalSection, ...inputSections, ...outputSections, ...rawSections(root)],
     };
 }
@@ -115,18 +145,23 @@ function rawSections(root) {
             sections.push(section);
     });
     (asArray(raw.outputs) ?? []).forEach((entries, index) => {
-        const section = rawSection(`raw.output.${index}`, `Output ${index} — raw keymap`, asArray(entries));
+        const section = rawSection(`raw.output.${index}`, `Output ${index} — raw keymap`, asArray(entries), 
+        // The unique id already renders (and now saves) as the decoded
+        // per-output field; a second editable copy would race it.
+        [OUTPUT_UNIQUE_ID_KEY_HEX]);
         if (section)
             sections.push(section);
     });
     return sections;
 }
-function rawSection(key, title, entries) {
+function rawSection(key, title, entries, collapsedKeys = []) {
     const fields = [];
     for (const raw of entries ?? []) {
         const entry = asObject(raw);
         const keyHex = asString(entry?.key_hex);
         if (!keyHex)
+            continue;
+        if (collapsedKeys.includes(keyHex))
             continue;
         const kind = asString(entry?.kind) ?? "unknown";
         if (kind === "known")
@@ -156,25 +191,49 @@ function rawLabel(entry) {
 // The raw-keymap edits a save must send: every raw row whose canonical value
 // differs from the pristine model's, as {map, key, value|null}. Rows with a
 // liberal-parse error are NEVER sent (the shell blocks the save on them).
+//
+// Two decoded fields ALSO travel, because their values are byte-verbatim raw
+// values (no client-side re-encoding, only naming the constant key):
+// global.tx_modifiable -> global 0x06, and output.N.unique_id -> the
+// proprietary concurrent-psbt#1 entry of output N. Empty deletes the entry.
 export function rawEditsForSave(pristine, edited) {
     const edits = [];
     for (const section of edited.sections) {
-        if (!isRawPath(section.key))
-            continue;
         for (const candidate of section.fields) {
             if (candidate.error)
                 continue;
             const before = fieldAt(pristine, candidate.path);
             if (before && before.value === candidate.value)
                 continue;
-            edits.push({
-                map: mapSelector(section.key),
-                key: candidate.path.slice(section.key.length + 1),
-                value: candidate.value ? candidate.value : null,
-            });
+            if (isRawPath(section.key)) {
+                edits.push({
+                    map: mapSelector(section.key),
+                    key: candidate.path.slice(section.key.length + 1),
+                    value: candidate.value ? candidate.value : null,
+                });
+                continue;
+            }
+            const translated = translatedRawEdit(candidate.path, candidate.value);
+            if (translated)
+                edits.push(translated);
         }
     }
     return edits;
+}
+// Decoded paths whose edits translate byte-for-byte into raw-keymap edits.
+export function translatedRawEdit(path, value) {
+    if (path === "global.tx_modifiable") {
+        return { map: "global", key: TX_MODIFIABLE_KEY_HEX, value: value ? value : null };
+    }
+    const uid = path.match(/^output\.(\d+)\.unique_id$/);
+    if (uid) {
+        return {
+            map: `output:${uid[1]}`,
+            key: OUTPUT_UNIQUE_ID_KEY_HEX,
+            value: value ? value : null,
+        };
+    }
+    return null;
 }
 // "raw.global" -> "global"; "raw.input.3" -> "input:3"; "raw.output.0" -> "output:0".
 function mapSelector(sectionKey) {
@@ -193,6 +252,8 @@ export function decodedEditsLeftBehind(pristine, edited) {
         if (isRawPath(section.key))
             continue;
         for (const candidate of section.fields) {
+            if (translatedRawEdit(candidate.path, candidate.value))
+                continue; // travels
             const before = fieldAt(pristine, candidate.path);
             if (before && before.value !== candidate.value) {
                 paths.push(candidate.path);
@@ -209,37 +270,19 @@ export function fieldAt(model, path) {
     }
     return null;
 }
-const FLAG_NAMES = {
-    none: "0",
-    inputs: "1",
-    outputs: "2",
-    both: "3",
-};
 function canonicalize(text, context, network) {
     const trimmed = text.trim();
     switch (context) {
-        case "flags": {
-            const named = FLAG_NAMES[trimmed.toLowerCase()];
-            if (named !== undefined)
-                return { value: named, error: null, note: `named form of ${named}` };
-            const parsed = parseUnsigned(trimmed);
-            if (parsed === null) {
-                return {
-                    value: text,
-                    error: "flags take 0-3, 0x0-0x3, or none/inputs/outputs/both",
-                    note: null,
-                };
-            }
-            if (parsed > 3) {
-                return { value: text, error: "only bits 0 (inputs) and 1 (outputs) are defined", note: null };
-            }
-            return { value: String(parsed), error: null, note: null };
-        }
-        case "ordering": {
-            const lower = trimmed.toLowerCase();
-            if (lower === "ordered" || lower === "unordered")
-                return { value: lower, error: null, note: null };
-            return { value: text, error: "ordering is 'ordered' or 'unordered'", note: null };
+        case "bitfield": {
+            // The value is the raw entry's bytes; empty deletes the entry on
+            // save. Hex only — the checkbox UI covers the defined bits, and the
+            // hex form is precisely the escape hatch for undefined ones.
+            if (!trimmed)
+                return { value: "", error: null, note: null };
+            const parsed = parseFlexible(trimmed, "hex-bytes");
+            if (!parsed.ok)
+                return { value: text, error: parsed.error, note: null };
+            return { value: parsed.canonical, error: null, note: parsed.note ?? null };
         }
         case "sort-mode": {
             const lower = trimmed.toLowerCase();
@@ -250,10 +293,10 @@ function canonicalize(text, context, network) {
         }
         case "hex":
         case "hex32":
-        case "hex32-optional": {
+        case "uid": {
             if (!trimmed && context !== "hex32")
                 return { value: "", error: null, note: null };
-            const parsed = parseFlexible(trimmed, context === "hex" ? "hex-bytes" : "hex-bytes-32");
+            const parsed = parseFlexible(trimmed, context === "hex32" ? "hex-bytes-32" : "hex-bytes");
             if (!parsed.ok)
                 return { value: text, error: parsed.error, note: null };
             return { value: parsed.canonical, error: null, note: parsed.note ?? null };
@@ -318,11 +361,10 @@ export function validateEditor(model) {
             }
         }
     }
-    const ordering = fieldAt(model, "global.ordering");
     const missingUids = model.sections
         .flatMap((section) => section.fields)
-        .filter((candidate) => candidate.context === "hex32-optional" && !candidate.value && !candidate.error);
-    if (ordering?.value === "unordered" && missingUids.length > 0) {
+        .filter((candidate) => candidate.context === "uid" && !candidate.value && !candidate.error);
+    if (model.ordering === "unordered" && missingUids.length > 0) {
         violations.push({
             path: null,
             message: `unordered PSBTs identify outputs by unique id; ${missingUids.length} output(s) have none`,
@@ -370,8 +412,9 @@ export function applyFix(model, fixId, randomBytes) {
         ...model,
         sections: model.sections.map((section) => ({
             ...section,
-            fields: section.fields.map((candidate) => candidate.context === "hex32-optional" && !candidate.value
-                ? { ...candidate, value: bytesToHex(randomBytes(32)), error: null, note: "generated" }
+            fields: section.fields.map((candidate) => candidate.context === "uid" && !candidate.value
+                ? // 16 bytes: the size ptj's own assign-ids mints.
+                    { ...candidate, value: bytesToHex(randomBytes(16)), error: null, note: "generated" }
                 : candidate),
         })),
     };

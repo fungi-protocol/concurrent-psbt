@@ -126,8 +126,10 @@ import {
   decodedEditsLeftBehind,
   editorModel,
   rawEditsForSave,
+  TX_MODIFIABLE_BITS,
   validateEditor,
   violationsFromServer,
+  type EditorField,
   type EditorModel,
 } from "./editor.js";
 import {
@@ -2080,6 +2082,50 @@ function renderFocus(): void {
 
 // --- editor panel -----------------------------------------------------------------
 
+// A bitfield row: one checkbox per spec-defined bit, plus the raw hex value
+// itself as the escape hatch (unknown bits and future longer values survive
+// untouched — editing a PSBT from a spec this program doesn't know yet).
+function bitfieldEditorRow(field: EditorField): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "field-label session-editor-field session-editor-bitfield";
+  row.append(span("", field.label));
+  const byte0 = field.value ? Number.parseInt(field.value.slice(0, 2), 16) : 0;
+  const setValue = (next: string): void => {
+    if (!editor) return;
+    editor = applyEdit(editor, field.path, next);
+    renderEditor([]);
+  };
+  for (const { bit, label } of TX_MODIFIABLE_BITS) {
+    const wrap = document.createElement("label");
+    wrap.className = "session-editor-bit";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = Number.isFinite(byte0) && (byte0 & (1 << bit)) !== 0;
+    box.addEventListener("change", () => {
+      const current = field.value ? Number.parseInt(field.value.slice(0, 2), 16) : 0;
+      const flipped = box.checked ? current | (1 << bit) : current & ~(1 << bit);
+      const rest = field.value.slice(2);
+      setValue(`${flipped.toString(16).padStart(2, "0")}${rest}`);
+    });
+    wrap.append(box, span("", label));
+    row.append(wrap);
+  }
+  const hexWrap = document.createElement("label");
+  hexWrap.className = "session-editor-bit session-editor-bitfield-hex";
+  hexWrap.append(span("item-meta", "hex"));
+  const hex = document.createElement("input");
+  hex.value = field.value;
+  hex.autocomplete = "off";
+  hex.spellcheck = false;
+  hex.placeholder = "raw value bytes (empty deletes the entry)";
+  hex.addEventListener("change", () => setValue(hex.value));
+  hexWrap.append(hex);
+  row.append(hexWrap);
+  if (field.error) row.append(span("session-status-error", field.error));
+  if (field.note) row.append(span("item-meta", field.note));
+  return row;
+}
+
 function renderEditor(violations: ReturnType<typeof validateEditor>): void {
   const model = editor;
   const host = el<HTMLElement>("editorSections");
@@ -2094,6 +2140,10 @@ function renderEditor(violations: ReturnType<typeof validateEditor>): void {
     legend.textContent = section.title;
     box.append(legend);
     for (const field of section.fields) {
+      if (field.context === "bitfield") {
+        box.append(bitfieldEditorRow(field));
+        continue;
+      }
       const row = document.createElement("label");
       row.className = "field-label session-editor-field";
       row.append(span("", field.label));

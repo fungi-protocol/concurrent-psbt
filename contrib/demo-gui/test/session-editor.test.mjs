@@ -10,7 +10,10 @@ import {
   editorModel,
   fieldAt,
   isRawPath,
+  OUTPUT_UNIQUE_ID_KEY_HEX,
   rawEditsForSave,
+  TX_MODIFIABLE_BITS,
+  TX_MODIFIABLE_KEY_HEX,
   validateEditor,
   violationsFromServer,
 } from "../dist/session/editor.js";
@@ -48,8 +51,13 @@ test("editorModel decodes global, per-input, and per-output sections", () => {
     ["global", "input.0", "output.0", "output.1"],
   );
 
-  assert.equal(fieldAt(built, "global.flags").value, "0");
-  assert.equal(fieldAt(built, "global.ordering").value, "unordered");
+  // The REAL global field: the tx-modifiable bitfield as hex bytes
+  // (derived from the interpreted flags when no raw map travels).
+  assert.equal(fieldAt(built, "global.tx_modifiable").value, "00");
+  assert.equal(fieldAt(built, "global.tx_modifiable").context, "bitfield");
+  // Ordering is an interpretation, not an editable pseudo-field.
+  assert.equal(fieldAt(built, "global.ordering"), null);
+  assert.equal(built.ordering, "unordered");
   assert.equal(fieldAt(built, "global.sort_mode").value, "deterministic");
   assert.equal(fieldAt(built, "global.sort_seed").value, "abcd");
   assert.equal(fieldAt(built, "input.0.txid").value, "aa".repeat(32));
@@ -60,38 +68,52 @@ test("editorModel decodes global, per-input, and per-output sections", () => {
   assert.equal(fieldAt(built, "nope"), null);
 });
 
+test("editorModel prefers the raw tx-modifiable bytes over the interpretation", () => {
+  const withRaw = editorModel(
+    "psbt-raw",
+    {
+      ...INSPECT,
+      raw: {
+        // A future-spec value longer than one byte survives verbatim.
+        global: [{ key_hex: "06", value_hex: "0380", key_type: 6, key_data_hex: "", kind: "known" }],
+        inputs: [[]],
+        outputs: [[], []],
+      },
+    },
+    "regtest",
+  );
+  assert.equal(fieldAt(withRaw, "global.tx_modifiable").value, "0380");
+});
+
 test("editorModel degrades defensively on absent or mangled inspect JSON", () => {
   const empty = editorModel("psbt-9", null, "bitcoin");
   assert.equal(empty.sections.length, 1); // global only
-  assert.equal(fieldAt(empty, "global.flags").value, "");
+  assert.equal(fieldAt(empty, "global.tx_modifiable").value, "");
+  assert.equal(empty.ordering, null);
   const mangled = editorModel("psbt-9", { inputs: "no", outputs: [{ outpoint: 5 }] }, "bitcoin");
   assert.equal(fieldAt(mangled, "output.0.script").value, "");
 });
 
-test("applyEdit: modifiability flags accept decimal, hex, and named forms", () => {
+test("applyEdit: the tx-modifiable bitfield takes hex bytes, empty deletes", () => {
   let built = model();
-  // The motivating case: set the flags back to modifiable.
-  built = applyEdit(built, "global.flags", "both");
-  assert.equal(fieldAt(built, "global.flags").value, "3");
-  assert.equal(fieldAt(built, "global.flags").error, null);
+  built = applyEdit(built, "global.tx_modifiable", "03");
+  assert.equal(fieldAt(built, "global.tx_modifiable").value, "03");
+  assert.equal(fieldAt(built, "global.tx_modifiable").error, null);
 
-  built = applyEdit(built, "global.flags", "0x2");
-  assert.equal(fieldAt(built, "global.flags").value, "2");
+  // Unknown bits and extra bytes pass through — the hex form IS the escape
+  // hatch for specs this program does not understand yet.
+  built = applyEdit(built, "global.tx_modifiable", "FF01");
+  assert.equal(fieldAt(built, "global.tx_modifiable").value, "ff01");
 
-  built = applyEdit(built, "global.flags", "7");
-  assert.match(fieldAt(built, "global.flags").error, /bits 0 .* and 1/);
+  built = applyEdit(built, "global.tx_modifiable", "");
+  assert.equal(fieldAt(built, "global.tx_modifiable").value, "");
 
-  built = applyEdit(built, "global.flags", "banana");
-  assert.match(fieldAt(built, "global.flags").error, /none\/inputs\/outputs\/both/);
+  built = applyEdit(built, "global.tx_modifiable", "!!not bytes!!");
+  assert.match(fieldAt(built, "global.tx_modifiable").error, /./);
 });
 
 test("applyEdit: liberal parsing per field context", () => {
   let built = model();
-
-  built = applyEdit(built, "global.ordering", " Ordered ");
-  assert.equal(fieldAt(built, "global.ordering").value, "ordered");
-  built = applyEdit(built, "global.ordering", "sideways");
-  assert.match(fieldAt(built, "global.ordering").error, /'ordered' or 'unordered'/);
 
   built = applyEdit(built, "global.sort_mode", "EXPLICIT");
   assert.equal(fieldAt(built, "global.sort_mode").value, "explicit");
@@ -133,14 +155,14 @@ test("validateEditor: field errors and cross-field rules become violations", () 
     [`unordered PSBTs identify outputs by unique id; 1 output(s) have none`],
   );
 
-  built = applyEdit(built, "global.flags", "nope");
+  built = applyEdit(built, "global.tx_modifiable", "!!not bytes!!");
   const violations = validateEditor(built);
   assert.equal(violations.length, 2);
-  assert.equal(violations[0].path, "global.flags");
+  assert.equal(violations[0].path, "global.tx_modifiable");
   assert.equal(violations[0].fix, null);
 
   // Ordered PSBTs do not demand unique ids.
-  const ordered = applyEdit(model(), "global.ordering", "ordered");
+  const ordered = editorModel("psbt-1", { ...INSPECT, ordering: "ordered" }, "regtest");
   assert.deepEqual(validateEditor(ordered), []);
 
   // Deterministic sort without a seed is a violation.
@@ -162,12 +184,13 @@ test("the missing-uid violation offers the generate fix with the informed warnin
   let counter = 0;
   const fixed = applyFix(model(), fix.id, (length) => new Uint8Array(length).fill(++counter));
   assert.equal(fieldAt(fixed, "output.0.unique_id").value, "33".repeat(32)); // untouched
-  assert.equal(fieldAt(fixed, "output.1.unique_id").value, "01".repeat(32));
+  // Generated ids are 16 bytes — the size ptj's own assign-ids mints.
+  assert.equal(fieldAt(fixed, "output.1.unique_id").value, "01".repeat(16));
   assert.equal(fieldAt(fixed, "output.1.unique_id").note, "generated");
   assert.deepEqual(validateEditor(fixed), []);
 
   // Unknown fix ids are a no-op.
-  const untouched = applyFix(model(), "not-a-fix", () => new Uint8Array(32));
+  const untouched = applyFix(model(), "not-a-fix", () => new Uint8Array(16));
   assert.deepEqual(untouched, model());
 });
 
@@ -255,6 +278,66 @@ test("decodedEditsLeftBehind names decoded changes that cannot travel", () => {
   edited = applyEdit(edited, `raw.global.${PROPRIETARY_KEY}`, "abcd");
   assert.deepEqual(decodedEditsLeftBehind(pristine, edited), ["output.0.amount"]);
   assert.deepEqual(decodedEditsLeftBehind(pristine, rawModel()), []);
+});
+
+// --- decoded fields that DO travel: unique ids and the tx-modifiable byte --
+
+test("unique-id and tx-modifiable edits travel as raw-keymap edits", () => {
+  const pristine = model();
+  // Add an id to the output missing one, replace the other, flip a bit.
+  let edited = applyEdit(model(), "output.1.unique_id", "aa".repeat(16));
+  edited = applyEdit(edited, "output.0.unique_id", "");
+  edited = applyEdit(edited, "global.tx_modifiable", "03");
+
+  const edits = rawEditsForSave(pristine, edited);
+  assert.deepEqual(edits, [
+    { map: "global", key: TX_MODIFIABLE_KEY_HEX, value: "03" },
+    { map: "output:0", key: OUTPUT_UNIQUE_ID_KEY_HEX, value: null }, // cleared = delete
+    { map: "output:1", key: OUTPUT_UNIQUE_ID_KEY_HEX, value: "aa".repeat(16) },
+  ]);
+
+  // They are no longer "left behind" — nothing to warn about.
+  assert.deepEqual(decodedEditsLeftBehind(pristine, edited), []);
+});
+
+test("the defined tx-modifiable bits are named for the checkbox UI", () => {
+  assert.deepEqual(
+    TX_MODIFIABLE_BITS.map((entry) => entry.bit),
+    [0, 1, 2],
+  );
+  assert.match(TX_MODIFIABLE_BITS[0].label, /inputs/);
+  assert.match(TX_MODIFIABLE_BITS[1].label, /outputs/);
+  assert.match(TX_MODIFIABLE_BITS[2].label, /SIGHASH_SINGLE/);
+});
+
+test("the proprietary unique-id raw row collapses into the decoded field", () => {
+  const built = editorModel(
+    "psbt-uid",
+    {
+      ...INSPECT,
+      raw: {
+        global: [],
+        inputs: [[]],
+        outputs: [
+          [
+            {
+              key_hex: OUTPUT_UNIQUE_ID_KEY_HEX,
+              value_hex: "33".repeat(32),
+              key_type: 252,
+              key_data_hex: OUTPUT_UNIQUE_ID_KEY_HEX.slice(2),
+              kind: "proprietary",
+              proprietary: { prefix_hex: "636f6e63757272656e742d70736274", prefix_utf8: "concurrent-psbt", subtype: 1, key_data_hex: "" },
+            },
+          ],
+          [],
+        ],
+      },
+    },
+    "regtest",
+  );
+  // No raw row for the uid — the decoded unique-id field is the editor.
+  assert.equal(fieldAt(built, `raw.output.0.${OUTPUT_UNIQUE_ID_KEY_HEX}`), null);
+  assert.equal(fieldAt(built, "output.0.unique_id").value, "33".repeat(32));
 });
 
 test("violationsFromServer maps /api/edit violations into the editor loop", () => {

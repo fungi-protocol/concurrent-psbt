@@ -2587,6 +2587,28 @@ button.session-overridden {
   font-size: 12px;
 }
 
+/* Bitfield rows: one checkbox per defined bit, then the raw hex escape
+   hatch beneath them. */
+.session-editor-bitfield {
+  display: grid;
+  gap: 4px;
+}
+
+.session-editor-bit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.session-editor-bit input[type="checkbox"] {
+  margin: 0;
+}
+
+.session-editor-bitfield-hex input {
+  flex: 1;
+}
+
 .session-editor-violations {
   display: grid;
   gap: 6px;
