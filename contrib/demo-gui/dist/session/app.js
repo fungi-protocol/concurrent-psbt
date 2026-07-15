@@ -1562,6 +1562,13 @@ function renderObjects() {
         list.append(item);
     }
 }
+// A local "peer" is a storage location on disk — same card, same wire
+// gestures, but honestly badged: there is no peer identity behind it.
+function peerKindBadge(peer) {
+    return peer.transport === "local"
+        ? badge("disk location", "session-badge")
+        : badge(`peer · ${peer.transport}`, "session-badge");
+}
 function renderPeerCard(peer) {
     const item = document.createElement("li");
     item.className = "list-item session-card session-peer-card";
@@ -1571,14 +1578,19 @@ function renderPeerCard(peer) {
     decorateWireTarget(item, { kind: "peer", key: peer.key });
     const head = document.createElement("div");
     head.className = "session-fragment-row";
-    head.append(span("session-color-chip", ""), span("item-title", peer.name), badge(`peer · ${peer.transport}`, "session-badge"));
+    head.append(span("session-color-chip", ""), span("item-title", peer.name), peerKindBadge(peer));
     const identity = span("item-meta session-identity", peer.identity.slice(0, 24) + (peer.identity.length > 24 ? "…" : ""));
     identity.title = peer.identity;
     head.append(identity);
     item.append(head);
+    if (peer.transport === "local") {
+        item.append(span("item-meta", "storage on this machine — no peer identity is associated with this location"));
+    }
     const actions = document.createElement("div");
     actions.className = "session-card-actions";
-    actions.append(button("Copy id", "Copy the full transport identity", () => copyText(peer.identity, `${peer.key} identity`)), ...wireQueueChip({ kind: "peer", key: peer.key }), unavailablePairButton());
+    actions.append(button(peer.transport === "local" ? "Copy path" : "Copy id", peer.transport === "local"
+        ? "Copy the server-side storage path"
+        : "Copy the full transport identity", () => copyText(peer.identity, `${peer.key} identity`)), ...wireQueueChip({ kind: "peer", key: peer.key }), unavailablePairButton());
     item.append(actions);
     return item;
 }
@@ -1599,14 +1611,16 @@ function renderBridgeGroupCard(members) {
         // Each member keeps its pseudo-descriptor identity color so the row
         // still matches the peer's contributed provenance groups.
         colorizeIdentity(row, peerColorKey(member));
-        row.append(span("session-color-chip", ""), span("item-title", member.name), badge(`peer · ${member.transport}`, "session-badge"));
+        row.append(span("session-color-chip", ""), span("item-title", member.name), peerKindBadge(member));
         if (!peerUsableForSync(member)) {
             row.append(badge("broadcast pending-backend (no usable transport)", "session-badge session-badge-warn"));
         }
         const identity = span("item-meta session-identity", member.identity.slice(0, 24) + (member.identity.length > 24 ? "…" : ""));
         identity.title = member.identity;
         row.append(identity);
-        row.append(button("Copy id", "Copy the full transport identity", () => copyText(member.identity, `${member.key} identity`)));
+        row.append(button(member.transport === "local" ? "Copy path" : "Copy id", member.transport === "local"
+            ? "Copy the server-side storage path"
+            : "Copy the full transport identity", () => copyText(member.identity, `${member.key} identity`)));
         item.append(row);
     }
     const actions = document.createElement("div");

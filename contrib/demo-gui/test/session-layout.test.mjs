@@ -141,6 +141,19 @@ test("the sort seed is PSBT state: no ops-bar field, a prompt only when absent",
   assert.match(app, /sortSeedDialog\.addEventListener\("cancel", \(\) => settleSortSeed\(null\)\)/);
 });
 
+test("a local 'peer' presents as a disk location, not an identity", () => {
+  // Same card shape and wire gestures, but honestly badged: no peer
+  // identity stands behind a local transport, only storage on disk.
+  assert.match(app, /badge\("disk location", "session-badge"\)/);
+  assert.match(app, /no peer identity/);
+  // The Copy button names what it copies — a path, not an identity.
+  assert.match(app, /"Copy path" : "Copy id"/);
+  assert.match(app, /Copy the server-side storage path/);
+  // The manual-peer form offers local alongside the real transports,
+  // labelled as a storage location.
+  assert.match(html, /<option value="local">local \(disk path/);
+});
+
 test("coins wear the mockup's boundary", () => {
   // The mockup draws every coin as rect.coin-body (thin ink stroke,
   // radius 5); the session coin items carry the CSS equivalent.

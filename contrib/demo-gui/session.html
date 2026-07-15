@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Partial Transaction Joiner</title>
-    <link rel="stylesheet" href="styles.css?v=20260715-reviewfixes">
+    <link rel="stylesheet" href="styles.css?v=20260715-sessionfixes2">
   </head>
   <body>
     <header class="app-header">
@@ -440,6 +440,7 @@
               <label class="field-label" for="manualPeerTransport">
                 Transport address kind
                 <select id="manualPeerTransport">
+                  <option value="local">local (disk path — a storage location, not a peer identity)</option>
                   <option value="nostr">nostr npub</option>
                   <option value="iroh">iroh ticket</option>
                   <option value="str0m">str0m signaling address</option>
@@ -448,7 +449,7 @@
               </label>
               <label class="field-label" for="manualPeerAddress">
                 Address
-                <input id="manualPeerAddress" autocomplete="off" spellcheck="false" required placeholder="npub1… / doc… / signaling address">
+                <input id="manualPeerAddress" autocomplete="off" spellcheck="false" required placeholder="npub1… / doc… / signaling address / state path">
               </label>
               <p class="item-meta">Add is inert. Pairing remains unavailable until the ptj adapter exposes the low-level session operation.</p>
               <button type="submit" class="primary">Add peer</button>
@@ -490,6 +491,6 @@
       </div>
     </dialog>
 
-    <script type="module" src="dist/session/app.js?v=20260715-reviewfixes"></script>
+    <script type="module" src="dist/session/app.js?v=20260715-sessionfixes2"></script>
   </body>
 </html>

@@ -1973,6 +1973,14 @@ function renderObjects(): void {
   }
 }
 
+// A local "peer" is a storage location on disk — same card, same wire
+// gestures, but honestly badged: there is no peer identity behind it.
+function peerKindBadge(peer: PeerObject): HTMLElement {
+  return peer.transport === "local"
+    ? badge("disk location", "session-badge")
+    : badge(`peer · ${peer.transport}`, "session-badge");
+}
+
 function renderPeerCard(peer: PeerObject): HTMLLIElement {
   const item = document.createElement("li");
   item.className = "list-item session-card session-peer-card";
@@ -1985,16 +1993,27 @@ function renderPeerCard(peer: PeerObject): HTMLLIElement {
   head.append(
     span("session-color-chip", ""),
     span("item-title", peer.name),
-    badge(`peer · ${peer.transport}`, "session-badge"),
+    peerKindBadge(peer),
   );
   const identity = span("item-meta session-identity", peer.identity.slice(0, 24) + (peer.identity.length > 24 ? "…" : ""));
   identity.title = peer.identity;
   head.append(identity);
   item.append(head);
+  if (peer.transport === "local") {
+    item.append(
+      span("item-meta", "storage on this machine — no peer identity is associated with this location"),
+    );
+  }
   const actions = document.createElement("div");
   actions.className = "session-card-actions";
   actions.append(
-    button("Copy id", "Copy the full transport identity", () => copyText(peer.identity, `${peer.key} identity`)),
+    button(
+      peer.transport === "local" ? "Copy path" : "Copy id",
+      peer.transport === "local"
+        ? "Copy the server-side storage path"
+        : "Copy the full transport identity",
+      () => copyText(peer.identity, `${peer.key} identity`),
+    ),
     ...wireQueueChip({ kind: "peer", key: peer.key }),
     unavailablePairButton(),
   );
@@ -2026,7 +2045,7 @@ function renderBridgeGroupCard(members: PeerObject[]): HTMLLIElement {
     row.append(
       span("session-color-chip", ""),
       span("item-title", member.name),
-      badge(`peer · ${member.transport}`, "session-badge"),
+      peerKindBadge(member),
     );
     if (!peerUsableForSync(member)) {
       row.append(
@@ -2040,8 +2059,12 @@ function renderBridgeGroupCard(members: PeerObject[]): HTMLLIElement {
     identity.title = member.identity;
     row.append(identity);
     row.append(
-      button("Copy id", "Copy the full transport identity", () =>
-        copyText(member.identity, `${member.key} identity`),
+      button(
+        member.transport === "local" ? "Copy path" : "Copy id",
+        member.transport === "local"
+          ? "Copy the server-side storage path"
+          : "Copy the full transport identity",
+        () => copyText(member.identity, `${member.key} identity`),
       ),
     );
     item.append(row);
