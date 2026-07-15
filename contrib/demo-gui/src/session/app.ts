@@ -483,18 +483,13 @@ function reportJoinOutcome(joined: SessionFragment, sources: SessionFragment[]):
 }
 
 // Post-join settlement. Fragments are VALUE TYPES: once a join has produced
-// the LUB, (1) every register whose value was an operand takes the LUB as
-// its new value (fragment ⊔ register-content writes back to the session),
-// and (2) stale sessionless operand copies are retired — local joins
+// the LUB, stale sessionless operand copies are retired — local joins
 // REPLACE their operands instead of piling grow-only clutter into Mine. A
-// key some register still references is never dropped: that register owns
-// its value.
+// key some register still references is never dropped, and that register's
+// content never advances here: registers change only through an explicit
+// write gesture (the fragment-into-session and session-merge paths call
+// writeSessionContent themselves).
 function settleJoin(operandKeys: readonly string[], resultKey: string): void {
-  for (const sessionObject of objects.sessions) {
-    if (sessionObject.contentKey && operandKeys.includes(sessionObject.contentKey)) {
-      objects = writeSessionContent(objects, sessionObject.key, resultKey);
-    }
-  }
   for (const key of operandKeys) {
     if (key === resultKey || !fragmentByKey(key)) continue;
     if (objects.sessions.some((sessionObject) => sessionObject.contentKey === key)) continue;
@@ -3288,7 +3283,7 @@ async function runSync(event: Event): Promise<void> {
   await runSyncRequest(psbts, `sync of ${psbts.length} selected fragment(s)`);
 }
 
-// Peer→session wiring: sync the session's member fragments over the peer's
+// Peer→session wiring: sync the session's register value over the peer's
 // transport. Sessions have no transport of their own, so with no peer given
 // the fallback is the session's first member peer with a usable transport,
 // and "local" (the disk) only as the last resort. The transport parameters

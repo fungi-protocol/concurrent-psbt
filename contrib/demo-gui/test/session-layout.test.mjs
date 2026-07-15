@@ -194,7 +194,9 @@ test("fragment selection has a keyboard path", () => {
   // aria-pressed lives on a real toggle button (the <li> nests buttons and
   // cannot take a button role); the card-background click stays pointer-only.
   const cardStart = app.indexOf("function renderFragmentCard");
-  const card = app.slice(cardStart, app.indexOf("function renderFragmentGroup", cardStart) > 0 ? app.indexOf("function renderFragmentGroup", cardStart) : cardStart + 4000);
+  const cardEnd = app.indexOf("function detailToggle", cardStart);
+  assert.ok(cardStart >= 0 && cardEnd > cardStart, "renderFragmentCard slice is bounded");
+  const card = app.slice(cardStart, cardEnd);
   assert.match(card, /session-select-toggle/);
   assert.match(card, /selectToggle\.setAttribute\("aria-pressed", String\(fragment\.selected\)\)/);
   assert.doesNotMatch(card, /item\.setAttribute\("aria-pressed"/);
@@ -232,13 +234,28 @@ test("a local 'peer' presents as a disk location, not an identity", () => {
 test("a join absorbed by its operand reports itself instead of looking broken", () => {
   // ⊥ ⊔ x = x: the result dedupes onto an operand's card, so every join
   // path routes its outcome through the reporter…
-  assert.equal((app.match(/reportJoinOutcome\(joined,/g) ?? []).length, 3);
+  assert.equal((app.match(/reportJoinOutcome\((?:joined|result),/g) ?? []).length, 4);
   // …which states the containment in the status bar and pulses the
   // surviving card with the ink-toned success cousin of the red pulse.
   assert.match(app, /nothing new to add/);
   assert.match(app, /"join absorbed — nothing new", "absorbed"/);
   assert.match(styles, /\.session-wire-absorbed\s*\{[\s\S]*?session-wire-absorbed-pulse/);
   assert.match(styles, /\.session-wire-reason-absorbed\s*\{/);
+});
+
+test("settleJoin retires operands but never advances a register", () => {
+  const start = app.indexOf("function settleJoin");
+  const end = app.indexOf("// --- contextual enablement", start);
+  assert.ok(start >= 0 && end > start, "settleJoin slice is bounded");
+  const settle = app.slice(start, end);
+  // Registers change only through an explicit write gesture — the
+  // fragment-into-session and session-merge paths call writeSessionContent
+  // themselves. A plain fragment join must not promote a bystander register
+  // that happens to hold an operand as its content…
+  assert.doesNotMatch(settle, /writeSessionContent/);
+  // …and the retire guard keeps such register-owned operands alive.
+  assert.match(settle, /sessionObject\.contentKey === key/);
+  assert.match(settle, /continue/);
 });
 
 test("a lone side subtotal is elided — it would repeat the grand total", () => {
