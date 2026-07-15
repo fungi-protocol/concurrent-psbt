@@ -1768,11 +1768,6 @@ h2 {
   width: 100%;
 }
 
-.session-fragment-row input[type="checkbox"] {
-  width: auto;
-  min-height: 0;
-}
-
 .session-fragment-row .item-title {
   flex: 1 1 auto;
 }
@@ -2758,7 +2753,7 @@ img.session-lifehash {
   display: none;
 }
 
-/* The per-card queue-participation chip beside the Wire button: pending-edge
+/* The per-card queue-participation chip in the card header: pending-edge
    orange, tooltip lists the queued action labels. */
 .session-wire-queued-chip {
   border-color: var(--orange);

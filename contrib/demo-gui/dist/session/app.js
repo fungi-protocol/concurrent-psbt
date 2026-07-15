@@ -1556,8 +1556,12 @@ function renderWireStatus() {
     const host = el("wireStatus");
     host.classList.add("session-wire-status-idle");
     host.hidden = document.querySelector("[data-wire-kind]") === null;
-    el("wireStatusText").textContent =
-        "drag a card onto another to wire them — Esc cancels a drag";
+    // Write the standing hint only on change: the bar is role="status", and
+    // rewriting identical text every render can re-announce in screen readers.
+    const hint = "drag a card onto another to wire them — Esc cancels a drag";
+    const text = el("wireStatusText");
+    if (text.textContent !== hint)
+        text.textContent = hint;
     renderWireQueue();
 }
 // The pending-wire queue panel: one row per queued edge with its action
@@ -2284,8 +2288,13 @@ async function loadCapabilities() {
             throw new Error(`HTTP ${response.status}`);
         const catalog = asObject((await response.json()));
         const entries = asArray(catalog?.transports);
-        if (catalog?.version !== CAPABILITY_CATALOG_VERSION || !entries)
+        if (catalog?.version !== CAPABILITY_CATALOG_VERSION || !entries) {
+            // Degrading silently would leave no trace of why disabled-marking
+            // vanished; availability still falls back to precise use-time errors.
+            logEvent(`capability catalog not understood (version ${String(catalog?.version)}, ` +
+                `want ${CAPABILITY_CATALOG_VERSION}) — transport availability unknown`);
             return;
+        }
         const capabilities = new Map();
         for (const raw of entries) {
             const entry = asObject(raw);
@@ -2305,11 +2314,15 @@ async function loadCapabilities() {
             .map((option) => transportUnavailable(option.value))
             .filter((reason) => reason !== null);
         if (off.length) {
-            logEvent(`this build lacks sync transports: ${off.join("; ")}`);
+            // Each reason is a full sentence naming its kind; some (unauthored)
+            // are not this build's fault, so the prefix stays neutral.
+            logEvent(`sync transports unavailable: ${off.join("; ")}`);
         }
     }
     catch (error) {
-        logEvent("transport availability unknown (/api/capabilities did not answer) — " +
+        // Covers both a route that never answered and a 200 with an unusable
+        // body — either way availability is unknown, not everything-off.
+        logEvent("transport availability unknown (/api/capabilities unusable) — " +
             (error instanceof Error ? error.message : String(error)));
     }
 }

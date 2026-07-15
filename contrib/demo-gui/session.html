@@ -69,8 +69,9 @@
       <section class="control-section session-panel session-panel-wide" aria-label="Me local-only PSBT workspace" data-spatial-region="me" data-focus-hide="">
         <h2>Me <span class="session-badge">local only</span></h2>
         <div id="sessionStatus" class="session-status" role="status"></div>
-        <!-- Live drag-to-wire hint: shown imperatively while a drag is in
-             flight (Esc or dropping anywhere else cancels). -->
+        <!-- The wire-status bar: an idle advertisement of the drag-to-wire
+             gesture whenever wireable cards exist, repainted imperatively
+             with live guidance while a drag is in flight. -->
         <div id="wireStatus" class="session-wire-status" role="status" hidden>
           <span id="wireStatusText"></span>
         </div>

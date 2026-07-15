@@ -1981,8 +1981,11 @@ function renderWireStatus(): void {
   const host = el<HTMLElement>("wireStatus");
   host.classList.add("session-wire-status-idle");
   host.hidden = document.querySelector("[data-wire-kind]") === null;
-  el<HTMLElement>("wireStatusText").textContent =
-    "drag a card onto another to wire them — Esc cancels a drag";
+  // Write the standing hint only on change: the bar is role="status", and
+  // rewriting identical text every render can re-announce in screen readers.
+  const hint = "drag a card onto another to wire them — Esc cancels a drag";
+  const text = el<HTMLElement>("wireStatusText");
+  if (text.textContent !== hint) text.textContent = hint;
   renderWireQueue();
 }
 
@@ -2800,7 +2803,15 @@ async function loadCapabilities(): Promise<void> {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const catalog = asObject((await response.json()) as unknown);
     const entries = asArray(catalog?.transports);
-    if (catalog?.version !== CAPABILITY_CATALOG_VERSION || !entries) return;
+    if (catalog?.version !== CAPABILITY_CATALOG_VERSION || !entries) {
+      // Degrading silently would leave no trace of why disabled-marking
+      // vanished; availability still falls back to precise use-time errors.
+      logEvent(
+        `capability catalog not understood (version ${String(catalog?.version)}, ` +
+          `want ${CAPABILITY_CATALOG_VERSION}) — transport availability unknown`,
+      );
+      return;
+    }
     const capabilities = new Map<string, TransportCapability>();
     for (const raw of entries) {
       const entry = asObject(raw);
@@ -2819,11 +2830,15 @@ async function loadCapabilities(): Promise<void> {
       .map((option) => transportUnavailable(option.value))
       .filter((reason): reason is string => reason !== null);
     if (off.length) {
-      logEvent(`this build lacks sync transports: ${off.join("; ")}`);
+      // Each reason is a full sentence naming its kind; some (unauthored)
+      // are not this build's fault, so the prefix stays neutral.
+      logEvent(`sync transports unavailable: ${off.join("; ")}`);
     }
   } catch (error) {
+    // Covers both a route that never answered and a 200 with an unusable
+    // body — either way availability is unknown, not everything-off.
     logEvent(
-      "transport availability unknown (/api/capabilities did not answer) — " +
+      "transport availability unknown (/api/capabilities unusable) — " +
         (error instanceof Error ? error.message : String(error)),
     );
   }
