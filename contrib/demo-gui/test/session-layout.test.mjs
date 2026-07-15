@@ -281,6 +281,28 @@ test("the wire drag advertises itself when idle", () => {
   // …and a standing hint in the status bar instead of a hidden one.
   assert.match(app, /session-wire-status-idle/);
   assert.match(app, /drag a card onto another to wire them/);
+  // The hint only shows when something DRAGGABLE exists: standing wire
+  // nodes that are hidden (the in-drawer create target) or live in the
+  // drawer bar must not advertise the gesture on an empty page.
+  assert.match(app, /\[data-wire-kind\]:not\(\[data-drawer\]\):not\(\[hidden\]\)/);
+});
+
+test("one Esc closes one surface, topmost first", () => {
+  // A single unified handler: modal dialogs cancel natively, then a live
+  // drag, then the samples popover, then the open drawer — never several
+  // layers on one keystroke.
+  assert.equal((app.match(/key === "Escape"/g) ?? []).length, 0);
+  assert.equal((app.match(/key !== "Escape"/g) ?? []).length, 1);
+  const esc = app.slice(app.indexOf('if (event.key !== "Escape") return;'));
+  const handler = esc.slice(0, esc.indexOf("});"));
+  const order = [
+    handler.indexOf('querySelector("dialog[open]")'),
+    handler.indexOf("cancelWireDrag()"),
+    handler.indexOf("setSamplesPopover(false)"),
+    handler.indexOf("setDrawer(null)"),
+  ];
+  assert.ok(order.every((at) => at >= 0), "all four layers are consulted");
+  assert.deepEqual([...order].sort((a, b) => a - b), order, "consulted topmost-first");
 });
 
 test("the sync dropdown consumes the capability catalog, not a local mapping", () => {

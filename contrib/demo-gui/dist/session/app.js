@@ -173,6 +173,8 @@ const PANEL_DRAWERS = {
     editorPanel: "editorDrawer",
     assignIdsPanel: "assignIdsDrawer",
     outputPanel: "exportDrawer",
+    createForm: "createDrawer",
+    syncResults: "syncDrawer",
 };
 function revealPanel(id) {
     setDrawer(PANEL_DRAWERS[id]);
@@ -737,6 +739,9 @@ async function executeWire(source, target, remaps) {
             case "add-create-input": {
                 const utxoKey = source.kind === "utxo" ? source.key : target.key;
                 const utxo = objects.utxos.find((candidate) => candidate.key === utxoKey);
+                // The prefilled row lives in the create drawer — open it so the
+                // wire's effect is visible, not buried in a closed sheet.
+                revealPanel("createForm");
                 addCreateRow("input");
                 if (utxo?.txid && utxo.vout !== null) {
                     const rows = el("createInputs");
@@ -1754,9 +1759,11 @@ function renderWireStatus() {
     // (render() calls this after the card passes so the DOM query sees them.)
     const host = el("wireStatus");
     host.classList.add("session-wire-status-idle");
-    // The drawer-bar Create button is a standing wire node; it alone should
-    // not advertise the gesture (nothing draggable exists yet).
-    host.hidden = document.querySelector("[data-wire-kind]:not([data-drawer])") === null;
+    // Standing wire nodes that aren't draggable cards — the drawer-bar Create
+    // button and the hidden in-drawer create target — should not advertise
+    // the gesture on their own (nothing draggable exists yet).
+    host.hidden =
+        document.querySelector("[data-wire-kind]:not([data-drawer]):not([hidden])") === null;
     // Write the standing hint only on change: the bar is role="status", and
     // rewriting identical text every render can re-announce in screen readers.
     const hint = "drag a card onto another to wire them — Esc cancels a drag";
@@ -2101,11 +2108,6 @@ function initSamplesPalette() {
         const target = event.target;
         if (target && !target.closest(".session-samples"))
             setSamplesPopover(false);
-    });
-    document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && !el("samplesPopover").hidden) {
-            setSamplesPopover(false);
-        }
     });
 }
 function addManualPeer(event) {
@@ -2767,6 +2769,9 @@ async function syncSessionOverPeer(sessionKey, peerKey) {
         showStatus(`${sessionObject.name}: the register is empty — write a fragment in before syncing`, true);
         return;
     }
+    // The state chip and results land in the sync drawer — open it, or the
+    // container's Sync now reads as a dead button.
+    revealPanel("syncResults");
     await runSyncRequest(content ? [content.psbt] : [], `session ${sessionObject.name} (register ${content?.key ?? "empty"})`);
 }
 // --- negotiation panel -----------------------------------------------------------
@@ -3022,9 +3027,23 @@ function wireDom() {
     for (const close of Array.from(document.querySelectorAll("[data-drawer-close]"))) {
         close.addEventListener("click", () => setDrawer(null));
     }
+    // One Esc, one surface: the topmost open layer wins. An open modal
+    // dialog owns Esc natively (its `cancel` event), so it returns early;
+    // then a live drag-to-wire, then the samples popover, then the drawer.
     document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && openDrawerId())
+        if (event.key !== "Escape")
+            return;
+        if (document.querySelector("dialog[open]"))
+            return;
+        if (wireDrag) {
+            cancelWireDrag();
+        }
+        else if (!el("samplesPopover").hidden) {
+            setSamplesPopover(false);
+        }
+        else if (openDrawerId()) {
             setDrawer(null);
+        }
     });
     el("addDrawerClose").addEventListener("click", () => setAddDrawer(false));
     el("addPeerQuick").addEventListener("click", () => setAddDrawer(true, true));
@@ -3070,11 +3089,6 @@ function wireDom() {
     // resizes and scrolls without a render.
     window.addEventListener("resize", drawWireOverlay);
     window.addEventListener("scroll", drawWireOverlay, true);
-    // Escape cancels a live drag-to-wire gesture.
-    document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && wireDrag)
-            cancelWireDrag();
-    });
     el("wireJoinAll").addEventListener("click", () => void joinAllWires());
     el("wireClearAll").addEventListener("click", clearPendingWires);
     el("focusBack").addEventListener("click", () => {
