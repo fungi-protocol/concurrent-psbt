@@ -1095,7 +1095,7 @@ function renderMineArea(fragments: SessionFragment[]): HTMLLIElement {
   head.className = "session-fragment-row";
   head.append(
     span("item-title", "Mine"),
-    badge("pseudo-peer", "session-badge"),
+    badge("local only", "session-badge"),
     span(
       "item-meta",
       `${fragments.length} local fragment(s), not published to any session`,

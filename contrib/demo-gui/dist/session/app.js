@@ -837,7 +837,7 @@ function renderMineArea(fragments) {
     item.className = "session-mine-area";
     const head = document.createElement("div");
     head.className = "session-fragment-row";
-    head.append(span("item-title", "Mine"), badge("pseudo-peer", "session-badge"), span("item-meta", `${fragments.length} local fragment(s), not published to any session`));
+    head.append(span("item-title", "Mine"), badge("local only", "session-badge"), span("item-meta", `${fragments.length} local fragment(s), not published to any session`));
     item.append(head);
     item.append(span("item-meta session-area-hint", "Local-only workflows (join, sort, edit, atomize) happen here; wiring a fragment to a session publishes it."));
     const inner = document.createElement("ul");
