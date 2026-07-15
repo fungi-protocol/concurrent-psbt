@@ -3282,9 +3282,10 @@ mod tests {
         assert!(body.contains("arti"), "expected arti rebuild hint, got: {body}");
     }
 
-    /// `/api/capabilities` serves the capability catalog byte-identically to
-    /// what the CLI's `ptj capabilities` prints (one wire value across
-    /// shells); the catalog's own invariants are tested in `capabilities`.
+    /// `/api/capabilities` serves the capability catalog value-identically
+    /// to what the CLI's `ptj capabilities` prints (the CLI pretty-prints,
+    /// the route is compact — same JSON value, different whitespace); the
+    /// catalog's own invariants are tested in `capabilities`.
     #[test]
     fn capabilities_endpoint_reports_compile_time_surface() {
         let response = response_for("GET", "/api/capabilities", b"");

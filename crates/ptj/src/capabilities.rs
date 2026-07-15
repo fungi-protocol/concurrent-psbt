@@ -97,7 +97,9 @@ pub struct TransportCapability {
     /// The CLI value name (`ptj sync --transport <kind>`) and the browser
     /// select value — one vocabulary across shells.
     pub kind: &'static str,
-    /// The crate that implements it; `None` for the built-in local state.
+    /// The in-tree transport crate that implements it; `None` for kinds not
+    /// backed by one (the built-in local state, host-configured plugin
+    /// binaries, the unauthored nostr entry).
     pub provider: Option<&'static str>,
     pub channel: ChannelSemantics,
     pub pairing: Pairing,
@@ -119,10 +121,34 @@ impl TransportCapability {
     }
 }
 
-/// The whole catalog for this build. `cfg!`-driven, so it is a compile-time
-/// constant fact about the binary, not runtime state.
+/// The one table pairing every optional cargo feature with this build's
+/// `cfg!` — it backs BOTH the catalog's gating and `enabled_features`, so a
+/// gate string and the features list cannot disagree.
+const FEATURE_TABLE: [(&str, bool); 11] = [
+    ("webgui", cfg!(feature = "webgui")),
+    ("tui", cfg!(feature = "tui")),
+    ("iroh-sync", cfg!(feature = "iroh-sync")),
+    ("arti", cfg!(feature = "arti")),
+    ("nym", cfg!(feature = "nym")),
+    ("emissary", cfg!(feature = "emissary")),
+    ("mdk", cfg!(feature = "mdk")),
+    ("str0m", cfg!(feature = "str0m")),
+    ("webrtc-rs", cfg!(feature = "webrtc-rs")),
+    ("payjoin-dir", cfg!(feature = "payjoin-dir")),
+    ("plugin-transports", cfg!(feature = "plugin-transports")),
+];
+
+/// The whole catalog for this build. `cfg!`-driven (via `FEATURE_TABLE`), so
+/// it is a compile-time constant fact about the binary, not runtime state.
 pub fn catalog() -> Vec<TransportCapability> {
-    fn gate(enabled: bool, feature: &'static str) -> Option<Unavailable> {
+    // A typo'd feature name cannot be caught by the compiler, so it panics
+    // here instead — the catalog is built by every test run.
+    fn gate(feature: &'static str) -> Option<Unavailable> {
+        let enabled = FEATURE_TABLE
+            .iter()
+            .find(|(name, _)| *name == feature)
+            .map(|(_, enabled)| *enabled)
+            .unwrap_or_else(|| panic!("feature {feature} is not in FEATURE_TABLE"));
         if enabled {
             None
         } else {
@@ -142,63 +168,66 @@ pub fn catalog() -> Vec<TransportCapability> {
             provider: Some("transport-iroh"),
             channel: ChannelSemantics::Attributable,
             pairing: Pairing::Ticket,
-            unavailable: gate(cfg!(feature = "iroh-sync"), "iroh-sync"),
+            unavailable: gate("iroh-sync"),
         },
         TransportCapability {
             kind: "arti",
             provider: Some("transport-arti"),
             channel: ChannelSemantics::Anonymous,
             pairing: Pairing::Address,
-            unavailable: gate(cfg!(feature = "arti"), "arti"),
+            unavailable: gate("arti"),
         },
         TransportCapability {
             kind: "nym",
             provider: Some("transport-nym"),
             channel: ChannelSemantics::Anonymous,
             pairing: Pairing::Address,
-            unavailable: gate(cfg!(feature = "nym"), "nym"),
+            unavailable: gate("nym"),
         },
         TransportCapability {
             kind: "emissary",
             provider: Some("transport-emissary"),
             channel: ChannelSemantics::Anonymous,
             pairing: Pairing::Address,
-            unavailable: gate(cfg!(feature = "emissary"), "emissary"),
+            unavailable: gate("emissary"),
         },
         TransportCapability {
             kind: "mdk",
             provider: Some("transport-mdk"),
             channel: ChannelSemantics::Attributable,
             pairing: Pairing::Group,
-            unavailable: gate(cfg!(feature = "mdk"), "mdk"),
+            unavailable: gate("mdk"),
         },
         TransportCapability {
             kind: "str0m",
             provider: Some("transport-str0m"),
             channel: ChannelSemantics::Anonymous,
             pairing: Pairing::ManualSignal,
-            unavailable: gate(cfg!(feature = "str0m"), "str0m"),
+            unavailable: gate("str0m"),
         },
         TransportCapability {
             kind: "webrtc-rs",
             provider: Some("transport-webrtc-rs"),
             channel: ChannelSemantics::Anonymous,
             pairing: Pairing::ManualSignal,
-            unavailable: gate(cfg!(feature = "webrtc-rs"), "webrtc-rs"),
+            unavailable: gate("webrtc-rs"),
         },
         TransportCapability {
             kind: "payjoin-dir",
             provider: Some("transport-payjoin-dir"),
             channel: ChannelSemantics::Anonymous,
             pairing: Pairing::Mailbox,
-            unavailable: gate(cfg!(feature = "payjoin-dir"), "payjoin-dir"),
+            unavailable: gate("payjoin-dir"),
         },
+        // provider: None — transport-plugin-api is the RPC contract, not an
+        // implementation; the implementation is the host side plus whatever
+        // external binary the host configuration names.
         TransportCapability {
             kind: "plugin",
-            provider: Some("transport-plugin-api"),
+            provider: None,
             channel: ChannelSemantics::Negotiated,
             pairing: Pairing::HostConfiguration,
-            unavailable: gate(cfg!(feature = "plugin-transports"), "plugin-transports"),
+            unavailable: gate("plugin-transports"),
         },
         // Recognized by the endpoint classifier (npub paste), driven by no
         // build yet: the spec's canonical recognized/inactive example.
@@ -215,20 +244,7 @@ pub fn catalog() -> Vec<TransportCapability> {
 /// The optional cargo features this binary was compiled with, by cargo name.
 /// Deployment metadata alongside the catalog (which covers transports only).
 pub fn enabled_features() -> Vec<&'static str> {
-    const FEATURES: [(&str, bool); 11] = [
-        ("webgui", cfg!(feature = "webgui")),
-        ("tui", cfg!(feature = "tui")),
-        ("iroh-sync", cfg!(feature = "iroh-sync")),
-        ("arti", cfg!(feature = "arti")),
-        ("nym", cfg!(feature = "nym")),
-        ("emissary", cfg!(feature = "emissary")),
-        ("mdk", cfg!(feature = "mdk")),
-        ("str0m", cfg!(feature = "str0m")),
-        ("webrtc-rs", cfg!(feature = "webrtc-rs")),
-        ("payjoin-dir", cfg!(feature = "payjoin-dir")),
-        ("plugin-transports", cfg!(feature = "plugin-transports")),
-    ];
-    FEATURES
+    FEATURE_TABLE
         .iter()
         .filter(|(_, enabled)| *enabled)
         .map(|(name, _)| *name)
@@ -342,7 +358,8 @@ mod tests {
     }
 
     /// A disabled kind's reason carries the exact cargo feature name, so the
-    /// rebuild hint (`--features <name>`) can be assembled mechanically.
+    /// rebuild hint (`--features <name>`) can be assembled mechanically —
+    /// and `rebuild_hint` actually assembles it for every such kind.
     #[test]
     fn feature_disabled_reasons_name_real_features() {
         for capability in catalog() {
@@ -352,8 +369,30 @@ mod tests {
                     "{}: reason names feature {feature} which IS enabled",
                     capability.kind
                 );
+                assert_eq!(
+                    rebuild_hint(capability.kind),
+                    format!(
+                        "ptj was built without {} sync support; rebuild with --features {feature}",
+                        capability.kind
+                    ),
+                );
             }
         }
+    }
+
+    /// The fallback arm keeps `rebuild_hint` total: a kind the catalog does
+    /// not gate (or does not know) still yields a usable refusal, just
+    /// without a feature to name.
+    #[test]
+    fn rebuild_hint_is_total() {
+        assert_eq!(
+            rebuild_hint("nostr"),
+            "ptj was built without nostr sync support"
+        );
+        assert_eq!(
+            rebuild_hint("carrier-pigeon"),
+            "ptj was built without carrier-pigeon sync support"
+        );
     }
 
     /// nostr is the recognized-but-unauthored fixture: never available, and
@@ -366,6 +405,21 @@ mod tests {
             .expect("nostr entry");
         assert!(!nostr.available());
         assert_eq!(nostr.unavailable, Some(Unavailable::Unauthored));
+    }
+
+    /// `ptj capabilities -o file` is refused: the catalog is deployment
+    /// metadata, and routing it through the PSBT output machinery gives
+    /// nonsense (a base64-decode failure under --output-file-format binary).
+    #[test]
+    fn capabilities_subcommand_refuses_output_file() {
+        use clap::Parser as _;
+        let cli =
+            crate::cli::Cli::try_parse_from(["ptj", "-o", "/dev/null", "capabilities"]).unwrap();
+        let error = crate::run_or_write(cli).expect_err("-o must be refused");
+        assert!(
+            error.to_string().contains("redirect stdout"),
+            "got: {error}"
+        );
     }
 
     /// The plugin kind is host configuration: even when the feature is on

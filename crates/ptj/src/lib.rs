@@ -34,6 +34,13 @@ pub fn run_or_write(cli: cli::Cli) -> Result<Option<String>> {
 }
 
 pub fn run_or_write_with_stdin(cli: cli::Cli, stdin: Option<&[u8]>) -> Result<Option<String>> {
+    // The PSBT output machinery (base64/binary formats, atomic writes) is
+    // wrong for deployment metadata; webgui/tui reject --output the same way.
+    if matches!(cli.command, cli::Command::Capabilities(_)) && cli.output.is_some() {
+        return Err(Error::new(
+            "capabilities prints deployment metadata, not a PSBT; redirect stdout instead of -o/--output-file",
+        ));
+    }
     let output_path = output_path(&cli)?;
     let output_file_format = output_file_format(&cli, output_path.as_deref())?;
     if let Some(path) = output_path.as_ref() {
