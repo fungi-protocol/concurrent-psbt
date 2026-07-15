@@ -2866,6 +2866,71 @@ async function listPayments(event) {
     }
 }
 // --- render root -----------------------------------------------------------------
+// --- persistent wire overlay --------------------------------------------------
+// The standing edges of the wire metaphor: Mine (the local network peer)
+// sees every session register, and each remote peer is wired to the
+// sessions whose peer set contains it. Drawn as one SVG across the spatial
+// workbench, redrawn after every render and on resize/scroll. The overlay
+// is pointer-transparent — the cards beneath stay interactive; the
+// transient drag line and pending-queue chips are separate mechanisms.
+function overlayCurve(x1, y1, x2, y2) {
+    const midY = (y1 + y2) / 2;
+    return `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+}
+function drawWireOverlay() {
+    const overlay = document.getElementById("wireOverlay");
+    if (!overlay)
+        return;
+    const workbench = el("spatialWorkbench");
+    const base = workbench.getBoundingClientRect();
+    overlay.setAttribute("viewBox", `0 0 ${base.width} ${base.height}`);
+    overlay.textContent = "";
+    // Focus mode hides the peers and sessions regions; hidden endpoints
+    // measure as zero-rects, so the standing edges stand down with them.
+    if (focus.mode === "session")
+        return;
+    const anchor = (node, edge) => {
+        const rect = node.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0)
+            return null;
+        return {
+            x: rect.left + rect.width / 2 - base.left,
+            y: (edge === "top" ? rect.top : rect.bottom) - base.top,
+        };
+    };
+    const addEdge = (from, to, cls) => {
+        if (!from || !to)
+            return;
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", overlayCurve(from.x, from.y, to.x, to.y));
+        path.setAttribute("class", cls);
+        overlay.append(path);
+    };
+    const mine = workbench.querySelector(".session-mine-area");
+    const seen = new Set();
+    for (const sessionObject of objects.sessions) {
+        const container = workbench.querySelector(`[data-wire-kind="session"][data-wire-key="${sessionObject.key}"]`);
+        if (!container)
+            continue;
+        // Mine sits BELOW the sessions; its edges rise from the band's top.
+        if (mine)
+            addEdge(anchor(mine, "top"), anchor(container, "bottom"), "session-edge-mine");
+        for (const peerKey of sessionObject.peerKeys) {
+            // A bridged peer group renders as ONE card keyed by its first member.
+            const cardKey = workbench.querySelector(`[data-wire-kind="peer"][data-wire-key="${peerKey}"]`)
+                ? peerKey
+                : bridgeGroupContaining(objects, peerKey)[0];
+            const peerCard = workbench.querySelector(`[data-wire-kind="peer"][data-wire-key="${cardKey}"]`);
+            if (!peerCard)
+                continue;
+            const edgeKey = `${cardKey}→${sessionObject.key}`;
+            if (seen.has(edgeKey))
+                continue;
+            seen.add(edgeKey);
+            addEdge(anchor(peerCard, "bottom"), anchor(container, "top"), "session-edge-auth");
+        }
+    }
+}
 function render() {
     // A render replaces the card nodes, so a live drag's captured node (and
     // its finish handlers) would be orphaned — wireDrag would never clear and
@@ -2883,6 +2948,8 @@ function render() {
     renderWireStatus();
     renderOps();
     el("createWireTarget").hidden = !(wire.source && wire.source.kind === "utxo");
+    // The standing edges reflect the freshly-rendered card geometry.
+    drawWireOverlay();
 }
 // --- wiring (DOM event hookup) -----------------------------------------------------
 function wireDom() {
@@ -2997,6 +3064,10 @@ function wireDom() {
         closeDrawer("assignIdsDrawer");
     });
     el("displayNetwork").addEventListener("change", render);
+    // Standing wire edges track card geometry, which shifts on viewport
+    // resizes and scrolls without a render.
+    window.addEventListener("resize", drawWireOverlay);
+    window.addEventListener("scroll", drawWireOverlay, true);
     // Escape cancels a live drag-to-wire gesture.
     document.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && wireDrag)

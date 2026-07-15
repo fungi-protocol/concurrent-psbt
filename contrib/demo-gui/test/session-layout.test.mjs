@@ -157,6 +157,24 @@ test("every utility docks in the bottom drawer bar, one drawer at a time", () =>
   assert.match(main, /session-ops-panel/);
 });
 
+test("standing wire edges: Mine sees every session, peers their authorized ones", () => {
+  // The overlay lives inside the workbench and is pointer-transparent.
+  const main = html.slice(html.indexOf("<main"), html.indexOf("</main>"));
+  assert.match(main, /<svg id="wireOverlay" class="session-wire-overlay"/);
+  assert.match(styles, /\.session-wire-overlay\s*\{[\s\S]*?pointer-events:\s*none;/);
+  // Both edge builders exist: Mine → every session container…
+  assert.match(app, /anchor\(mine, "top"\), anchor\(container, "bottom"\), "session-edge-mine"/);
+  // …and peer → each session whose peer set contains it.
+  assert.match(app, /sessionObject\.peerKeys/);
+  assert.match(app, /anchor\(peerCard, "bottom"\), anchor\(container, "top"\), "session-edge-auth"/);
+  // Redraw hooks: every render plus resize and scroll.
+  assert.match(app, /drawWireOverlay\(\);\n\}/);
+  assert.match(app, /window\.addEventListener\("resize", drawWireOverlay\)/);
+  assert.match(app, /window\.addEventListener\("scroll", drawWireOverlay, true\)/);
+  assert.match(styles, /\.session-edge-mine\s*\{/);
+  assert.match(styles, /\.session-edge-auth\s*\{/);
+});
+
 test("disabled ops explain themselves on press, not only on hover", () => {
   const hint = html.indexOf('id="opsHint"');
   assert.ok(hint >= 0, "the ops hint line is present");

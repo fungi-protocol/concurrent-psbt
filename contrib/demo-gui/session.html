@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Partial Transaction Joiner</title>
-    <link rel="stylesheet" href="styles.css?v=20260715-sessionfixes4">
+    <link rel="stylesheet" href="styles.css?v=20260715-registers1">
   </head>
   <body>
     <header class="app-header">
@@ -36,6 +36,10 @@
     </header>
 
     <main id="spatialWorkbench" class="session-spatial-workbench">
+    <!-- Standing wire edges: Mine → every session (the local peer sees all
+         local registers) and peer → each session it is authorized on.
+         Redrawn after every render; pointer-transparent. -->
+    <svg id="wireOverlay" class="session-wire-overlay" aria-hidden="true"></svg>
     <section id="peerShelf" class="session-spatial-shelf session-peer-shelf" data-spatial-region="peers" aria-label="Ephemeral peers" data-focus-hide="">
       <div class="session-shelf-heading">
         <div>
@@ -100,16 +104,19 @@
         <ul id="fragmentList" class="item-list session-card-list"></ul>
       </section>
 
+      <!-- Wire sources that are not fragments: pasted payment requests,
+           spendable outputs, and descriptors live beside the cards they
+           get wired onto. -->
+      <section class="control-section session-panel session-panel-wide" aria-label="Other pasted objects" data-focus-hide="">
+        <h2>Other objects</h2>
+        <p class="item-meta">Pasted payment requests, spendable outputs, and descriptors.</p>
+        <ul id="objectList" class="item-list session-card-list"></ul>
+      </section>
+
       <!-- Selection-scoped operations: rendered as a bottom bar on narrow
            viewports. Buttons are enabled/disabled by the presenter's
            contextual rules; overridable correctness gates surface in
            #gateOverrides, never silently. -->
-      <section class="control-section session-panel session-panel-wide" aria-label="Other pasted objects" data-focus-hide="">
-              <h2>Other objects</h2>
-              <p class="item-meta">Pasted payment requests, spendable outputs, and descriptors.</p>
-              <ul id="objectList" class="item-list session-card-list"></ul>
-            </section>
-
       <section class="control-section session-panel session-panel-wide session-ops-panel" aria-label="Operations on the selection">
         <div class="session-ops" id="sessionOps">
           <span id="selectionCount" class="item-meta">none selected</span>
@@ -529,6 +536,6 @@
       </div>
     </dialog>
 
-    <script type="module" src="dist/session/app.js?v=20260715-sessionfixes4"></script>
+    <script type="module" src="dist/session/app.js?v=20260715-registers1"></script>
   </body>
 </html>
