@@ -144,7 +144,10 @@
       </section>
 
       <section class="control-section session-panel" aria-label="Create a payment request PSBT" data-focus-hide="">
-        <h2>Create <span id="createWireTarget" class="session-wire-target" hidden>wire target</span></h2>
+        <!-- A declared wire node so a utxo drag can drop here (the
+             add-create-input verdict); paintWireTargets unhides it while
+             such a drag is live. -->
+        <h2>Create <span id="createWireTarget" class="session-wire-target" data-wire-kind="create" data-wire-key="create" hidden>wire target</span></h2>
         <form id="createForm" class="stack-form">
           <div class="split-row">
             <label class="field-label" for="createNetwork">

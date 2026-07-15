@@ -379,6 +379,9 @@ function sameRef(a, b) {
 function paintWireTargets() {
     if (!wire.source)
         return;
+    // The create-form target only exists while a utxo drag is live; render()
+    // cannot unhide it mid-drag, so it is shown (and painted, below) here.
+    el("createWireTarget").hidden = wire.source.kind !== "utxo";
     for (const node of Array.from(document.querySelectorAll("[data-wire-kind]"))) {
         const ref = wireRefOf(node);
         if (!ref)
@@ -417,6 +420,7 @@ function clearWirePaint() {
         node.classList.remove("session-wire-source", "session-wire-target", "session-wire-incompatible", "session-wire-blocked", "session-wire-hover");
         node.removeAttribute("title");
     }
+    el("createWireTarget").hidden = true;
     // Back from live-drag messaging to the idle advertisement.
     renderWireStatus();
 }
@@ -449,6 +453,15 @@ function wireTargetAt(x, y) {
     return hit ? hit.closest("[data-wire-kind]") : null;
 }
 function cancelWireDrag() {
+    if (wireDrag) {
+        if (wireDrag.node.hasPointerCapture?.(wireDrag.pointerId)) {
+            wireDrag.node.releasePointerCapture(wireDrag.pointerId);
+        }
+        // The pointer release that follows a cancelled drag must not read as a
+        // click on the source card (it would toggle selection or open a row).
+        if (wireDrag.active)
+            suppressNextClick = true;
+    }
     wireDrag = null;
     wire = idleWire();
     hideWireDragLine();
@@ -2537,6 +2550,12 @@ async function listPayments(event) {
 }
 // --- render root -----------------------------------------------------------------
 function render() {
+    // A render replaces the card nodes, so a live drag's captured node (and
+    // its finish handlers) would be orphaned — wireDrag would never clear and
+    // every future pointerdown would bail on it. Concurrent renders (an async
+    // sync completing mid-gesture) cancel the gesture instead.
+    if (wireDrag)
+        cancelWireDrag();
     renderFocus();
     renderPeerShelf();
     renderSessionShelf();

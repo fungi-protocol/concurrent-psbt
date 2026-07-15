@@ -115,3 +115,23 @@ test("the sync dropdown consumes the capability catalog, not a local mapping", (
   assert.doesNotMatch(app, /SYNC_TRANSPORT_CAPABILITY/);
   assert.doesNotMatch(app, /webrtc_rs/);
 });
+
+test("a live wire drag survives concurrent renders by cancelling cleanly", () => {
+  // render() must not orphan a captured drag node (wireDrag would never
+  // clear and all future gestures would bail on it).
+  assert.match(app, /function render\(\): void \{\n[^]*?if \(wireDrag\) cancelWireDrag\(\);/);
+  // Cancelling releases the capture and eats the trailing click so the
+  // release does not toggle the source card's selection.
+  const cancel = app.slice(app.indexOf("function cancelWireDrag"), app.indexOf("function armWireDrag"));
+  assert.match(cancel, /releasePointerCapture\(wireDrag\.pointerId\)/);
+  assert.match(cancel, /suppressNextClick = true/);
+});
+
+test("the create form is a reachable drop target for utxo drags", () => {
+  // Declared wire node: drops resolve via closest("[data-wire-kind]").
+  assert.match(html, /id="createWireTarget"[^>]*data-wire-kind="create"[^>]*data-wire-key="create"/);
+  // Unhidden imperatively while a utxo drag is live (render cannot run
+  // mid-drag), re-hidden when the paint clears.
+  const paint = app.slice(app.indexOf("function paintWireTargets"), app.indexOf("function clearWirePaint"));
+  assert.match(paint, /createWireTarget"\)\.hidden = wire\.source\.kind !== "utxo"/);
+});

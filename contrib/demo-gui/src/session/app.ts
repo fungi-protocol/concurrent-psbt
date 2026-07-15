@@ -565,6 +565,9 @@ function sameRef(a: NodeRef | null | undefined, b: NodeRef | null | undefined): 
 // blocked red / unbacked dim) is applied directly to the live nodes.
 function paintWireTargets(): void {
   if (!wire.source) return;
+  // The create-form target only exists while a utxo drag is live; render()
+  // cannot unhide it mid-drag, so it is shown (and painted, below) here.
+  el<HTMLElement>("createWireTarget").hidden = wire.source.kind !== "utxo";
   for (const node of Array.from(document.querySelectorAll<HTMLElement>("[data-wire-kind]"))) {
     const ref = wireRefOf(node);
     if (!ref) continue;
@@ -609,6 +612,7 @@ function clearWirePaint(): void {
     );
     node.removeAttribute("title");
   }
+  el<HTMLElement>("createWireTarget").hidden = true;
   // Back from live-drag messaging to the idle advertisement.
   renderWireStatus();
 }
@@ -646,6 +650,14 @@ function wireTargetAt(x: number, y: number): HTMLElement | null {
 }
 
 function cancelWireDrag(): void {
+  if (wireDrag) {
+    if (wireDrag.node.hasPointerCapture?.(wireDrag.pointerId)) {
+      wireDrag.node.releasePointerCapture(wireDrag.pointerId);
+    }
+    // The pointer release that follows a cancelled drag must not read as a
+    // click on the source card (it would toggle selection or open a row).
+    if (wireDrag.active) suppressNextClick = true;
+  }
   wireDrag = null;
   wire = idleWire();
   hideWireDragLine();
@@ -3075,6 +3087,11 @@ async function listPayments(event: Event): Promise<void> {
 // --- render root -----------------------------------------------------------------
 
 function render(): void {
+  // A render replaces the card nodes, so a live drag's captured node (and
+  // its finish handlers) would be orphaned — wireDrag would never clear and
+  // every future pointerdown would bail on it. Concurrent renders (an async
+  // sync completing mid-gesture) cancel the gesture instead.
+  if (wireDrag) cancelWireDrag();
   renderFocus();
   renderPeerShelf();
   renderSessionShelf();
