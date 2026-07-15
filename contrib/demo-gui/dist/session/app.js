@@ -22,6 +22,7 @@ import { PtjBackendError } from "../shared-frontend/core/types.js";
 import { seedFromRandomBytes } from "../model.js";
 import { addFragment, asArray, asObject, asString, buildConfirmArgs, buildCreateRequest, buildPayArgs, buildSyncRequest, bytesToBase64, emptySession, fragmentSummary, negotiationView, pastedPsbt, removeFragment, selectedFragments, setSelected, } from "./state.js";
 import { amountBits, amountSpanParts, DETAIL_LEVELS, elisionLabel, fragmentBadges, fragmentCardModel, groupAggregate, rawKeymapSections, rowDetailPairs, rowFacePairs, signedAmountSpanParts, } from "./display.js";
+import { addressFromScript } from "./encoding.js";
 import { classifyPaste, mintFromPaste, SAMPLE_PASTES, } from "./ingest.js";
 import { actionState, addBridge, addFragmentToSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, enrichPayment, idleWire, mergeSessions, mineFragmentKeys, mintPeer, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, sessionByKey, sessionFocus, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
 import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, toggledBitfieldValue, TX_MODIFIABLE_BITS, validateEditor, violationsFromServer, } from "./editor.js";
@@ -1256,8 +1257,16 @@ function inputRow(input, level) {
     const row = document.createElement("div");
     row.className = "session-coin-row";
     row.append(span("session-coin-side", "in"));
-    if (input.outpointTxid) {
-        row.append(lifehashBadge(input.outpointTxid, `outpoint txid (input ${input.index})`));
+    // The chip is the prevout's scriptPubKey — who is paying — matching the
+    // output rows. The outpoint stays textual (chip title); only when no
+    // prevout script is known does the txid chip return, saying so.
+    if (input.prevoutScriptHex) {
+        const address = addressFromScript(input.prevoutScriptHex, displayNetwork());
+        row.append(lifehashBadge(input.prevoutScriptHex, `${address ?? "prevout scriptPubKey"} (input ${input.index})` +
+            (input.outpointText ? `\noutpoint ${input.outpointText}` : "")));
+    }
+    else if (input.outpointTxid) {
+        row.append(lifehashBadge(input.outpointTxid, `outpoint txid (input ${input.index}) — prevout script unknown, fingerprint is the txid`));
         row.append(span("item-meta", `:${input.outpointVout ?? "?"}`));
     }
     else {

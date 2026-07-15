@@ -16,6 +16,7 @@ import {
   groupAggregate,
   inputViews,
   outputViews,
+  prevoutScriptHex,
   rawKeymapSections,
   rowDetailPairs,
   rowFacePairs,
@@ -356,6 +357,52 @@ test("rowDetailPairs: every decoded field plus the raw keymap entries", () => {
   const bare = rowDetailPairs(INSPECT, "output", 1, "bitcoin");
   assert.ok(bare.length > 0);
   assert.ok(bare.every((pair) => !pair.label.startsWith("raw ")));
+});
+
+// --- prevout scriptPubKey (the input chip's identity) ------------------------
+
+test("prevoutScriptHex decodes the witness utxo's TxOut", () => {
+  // Serialized TxOut: 8-byte LE amount (150000 sats), compact-size script
+  // length (0x16 = 22), then the P2WPKH script.
+  const witnessUtxo = "f04902000000000016" + P2WPKH;
+  const withRaw = {
+    ...INSPECT,
+    raw: {
+      inputs: [
+        [{ key_hex: "01", value_hex: witnessUtxo, kind: "known" }],
+        [{ key_hex: "0e", value_hex: "aa".repeat(32), kind: "known" }], // no witness utxo
+      ],
+      outputs: [[], [], []],
+    },
+  };
+  assert.equal(prevoutScriptHex(withRaw, 0), P2WPKH);
+  // inputViews carries it onto the row view.
+  assert.equal(inputViews(withRaw)[0].prevoutScriptHex, P2WPKH);
+  // No witness utxo (a non-witness utxo would need the whole previous
+  // transaction parsed — backend concern): null.
+  assert.equal(prevoutScriptHex(withRaw, 1), null);
+  assert.equal(inputViews(withRaw)[1].prevoutScriptHex, null);
+  assert.equal(prevoutScriptHex(INSPECT, 0), null);
+  assert.equal(prevoutScriptHex(null, 0), null);
+});
+
+test("prevoutScriptHex handles compact-size markers and rejects malformed TxOuts", () => {
+  const scriptOf = (length) => "51" + "00".repeat(length - 1); // parses as a script blob
+  const fdUtxo = (length) =>
+    "0000000000000000" + "fd" + length.toString(16).padStart(4, "0").match(/../g).reverse().join("") + scriptOf(length);
+  const entry = (value) => ({
+    raw: { inputs: [[{ key_hex: "01", value_hex: value, kind: "known" }]] },
+  });
+  // 0xfd two-byte little-endian length.
+  assert.equal(prevoutScriptHex(entry(fdUtxo(300)), 0), scriptOf(300));
+  // Truncated script (declared 22 bytes, provides 2): malformed, null.
+  assert.equal(prevoutScriptHex(entry("f049020000000000160014"), 0), null);
+  // Trailing garbage after the script: malformed, null.
+  assert.equal(prevoutScriptHex(entry("f04902000000000016" + P2WPKH + "ff"), 0), null);
+  // Empty script: no identity to fingerprint.
+  assert.equal(prevoutScriptHex(entry("f04902000000000000"), 0), null);
+  // Non-hex value: null.
+  assert.equal(prevoutScriptHex(entry("banana"), 0), null);
 });
 
 // --- the raw view (rawKeymapSections) ----------------------------------------

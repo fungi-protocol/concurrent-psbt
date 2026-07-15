@@ -10,6 +10,7 @@ export interface InputView {
     knownUtxoSats: number | null;
     hasWitnessUtxo: boolean;
     hasNonWitnessUtxo: boolean;
+    prevoutScriptHex: string | null;
     provenance: string | null;
     signatures: SignaturePresence;
 }
@@ -37,6 +38,7 @@ export interface ProvenanceMap {
 }
 export type SignaturePresence = "final" | "partial" | "unsigned";
 export declare function signaturePresence(inspect: InspectResponse | null, index: number): SignaturePresence;
+export declare function prevoutScriptHex(inspect: InspectResponse | null, index: number): string | null;
 export declare function inputViews(inspect: InspectResponse | null, provenance?: ProvenanceMap): InputView[];
 export declare function outputViews(inspect: InspectResponse | null, network: Network, provenance?: ProvenanceMap): OutputView[];
 export interface AmountSpanPart {

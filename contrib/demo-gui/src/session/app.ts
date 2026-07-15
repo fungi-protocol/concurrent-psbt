@@ -69,7 +69,7 @@ import {
   type InputView,
   type OutputView,
 } from "./display.js";
-import type { Network } from "./encoding.js";
+import { addressFromScript, type Network } from "./encoding.js";
 import {
   classifyPaste,
   mintFromPaste,
@@ -1586,8 +1586,25 @@ function inputRow(input: InputView, level: DetailLevel): HTMLElement {
   const row = document.createElement("div");
   row.className = "session-coin-row";
   row.append(span("session-coin-side", "in"));
-  if (input.outpointTxid) {
-    row.append(lifehashBadge(input.outpointTxid, `outpoint txid (input ${input.index})`));
+  // The chip is the prevout's scriptPubKey — who is paying — matching the
+  // output rows. The outpoint stays textual (chip title); only when no
+  // prevout script is known does the txid chip return, saying so.
+  if (input.prevoutScriptHex) {
+    const address = addressFromScript(input.prevoutScriptHex, displayNetwork());
+    row.append(
+      lifehashBadge(
+        input.prevoutScriptHex,
+        `${address ?? "prevout scriptPubKey"} (input ${input.index})` +
+          (input.outpointText ? `\noutpoint ${input.outpointText}` : ""),
+      ),
+    );
+  } else if (input.outpointTxid) {
+    row.append(
+      lifehashBadge(
+        input.outpointTxid,
+        `outpoint txid (input ${input.index}) — prevout script unknown, fingerprint is the txid`,
+      ),
+    );
     row.append(span("item-meta", `:${input.outpointVout ?? "?"}`));
   } else {
     row.append(span("item-meta", "outpoint unknown"));

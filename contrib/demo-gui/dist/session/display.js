@@ -112,6 +112,51 @@ export function signaturePresence(inspect, index) {
     }
     return partial ? "partial" : "unsigned";
 }
+// The prevout scriptPubKey from the raw per-input keymap. PSBT_IN_WITNESS_UTXO
+// (keytype 0x01) is a serialized TxOut: 8-byte LE amount, compact-size script
+// length, script bytes — decodable right here. A non-witness utxo would need
+// the whole previous transaction parsed (a backend concern), so it yields null.
+const WITNESS_UTXO_KEY_HEX = "01";
+export function prevoutScriptHex(inspect, index) {
+    const raw = asObject(asObject(inspect)?.raw);
+    const entries = asArray(asArray(raw?.inputs)?.[index]) ?? [];
+    for (const rawEntry of entries) {
+        const object = asObject(rawEntry);
+        if (asString(object?.key_hex)?.toLowerCase() !== WITNESS_UTXO_KEY_HEX)
+            continue;
+        const value = asString(object?.value_hex)?.toLowerCase();
+        if (!value || !/^(?:[0-9a-f]{2})+$/.test(value) || value.length < 18)
+            return null;
+        // Skip the 8 amount bytes, read the compact-size script length.
+        let cursor = 16;
+        const marker = Number.parseInt(value.slice(cursor, cursor + 2), 16);
+        cursor += 2;
+        let length;
+        if (marker < 0xfd) {
+            length = marker;
+        }
+        else if (marker === 0xfd || marker === 0xfe) {
+            const lengthBytes = marker === 0xfd ? 2 : 4;
+            if (value.length < cursor + lengthBytes * 2)
+                return null;
+            // Little-endian length field.
+            let parsed = 0;
+            for (let i = lengthBytes - 1; i >= 0; i--) {
+                parsed = parsed * 256 + Number.parseInt(value.slice(cursor + i * 2, cursor + i * 2 + 2), 16);
+            }
+            length = parsed;
+            cursor += lengthBytes * 2;
+        }
+        else {
+            return null; // 0xff (8-byte length) cannot be a real script
+        }
+        // The script must fill the TxOut exactly — anything else is malformed.
+        if (value.length !== cursor + length * 2)
+            return null;
+        return length === 0 ? null : value.slice(cursor);
+    }
+    return null;
+}
 export function inputViews(inspect, provenance) {
     const inputs = asArray(asObject(inspect)?.inputs) ?? [];
     return inputs.map((raw, index) => {
@@ -128,6 +173,7 @@ export function inputViews(inspect, provenance) {
             knownUtxoSats: asNumber(input?.known_utxo_sats),
             hasWitnessUtxo: asBoolean(input?.has_witness_utxo) ?? false,
             hasNonWitnessUtxo: asBoolean(input?.has_non_witness_utxo) ?? false,
+            prevoutScriptHex: prevoutScriptHex(inspect, index),
             provenance: (outpointText && provenance?.inputs[outpointText]) || null,
             signatures: signaturePresence(inspect, index),
         };
