@@ -103,6 +103,13 @@ test("every sample paste classifies as its declared kind", () => {
     kinds.add(sample.kind);
   }
   assert.equal(names.size, SAMPLE_PASTES.length, "sample names are unique");
+  // The palette's point is joinable variety: several PSBT shapes (full
+  // vector, minimal, output-side intents, an input-side fragment, seeded
+  // sortable), not one token example.
+  assert.ok(
+    SAMPLE_PASTES.filter((sample) => sample.kind === "psbt").length >= 5,
+    "palette carries several PSBT shapes",
+  );
   // One of each recognizable kind, at minimum.
   for (const kind of ["psbt", "payment-uri", "descriptor", "npub", "iroh-ticket", "transaction-hex"]) {
     assert.ok(kinds.has(kind), `palette has a ${kind} sample`);

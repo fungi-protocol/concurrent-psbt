@@ -146,6 +146,32 @@ export const SAMPLE_PASTES = [
         value: "cHNidP8B+wQCAAAAAQIEAgAAAAEEAQABBQEBAQYBAxL8D2NvbmN1cnJlbnQtcHNidBABAwABAwighgEAAAAAAAEEFgAUxDD2TEdW2jENvRoIVXLvKZkmJywS/A9jb25jdXJyZW50LXBzYnQBENLh8ZqP4TAiSzRI7NmYVUAA",
     },
     {
+        // Backend-minted (POST /api/create, inputs only): the INPUT side of a
+        // spend, offering the Transaction-hex sample's output as an outpoint.
+        // Joining it with an output-side intent composes the draft transaction —
+        // the concurrent story in two fragments.
+        name: "Input-side fragment (1 in)",
+        kind: "psbt",
+        value: "cHNidP8B+wQCAAAAAQIEAgAAAAEEAQEBBQEAAQYBAxL8D2NvbmN1cnJlbnQtcHNidBABAwABDiALCtkhQZwchxlzXXLcc5+eqeBjjR/kwe7w+ZRAhIFfyAEPBAAAAAAA",
+    },
+    {
+        // Backend-minted (POST /api/create, outputs only): the OUTPUT side —
+        // 0.0008 BTC to the BIP 370 vector's address and 0.00015 BTC to a
+        // second script, each with its own random unique id. Join it with the
+        // input-side fragment above for a 1-in/2-out draft.
+        name: "Two-output intent (2 out)",
+        kind: "psbt",
+        value: "cHNidP8B+wQCAAAAAQIEAgAAAAEEAQABBQECAQYBAxL8D2NvbmN1cnJlbnQtcHNidBABAwABAwiAOAEAAAAAAAEEFgAUxDD2TEdW2jENvRoIVXLvKZkmJywS/A9jb25jdXJyZW50LXBzYnQBEHsV0lJRyz3kBUSFULlCcUQAAQMImDoAAAAAAAABBBYAFHUedugZkZbUVJQcRdGzoyPxQzvWEvwPY29uY3VycmVudC1wc2J0ARCPGYMDvTAr07f9X3yusJFsAA==",
+    },
+    {
+        // Backend-minted (POST /api/create, ordering=deterministic): the same
+        // 1-in/2-out shape but carrying per-entry sort keys and the stored
+        // global seed, so Sort runs without prompting for one.
+        name: "Seeded sortable PSBT (1 in / 2 out)",
+        kind: "psbt",
+        value: "cHNidP8B+wQCAAAAAQIEAgAAAAEEAQEBBQECAQYBAxL8D2NvbmN1cnJlbnQtcHNidBABAxL8D2NvbmN1cnJlbnQtcHNidBEgobLD1OX2BxgpOktcbX6PkAESIzRFVmd4iZqrvM3e7/AS/A9jb25jdXJyZW50LXBzYnQSAQEAAQ4gCwrZIUGcHIcZc11y3HOfnqngY40f5MHu8PmUQISBX8gBDwQAAAAAAAEDCIA4AQAAAAAAAQQWABTEMPZMR1baMQ29GghVcu8pmSYnLBL8D2NvbmN1cnJlbnQtcHNidAEQ0EKuZxJYPo7lCV0ZNbhngQABAwiYOgAAAAAAAAEEFgAUdR526BmRltRUlBxF0bOjI/FDO9YS/A9jb25jdXJyZW50LXBzYnQBEAhIgKkzX7NzbFcGUwTVUlkA",
+    },
+    {
         name: "Output descriptor (public)",
         kind: "descriptor",
         value: "wpkh(xpub6BosfCnifzxcFwrSzQiqu2DBVTshkCXacvNsWGYJVVhhawA7d4R5WSWGFNbi8Aw6ZRc1brxMyWMzG3DSSSSoekkudhUd9yLb6qx39T9nMdj/0/*)",
