@@ -477,8 +477,11 @@ test("settlement retires sources but never advances a register", () => {
   // …and the retire rule (results and register contents survive) lives in
   // the model, where session-wiring.test.mjs exercises it directly.
   assert.match(settle, /retiredByDerivation\(sourceKeys, resultKeys, objects/);
-  // The minting ops' keep-the-original opt-out short-circuits settlement.
-  assert.match(settle, /keepBoxId\).checked\) return;/);
+  // The minting ops' keep-the-original opt-out skips the retire pass (the
+  // shared-session fork offer still runs — monotonicity is not optional).
+  assert.match(settle, /if \(!keep\) settleDerivation\(sourceKeys, resultKeys/);
+  // Joins are exempt from the fork offer: a join result ⊒ its operands.
+  assert.match(settle, /options\?\.monotone \|\| resultKeys\.length !== 1/);
 });
 
 test("a lone side subtotal is elided — it would repeat the grand total", () => {

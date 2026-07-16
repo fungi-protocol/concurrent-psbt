@@ -438,6 +438,55 @@ export function retiredByDerivation(
 }
 
 // ---------------------------------------------------------------------------
+// Monotonicity of SHARED sessions: a session with authorized peers has
+// PUBLISHED its register — peers hold the value, so it may only advance by
+// ⊔. A published value cannot be withdrawn or rewritten in place; the one
+// honest escape hatch for a non-monotone transform is a FORK: abort the
+// shared session and mint a new one in its stead (same name, same peer
+// connections, register seeded with the transformed value). Peers observe
+// an abort plus a new session, never a silent rewrite.
+// ---------------------------------------------------------------------------
+
+export function sessionIsShared(session: SessionObject): boolean {
+  return session.peerKeys.length > 0;
+}
+
+export function sharedSessionsHolding(
+  state: ObjectsState,
+  fragmentKey: string,
+): SessionObject[] {
+  return state.sessions.filter(
+    (session) => sessionIsShared(session) && session.contentKey === fragmentKey,
+  );
+}
+
+export function forkSession(
+  state: ObjectsState,
+  sessionKey: string,
+  contentKey: string,
+): { state: ObjectsState; forked: SessionObject | null } {
+  const source = sessionByKey(state, sessionKey);
+  if (!source) return { state, forked: null };
+  const next = nextKey(state, "session");
+  const forked: SessionObject = {
+    key: next.key,
+    name: source.name,
+    contentKey,
+    peerKeys: [...source.peerKeys],
+  };
+  return {
+    state: {
+      ...next.state,
+      sessions: [
+        ...next.state.sessions.filter((session) => session.key !== source.key),
+        forked,
+      ],
+    },
+    forked,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Session merge (session ⋈ session, per Q3): merging two registers JOINS
 // their contents and takes the UNION of their peer sets as the merged
 // session's peer set. This function is the UI-MODEL half: it mints the

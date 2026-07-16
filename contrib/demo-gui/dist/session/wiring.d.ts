@@ -84,6 +84,12 @@ export declare function dropFragmentKey(state: ObjectsState, fragmentKey: string
 export declare function fragmentSessionKeys(state: ObjectsState, fragmentKey: string): string[];
 export declare function mineFragmentKeys(fragmentKeys: readonly string[], state: ObjectsState): string[];
 export declare function retiredByDerivation(sourceKeys: readonly string[], resultKeys: readonly string[], state: ObjectsState, fragmentKeys: readonly string[]): string[];
+export declare function sessionIsShared(session: SessionObject): boolean;
+export declare function sharedSessionsHolding(state: ObjectsState, fragmentKey: string): SessionObject[];
+export declare function forkSession(state: ObjectsState, sessionKey: string, contentKey: string): {
+    state: ObjectsState;
+    forked: SessionObject | null;
+};
 export interface SessionMergeResult {
     state: ObjectsState;
     merged: SessionObject | null;

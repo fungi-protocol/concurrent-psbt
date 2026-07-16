@@ -261,6 +261,43 @@ export function retiredByDerivation(sourceKeys, resultKeys, state, fragmentKeys)
         fragmentKeys.includes(key) &&
         !state.sessions.some((session) => session.contentKey === key));
 }
+// ---------------------------------------------------------------------------
+// Monotonicity of SHARED sessions: a session with authorized peers has
+// PUBLISHED its register — peers hold the value, so it may only advance by
+// ⊔. A published value cannot be withdrawn or rewritten in place; the one
+// honest escape hatch for a non-monotone transform is a FORK: abort the
+// shared session and mint a new one in its stead (same name, same peer
+// connections, register seeded with the transformed value). Peers observe
+// an abort plus a new session, never a silent rewrite.
+// ---------------------------------------------------------------------------
+export function sessionIsShared(session) {
+    return session.peerKeys.length > 0;
+}
+export function sharedSessionsHolding(state, fragmentKey) {
+    return state.sessions.filter((session) => sessionIsShared(session) && session.contentKey === fragmentKey);
+}
+export function forkSession(state, sessionKey, contentKey) {
+    const source = sessionByKey(state, sessionKey);
+    if (!source)
+        return { state, forked: null };
+    const next = nextKey(state, "session");
+    const forked = {
+        key: next.key,
+        name: source.name,
+        contentKey,
+        peerKeys: [...source.peerKeys],
+    };
+    return {
+        state: {
+            ...next.state,
+            sessions: [
+                ...next.state.sessions.filter((session) => session.key !== source.key),
+                forked,
+            ],
+        },
+        forked,
+    };
+}
 export function mergeSessions(state, leftKey, rightKey) {
     const left = sessionByKey(state, leftKey);
     const right = sessionByKey(state, rightKey);

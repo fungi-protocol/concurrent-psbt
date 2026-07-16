@@ -88,6 +88,7 @@ import {
   dropFragmentKey,
   emptyObjects,
   enrichDescriptor,
+  forkSession,
   idleWire,
   mergeSessions,
   mineFragmentKeys,
@@ -103,6 +104,8 @@ import {
   retiredByDerivation,
   sessionByKey,
   sessionFocus,
+  sessionIsShared,
+  sharedSessionsHolding,
   unionBridgedPeersIntoSessions,
   unqueueWire,
   validateFocus,
@@ -523,15 +526,53 @@ function settleJoin(operandKeys: readonly string[], resultKey: string): void {
 
 // A minting op replaces its source by default; the surface's "keep the
 // original" checkbox opts the gesture out. The toolbar box governs the
-// one-click ops, each saving drawer carries its own.
-function settleMint(
+// one-click ops, each saving drawer carries its own. When a source is a
+// SHARED session's register content the settlement leaves it in place
+// (register guard) and instead offers the monotone escape hatch: abort the
+// shared session and create a new one in its stead, seeded with the
+// result. Joins pass monotone=true — a join result ⊒ its operands, so
+// wiring it into the session is the ordinary register advance, not a fork.
+async function settleMint(
   keepBoxId: string,
   sourceKeys: readonly string[],
   resultKeys: readonly string[],
-): void {
-  if (el<HTMLInputElement>(keepBoxId).checked) return;
-  settleDerivation(sourceKeys, resultKeys, resultKeys.join(", "));
+  options?: { monotone?: boolean },
+): Promise<void> {
+  const keep = el<HTMLInputElement>(keepBoxId).checked;
+  if (!keep) settleDerivation(sourceKeys, resultKeys, resultKeys.join(", "));
   render();
+  // The fork seeds ONE register — an op fanning out into several results
+  // (atomize) has no single successor value to publish, so the shared
+  // session simply stays untouched.
+  if (options?.monotone || resultKeys.length !== 1) return;
+  const resultKey = resultKeys[0];
+  const holders = objects.sessions.filter(
+    (holder) =>
+      sessionIsShared(holder) &&
+      holder.contentKey !== null &&
+      holder.contentKey !== resultKey &&
+      sourceKeys.includes(holder.contentKey),
+  );
+  for (const holder of holders) {
+    const oldContent = holder.contentKey as string;
+    if (!(await promptSessionFork(holder, oldContent, resultKey))) {
+      logEvent(
+        `kept ${holder.name} (${holder.key}) unchanged — ${resultKey} stays a local draft`,
+      );
+      continue;
+    }
+    const fork = forkSession(objects, holder.key, resultKey);
+    if (!fork.forked) continue;
+    objects = fork.state;
+    logEvent(
+      `aborted ${holder.key} (${holder.name}) — non-monotone transform of its shared register ${oldContent}; ` +
+        `${fork.forked.key} created in its stead (register: ${resultKey}, ${fork.forked.peerKeys.length} peer(s) kept)`,
+    );
+    // The abort freed the old register value; the replace-by-default rule
+    // now applies to it like any other source (keep still opts out).
+    if (!keep) settleDerivation([oldContent], resultKeys, resultKey);
+    render();
+  }
 }
 
 // --- contextual enablement -----------------------------------------------------
@@ -1807,6 +1848,18 @@ function renderFragmentCard(fragment: SessionFragment): HTMLElement {
       render();
     }),
   );
+  // Monotonicity: a shared session's register value is held by peers — it
+  // cannot be withdrawn, only superseded (a non-monotone op offers to fork
+  // the session; a join advances the register).
+  const sharedHolders = sharedSessionsHolding(objects, fragment.key);
+  if (sharedHolders.length) {
+    const remove = foot.lastElementChild as HTMLButtonElement;
+    remove.disabled = true;
+    remove.title =
+      `${fragment.key} is the shared register of ` +
+      `${sharedHolders.map((holder) => holder.name).join(", ")} — peers hold this value, ` +
+      `so it cannot be withdrawn; transform it instead (non-monotone ops offer to fork the session)`;
+  }
   item.append(foot);
   return item;
 }
@@ -2842,7 +2895,7 @@ async function saveEditor(): Promise<void> {
         (edits.length ? ` (${edits.length} raw edit(s))` : " (validation/fixes only)"),
     );
     logEvent(`editor save minted ${added.key} from ${fragment.key}`);
-    settleMint("editorKeep", [fragment.key], [added.key]);
+    await settleMint("editorKeep", [fragment.key], [added.key]);
     pendingEditorFixes.clear();
     editorOverrides.clear();
     editor = null;
@@ -3121,12 +3174,12 @@ async function joinSelected(): Promise<void> {
       `⊔ join of ${selected.map((f) => f.key).join(", ")}`,
     );
     reportJoinOutcome(joined, selected);
-    settleMint(
+    await settleMint(
       "opsKeepOriginal",
       selected.map((f) => f.key),
       [joined.key],
+      { monotone: true },
     );
-    render();
   } catch (error) {
     reportError("join", error);
   }
@@ -3141,7 +3194,7 @@ async function concatenateSelected(): Promise<void> {
       "concatenate",
       `concatenation of ${selected.map((f) => f.key).join(", ")}`,
     );
-    settleMint(
+    await settleMint(
       "opsKeepOriginal",
       selected.map((f) => f.key),
       [minted.key],
@@ -3187,6 +3240,37 @@ function settleSortSeed(seed: string | null): void {
   sortSeedResolve = null;
 }
 
+// The shared-session fork prompt (see settleMint): true = abort the shared
+// session and create a new one in its stead, false = keep it untouched.
+let forkSessionResolve: ((fork: boolean) => void) | null = null;
+
+function promptSessionFork(
+  holder: SessionObject,
+  contentKey: string,
+  resultKey: string,
+): Promise<boolean> {
+  const dialog = el<HTMLDialogElement>("forkSessionDialog");
+  el<HTMLElement>("forkSessionDialogWhy").textContent =
+    `${contentKey} is the shared register of ${holder.name} (${holder.key}) — ` +
+    `${holder.peerKeys.length} peer(s) hold it, so it can only grow (⊔); a non-monotone ` +
+    `transform cannot rewrite it in place. Abort ${holder.name} and create a new session ` +
+    `in its stead, keeping its peer connections and holding ${resultKey}?`;
+  return new Promise((resolve) => {
+    // A re-prompt settles any dangling prompt AND closes its dialog —
+    // showModal() on an already-open dialog throws inside this executor.
+    settleSessionFork(false);
+    forkSessionResolve = resolve;
+    dialog.showModal();
+  });
+}
+
+function settleSessionFork(fork: boolean): void {
+  const dialog = el<HTMLDialogElement>("forkSessionDialog");
+  if (dialog.open) dialog.close();
+  forkSessionResolve?.(fork);
+  forkSessionResolve = null;
+}
+
 // Resolve the seed to send for a fragment: undefined = the PSBT's own
 // records suffice; a string = the prompted seed; null = the user cancelled.
 async function sortSeedFor(fragment: SessionFragment): Promise<string | undefined | null> {
@@ -3206,7 +3290,7 @@ async function sortSelected(): Promise<void> {
       "sort",
       `sort of ${selected[0].key}`,
     );
-    settleMint("opsKeepOriginal", [selected[0].key], [sorted.key]);
+    await settleMint("opsKeepOriginal", [selected[0].key], [sorted.key]);
     showStatus("", false);
   } catch (error) {
     reportError("sort", error);
@@ -3222,7 +3306,7 @@ async function makeUnorderedSelected(): Promise<void> {
       "make-unordered",
       `make-unordered of ${selected[0].key}`,
     );
-    settleMint("opsKeepOriginal", [selected[0].key], [minted.key]);
+    await settleMint("opsKeepOriginal", [selected[0].key], [minted.key]);
     showStatus("", false);
   } catch (error) {
     reportError("make unordered", error);
@@ -3305,7 +3389,7 @@ async function atomizeSelected(): Promise<void> {
     logEvent(`atomize produced ${response.fragments.length} fragments`);
     // The fix intermediate (selected → modifiable target) retires with the
     // original: both values live on in the atoms.
-    settleMint("opsKeepOriginal", [selected[0].key, target.key], atomKeys);
+    await settleMint("opsKeepOriginal", [selected[0].key, target.key], atomKeys);
     showStatus("", false);
   } catch (error) {
     reportError("atomize", error);
@@ -3389,7 +3473,7 @@ async function runAssignIds(): Promise<void> {
       `assign-ids minted ${added.key} from ${fragment.key}` +
         ` (${ids.length} manual id(s), auto=${auto}, overwrite=${overwrite})`,
     );
-    settleMint("assignIdsKeep", [fragment.key], [added.key]);
+    await settleMint("assignIdsKeep", [fragment.key], [added.key]);
     assignIdsTarget = null;
     closeDrawer("assignIdsDrawer");
     showStatus("", false);
@@ -4063,6 +4147,16 @@ function wireDom(): void {
     if (event.target === sortSeedDialog) settleSortSeed(null);
   });
   sortSeedDialog.addEventListener("cancel", () => settleSortSeed(null));
+  // The shared-session fork prompt settles like the sort seed: confirm
+  // forks, keep/backdrop/Esc resolve false (the session stays untouched).
+  const forkSessionDialog = el<HTMLDialogElement>("forkSessionDialog");
+  el<HTMLButtonElement>("forkSessionConfirm").addEventListener("click", () => settleSessionFork(true));
+  el<HTMLButtonElement>("forkSessionKeep").addEventListener("click", () => settleSessionFork(false));
+  el<HTMLButtonElement>("forkSessionCancel").addEventListener("click", () => settleSessionFork(false));
+  forkSessionDialog.addEventListener("click", (event) => {
+    if (event.target === forkSessionDialog) settleSessionFork(false);
+  });
+  forkSessionDialog.addEventListener("cancel", () => settleSessionFork(false));
   // The payment-amount prompt settles the same way: confirm resolves sats,
   // cancel/backdrop/Esc resolve null (the txout intent is abandoned). A
   // non-positive or non-numeric confirm keeps the dialog open and says why.

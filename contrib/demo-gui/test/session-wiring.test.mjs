@@ -12,6 +12,7 @@ import {
   dropFragmentKey,
   emptyObjects,
   enrichDescriptor,
+  forkSession,
   idleWire,
   fragmentSessionKeys,
   mergeSessions,
@@ -33,6 +34,8 @@ import {
   retiredByDerivation,
   sessionByKey,
   sessionFocus,
+  sessionIsShared,
+  sharedSessionsHolding,
   unionBridgedPeersIntoSessions,
   unqueueWire,
   validateFocus,
@@ -706,6 +709,37 @@ test("retiredByDerivation: results and register contents survive, stale sources 
   assert.deepEqual(retiredByDerivation(["psbt-1"], ["psbt-2", "psbt-4"], state, fragments), [
     "psbt-1",
   ]);
+});
+
+test("shared-session monotonicity: fork replaces the session, keeps name and peers", () => {
+  let state = emptyObjects();
+  state = mintSession(state, "lunch").state; // session-1
+  state = writeSessionContent(state, "session-1", "psbt-1");
+
+  // Sharing = having authorized peers; an unshared session holds nothing back.
+  assert.equal(sessionIsShared(sessionByKey(state, "session-1")), false);
+  assert.deepEqual(sharedSessionsHolding(state, "psbt-1"), []);
+
+  state = mintPeer(state, "Carol", "nostr", "npub1carol").state; // peer-1
+  state = authorizePeerOnSession(state, "session-1", "peer-1");
+  assert.equal(sessionIsShared(sessionByKey(state, "session-1")), true);
+  assert.equal(sharedSessionsHolding(state, "psbt-1").length, 1);
+  // Only the register's own content counts as held.
+  assert.deepEqual(sharedSessionsHolding(state, "psbt-2"), []);
+
+  // The fork retires the source session and mints its stand-in: same name,
+  // same peer connections, register seeded with the transformed value.
+  const fork = forkSession(state, "session-1", "psbt-2");
+  assert.ok(fork.forked);
+  assert.notEqual(fork.forked.key, "session-1");
+  assert.equal(fork.forked.name, "lunch");
+  assert.deepEqual(fork.forked.peerKeys, ["peer-1"]);
+  assert.equal(fork.forked.contentKey, "psbt-2");
+  assert.equal(sessionByKey(fork.state, "session-1"), null);
+  assert.equal(sessionByKey(fork.state, fork.forked.key).contentKey, "psbt-2");
+
+  // Unknown session: the state passes through untouched.
+  assert.deepEqual(forkSession(state, "session-404", "psbt-2"), { state, forked: null });
 });
 
 test("mine tracks session merges: the provisional content rides the merged register", () => {
