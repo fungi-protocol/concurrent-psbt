@@ -15,6 +15,18 @@ export declare const TX_MODIFIABLE_BITS: readonly [{
 }];
 export declare function toggledBitfieldValue(value: string, bit: number, checked: boolean): string | null;
 export declare const OUTPUT_UNIQUE_ID_KEY_HEX = "fc0f636f6e63757272656e742d7073627401";
+export declare const SORT_DETERMINISTIC_KEY_HEX = "fc0f636f6e63757272656e742d7073627412";
+export declare const SORT_SEED_KEY_HEX = "fc0f636f6e63757272656e742d7073627411";
+export declare const SORT_MODES: readonly [{
+    readonly value: "unset";
+    readonly label: "unset";
+}, {
+    readonly value: "deterministic";
+    readonly label: "deterministic (keys derived from the seed)";
+}, {
+    readonly value: "explicit";
+    readonly label: "explicit (entries carry their sort keys)";
+}];
 export interface EditorField {
     path: string;
     label: string;

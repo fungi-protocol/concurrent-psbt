@@ -12,6 +12,9 @@ import {
   isRawPath,
   OUTPUT_UNIQUE_ID_KEY_HEX,
   rawEditsForSave,
+  SORT_DETERMINISTIC_KEY_HEX,
+  SORT_MODES,
+  SORT_SEED_KEY_HEX,
   toggledBitfieldValue,
   TX_MODIFIABLE_BITS,
   TX_MODIFIABLE_KEY_HEX,
@@ -299,6 +302,37 @@ test("unique-id and tx-modifiable edits travel as raw-keymap edits", () => {
 
   // They are no longer "left behind" — nothing to warn about.
   assert.deepEqual(decodedEditsLeftBehind(pristine, edited), []);
+});
+
+test("sort mode and seed edits travel as proprietary raw-keymap edits", () => {
+  const pristine = model(); // sort: deterministic, seed abcd
+  // The mode enum maps to the PSBT_GLOBAL_SORT_DETERMINISTIC value byte…
+  let edited = applyEdit(model(), "global.sort_mode", "explicit");
+  assert.deepEqual(rawEditsForSave(pristine, edited), [
+    { map: "global", key: SORT_DETERMINISTIC_KEY_HEX, value: "00" },
+  ]);
+  // …deterministic is 0x01, unset deletes the entry…
+  edited = applyEdit(model(), "global.sort_mode", "unset");
+  assert.deepEqual(rawEditsForSave(pristine, edited), [
+    { map: "global", key: SORT_DETERMINISTIC_KEY_HEX, value: null },
+  ]);
+  // …and the seed travels byte-verbatim (empty deletes), like the unique id.
+  edited = applyEdit(model(), "global.sort_seed", "11".repeat(16));
+  edited = applyEdit(edited, "global.sort_mode", "unset");
+  assert.deepEqual(rawEditsForSave(pristine, edited), [
+    { map: "global", key: SORT_DETERMINISTIC_KEY_HEX, value: null },
+    { map: "global", key: SORT_SEED_KEY_HEX, value: "11".repeat(16) },
+  ]);
+  assert.deepEqual(decodedEditsLeftBehind(pristine, edited), []);
+});
+
+test("the sort modes are named for the select UI, absent inspect reads unset", () => {
+  assert.deepEqual(
+    SORT_MODES.map((mode) => mode.value),
+    ["unset", "deterministic", "explicit"],
+  );
+  const empty = editorModel("psbt-9", null, "bitcoin");
+  assert.equal(fieldAt(empty, "global.sort_mode").value, "unset");
 });
 
 test("the defined tx-modifiable bits are named for the checkbox UI", () => {

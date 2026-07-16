@@ -26,7 +26,7 @@ import { addressFromScript } from "./encoding.js";
 import { classifyPaste, mintFromPaste, SAMPLE_PASTES, } from "./ingest.js";
 import { actionState, addBridge, authorizePeerOnSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, forkSession, idleWire, mergeSessions, mineFragmentKeys, writeSessionContent, mintPeer, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, registerIncompatibility, retiredByDerivation, sessionByKey, sessionFocus, sessionIsShared, sessionsHolding, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
 import { curveBetween, curveMidpoint, laneLayout, } from "./layout.js";
-import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, toggledBitfieldValue, TX_MODIFIABLE_BITS, validateEditor, violationsFromServer, } from "./editor.js";
+import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, SORT_MODES, toggledBitfieldValue, TX_MODIFIABLE_BITS, validateEditor, violationsFromServer, } from "./editor.js";
 import { descriptorColorKey, groupColorKey, paletteColor, paletteRegistry, peerColorKey, } from "./palette.js";
 const backend = new HttpBackend();
 // --- shell state ------------------------------------------------------------
@@ -2222,6 +2222,34 @@ function bitfieldEditorRow(field) {
         row.append(span("item-meta", field.note));
     return row;
 }
+// Sort mode is a three-valued enum (the psbt.md PSBT_GLOBAL_SORT_DETERMINISTIC
+// entry: absent | 0x01 | 0x00) — a select, structured like the tx-modifiable
+// bitfield row, never free text.
+function sortModeEditorRow(field) {
+    const row = document.createElement("label");
+    row.className = "field-label session-editor-field";
+    row.append(span("", field.label));
+    const select = document.createElement("select");
+    for (const mode of SORT_MODES) {
+        const option = document.createElement("option");
+        option.value = mode.value;
+        option.textContent = mode.label;
+        option.selected = field.value === mode.value;
+        select.append(option);
+    }
+    select.addEventListener("change", () => {
+        if (!editor)
+            return;
+        editor = applyEdit(editor, field.path, select.value);
+        renderEditor([]);
+    });
+    row.append(select);
+    if (field.error)
+        row.append(span("session-status-error", field.error));
+    if (field.note)
+        row.append(span("item-meta", field.note));
+    return row;
+}
 function renderEditor(violations) {
     const model = editor;
     const host = el("editorSections");
@@ -2238,6 +2266,10 @@ function renderEditor(violations) {
         for (const field of section.fields) {
             if (field.context === "bitfield") {
                 box.append(bitfieldEditorRow(field));
+                continue;
+            }
+            if (field.context === "sort-mode") {
+                box.append(sortModeEditorRow(field));
                 continue;
             }
             const row = document.createElement("label");

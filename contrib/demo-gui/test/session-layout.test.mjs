@@ -374,6 +374,16 @@ test("the sort seed is PSBT state: no ops-bar field, a prompt only when absent",
   assert.match(app, /reportValidity\(\)/);
 });
 
+test("the editor's sort mode is a select over the defined modes, not free text", () => {
+  const row = app.slice(
+    app.indexOf("function sortModeEditorRow"),
+    app.indexOf("function renderEditor"),
+  );
+  assert.match(row, /document\.createElement\("select"\)/);
+  assert.match(row, /for \(const mode of SORT_MODES\)/);
+  assert.match(app, /if \(field\.context === "sort-mode"\) \{\s*\n\s*box\.append\(sortModeEditorRow\(field\)\);/);
+});
+
 test("make-unordered offers TX_MODIFIABLE in the same gesture when the flags are clear", () => {
   // The prompt exists and opens only for a BIP 370 PSBT with the
   // modifiable flags clear.

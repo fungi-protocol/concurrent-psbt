@@ -61,6 +61,19 @@ export function toggledBitfieldValue(value, bit, checked) {
 // the id bytes, so a decoded unique-id edit translates byte-for-byte into a
 // raw-keymap edit — no client-side re-encoding beyond quoting the key.
 export const OUTPUT_UNIQUE_ID_KEY_HEX = "fc0f636f6e63757272656e742d7073627401";
+// The psbt.md sort metadata, same proprietary prefix: subtype 0x12 =
+// PSBT_GLOBAL_SORT_DETERMINISTIC (0x01 = keys derived from the seed,
+// 0x00 = explicit sort keys, absent = unset) and subtype 0x11 =
+// PSBT_GLOBAL_SORT_SEED (the raw seed bytes). Both translate into raw
+// edits like the unique id — the mode maps its enum to the value byte,
+// the seed travels byte-verbatim.
+export const SORT_DETERMINISTIC_KEY_HEX = "fc0f636f6e63757272656e742d7073627412";
+export const SORT_SEED_KEY_HEX = "fc0f636f6e63757272656e742d7073627411";
+export const SORT_MODES = [
+    { value: "unset", label: "unset" },
+    { value: "deterministic", label: "deterministic (keys derived from the seed)" },
+    { value: "explicit", label: "explicit (entries carry their sort keys)" },
+];
 function field(path, label, value, context) {
     return { path, label, value, context, error: null, note: null };
 }
@@ -86,8 +99,8 @@ export function editorModel(fragmentKey, inspect, network) {
         title: "Global",
         fields: [
             field("global.tx_modifiable", "tx modifiable (PSBT_GLOBAL_TX_MODIFIABLE, hex)", txModifiableHex, "bitfield"),
-            field("global.sort_mode", "sort mode", asString(sort?.mode) ?? "", "sort-mode"),
-            field("global.sort_seed", "sort seed", asString(sort?.seed_hex) ?? "", "hex"),
+            field("global.sort_mode", "sort mode (PSBT_GLOBAL_SORT_DETERMINISTIC)", asString(sort?.mode) ?? "unset", "sort-mode"),
+            field("global.sort_seed", "sort seed (PSBT_GLOBAL_SORT_SEED, hex)", asString(sort?.seed_hex) ?? "", "hex"),
         ],
     };
     const inputs = asArray(root?.inputs) ?? [];
@@ -205,10 +218,12 @@ function rawLabel(entry) {
 // differs from the pristine model's, as {map, key, value|null}. Rows with a
 // liberal-parse error are NEVER sent (the shell blocks the save on them).
 //
-// Two decoded fields ALSO travel, because their values are byte-verbatim raw
-// values (no client-side re-encoding, only naming the constant key):
-// global.tx_modifiable -> global 0x06, and output.N.unique_id -> the
-// proprietary concurrent-psbt#1 entry of output N. Empty deletes the entry.
+// Some decoded fields ALSO travel, because they translate into raw entries
+// without client-side re-encoding: global.tx_modifiable -> global 0x06,
+// output.N.unique_id -> the proprietary concurrent-psbt#1 entry of output N
+// (both byte-verbatim; empty deletes the entry), global.sort_mode -> the
+// concurrent-psbt#0x12 entry (its enum IS the value byte; unset deletes),
+// and global.sort_seed -> the concurrent-psbt#0x11 entry (byte-verbatim).
 export function rawEditsForSave(pristine, edited) {
     const edits = [];
     for (const section of edited.sections) {
@@ -233,10 +248,17 @@ export function rawEditsForSave(pristine, edited) {
     }
     return edits;
 }
-// Decoded paths whose edits translate byte-for-byte into raw-keymap edits.
+// Decoded paths whose edits translate directly into raw-keymap edits.
 export function translatedRawEdit(path, value) {
     if (path === "global.tx_modifiable") {
         return { map: "global", key: TX_MODIFIABLE_KEY_HEX, value: value ? value : null };
+    }
+    if (path === "global.sort_mode") {
+        const byte = value === "deterministic" ? "01" : value === "explicit" ? "00" : null;
+        return { map: "global", key: SORT_DETERMINISTIC_KEY_HEX, value: byte };
+    }
+    if (path === "global.sort_seed") {
+        return { map: "global", key: SORT_SEED_KEY_HEX, value: value ? value : null };
     }
     const uid = path.match(/^output\.(\d+)\.unique_id$/);
     if (uid) {

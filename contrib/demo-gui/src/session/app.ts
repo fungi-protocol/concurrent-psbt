@@ -142,6 +142,7 @@ import {
   decodedEditsLeftBehind,
   editorModel,
   rawEditsForSave,
+  SORT_MODES,
   toggledBitfieldValue,
   TX_MODIFIABLE_BITS,
   validateEditor,
@@ -2756,6 +2757,32 @@ function bitfieldEditorRow(field: EditorField): HTMLElement {
   return row;
 }
 
+// Sort mode is a three-valued enum (the psbt.md PSBT_GLOBAL_SORT_DETERMINISTIC
+// entry: absent | 0x01 | 0x00) — a select, structured like the tx-modifiable
+// bitfield row, never free text.
+function sortModeEditorRow(field: EditorField): HTMLElement {
+  const row = document.createElement("label");
+  row.className = "field-label session-editor-field";
+  row.append(span("", field.label));
+  const select = document.createElement("select");
+  for (const mode of SORT_MODES) {
+    const option = document.createElement("option");
+    option.value = mode.value;
+    option.textContent = mode.label;
+    option.selected = field.value === mode.value;
+    select.append(option);
+  }
+  select.addEventListener("change", () => {
+    if (!editor) return;
+    editor = applyEdit(editor, field.path, select.value);
+    renderEditor([]);
+  });
+  row.append(select);
+  if (field.error) row.append(span("session-status-error", field.error));
+  if (field.note) row.append(span("item-meta", field.note));
+  return row;
+}
+
 function renderEditor(violations: ReturnType<typeof validateEditor>): void {
   const model = editor;
   const host = el<HTMLElement>("editorSections");
@@ -2772,6 +2799,10 @@ function renderEditor(violations: ReturnType<typeof validateEditor>): void {
     for (const field of section.fields) {
       if (field.context === "bitfield") {
         box.append(bitfieldEditorRow(field));
+        continue;
+      }
+      if (field.context === "sort-mode") {
+        box.append(sortModeEditorRow(field));
         continue;
       }
       const row = document.createElement("label");
