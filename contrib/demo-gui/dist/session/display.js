@@ -448,7 +448,15 @@ export function balanceSheet(summary, inspect) {
             : null,
         showFeeRate,
         fallbackText: feeSats === null ? feeLine(summary).text : null,
-        totalsRedundant: (summary.inputCount ?? 0) <= 1 && (summary.outputCount ?? 0) <= 1,
+        // Elide only when the totals are provably a repeat: the counts must be
+        // KNOWN to be at most one line per side (unknown counts elide nothing),
+        // and no declared fee may be folded in — with one the output accounting
+        // total (outputs + fees) says more than the single output row.
+        totalsRedundant: summary.inputCount !== null &&
+            summary.inputCount <= 1 &&
+            summary.outputCount !== null &&
+            summary.outputCount <= 1 &&
+            (declaredFeeSats ?? 0) === 0,
     };
 }
 export function fragmentCardModel(inspect, network, provenance, dimension = "provenance") {

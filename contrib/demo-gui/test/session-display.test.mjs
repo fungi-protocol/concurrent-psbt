@@ -805,6 +805,17 @@ test("balanceSheet: the grand total elides when each side is one line", () => {
   // 0 in / 1 out (a txout intent): still nothing to sum on either side.
   const intent = { ...INSPECT, input_count: 0, output_count: 1 };
   assert.equal(balanceSheet(fragmentSummary(intent), intent).totalsRedundant, true);
+  // Unknown counts prove nothing — the totals row stays.
+  assert.equal(balanceSheet(fragmentSummary(null), null).totalsRedundant, false);
+  // A declared fee folds into the output accounting total (outputs + fees),
+  // which no single row repeats — the totals row stays.
+  const declared = {
+    ...INSPECT,
+    input_count: 1,
+    output_count: 1,
+    totals: { ...INSPECT.totals, declared_fee_sats: 700 },
+  };
+  assert.equal(balanceSheet(fragmentSummary(declared), declared).totalsRedundant, false);
 });
 
 test("seam readers accept the emitted totals.size and tolerated size_estimate shapes", () => {
