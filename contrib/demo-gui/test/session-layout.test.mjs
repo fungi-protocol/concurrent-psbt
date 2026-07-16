@@ -478,7 +478,7 @@ test("settlement retires sources but never advances a register", () => {
   // the model, where session-wiring.test.mjs exercises it directly.
   assert.match(settle, /retiredByDerivation\(sourceKeys, resultKeys, objects/);
   // The minting ops' keep-the-original opt-out skips the retire pass (the
-  // shared-session fork offer still runs — monotonicity is not optional).
+  // session fork offer still runs — monotonicity is not optional).
   assert.match(settle, /if \(!keep\) settleDerivation\(sourceKeys, resultKeys/);
   // Joins are exempt from the fork offer: a join result ⊒ its operands.
   assert.match(settle, /options\?\.monotone \|\| resultKeys\.length !== 1/);
@@ -593,7 +593,10 @@ test("wire drops magnet to the nearest compatible target", () => {
   assert.match(snap, /WIRE_SNAP_RADIUS_PX/);
   // Direct hits win; the search only ever ATTRACTS compatible targets.
   assert.match(snap, /const direct = wireTargetAt\(x, y\);\n  if \(direct\) return direct;/);
-  assert.match(snap, /wireDisposition\(wireVerdict\(source, ref, objects\)\) !== "compatible"/);
+  assert.match(
+    snap,
+    /wireDisposition\(wireVerdict\(source, ref, objects, fragmentSummaryOf\)\) !== "compatible"/,
+  );
   // Hidden nodes (closed drawers) never attract.
   assert.match(snap, /rect\.width === 0 \|\| rect\.height === 0/);
   // Both the finish and the hover preview go through the magnet.

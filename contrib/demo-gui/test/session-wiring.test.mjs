@@ -34,8 +34,9 @@ import {
   retiredByDerivation,
   sessionByKey,
   sessionFocus,
+  registerIncompatibility,
   sessionIsShared,
-  sharedSessionsHolding,
+  sessionsHolding,
   unionBridgedPeersIntoSessions,
   unqueueWire,
   validateFocus,
@@ -191,6 +192,61 @@ test("fragment-session wiring is symmetric and ALWAYS legal (⊔ into the regist
   const self = wireVerdict(ref("fragment", "psbt-1"), ref("session", "session-1"), state);
   assert.equal(self.allowed, false);
   assert.match(self.reason, /itself/);
+});
+
+test("register value compatibility: only joinable PSBTs may live in a register", () => {
+  // Truth table: a register only advances by ⊔, so modifiable+ordered is
+  // out (concurrent adds to an ordered list have no join); non-modifiable
+  // (updatable/signable) and unordered-modifiable values are fine.
+  assert.equal(registerIncompatibility(summary()), null);
+  assert.match(registerIncompatibility(summary({ ordering: "ordered" })), /ordered/i);
+  assert.equal(
+    registerIncompatibility(
+      summary({ ordering: "ordered", modifiableInputs: false, modifiableOutputs: false }),
+    ),
+    null,
+  );
+  // One modifiable side is enough to trip the check.
+  assert.match(
+    registerIncompatibility(summary({ ordering: "ordered", modifiableInputs: false })),
+    /ordered/i,
+  );
+  // BIP 174 has no TX_MODIFIABLE — null flags read as not modifiable.
+  assert.equal(
+    registerIncompatibility(
+      summary({
+        format: "bip174",
+        ordering: null,
+        modifiableInputs: null,
+        modifiableOutputs: null,
+      }),
+    ),
+    null,
+  );
+
+  // The verdict blocks the write when the shell supplies a value lookup...
+  let state = emptyObjects();
+  state = mintSession(state, "s").state;
+  const summaries = { "psbt-1": summary({ ordering: "ordered" }) };
+  const lookup = (key) => summaries[key] ?? null;
+  const blocked = wireVerdict(
+    ref("fragment", "psbt-1"),
+    ref("session", "session-1"),
+    state,
+    lookup,
+  );
+  assert.equal(blocked.kind, "fragment-into-session");
+  assert.equal(blocked.allowed, false);
+  assert.match(blocked.reason, /ordered/i);
+
+  // ...and pruneWires drops a queued wire whose fragment turns out to be
+  // incompatible (queued before the lookup could see it, or the fragment
+  // was edited while the wire sat in the queue).
+  const queued = queueWire([], ref("fragment", "psbt-1"), ref("session", "session-1"), state);
+  assert.equal(queued.wires.length, 1);
+  assert.deepEqual(pruneWires(queued.wires, state, ["psbt-1"], lookup), []);
+  // Without the lookup the verdict is identity-only and the wire survives.
+  assert.equal(pruneWires(queued.wires, state, ["psbt-1"]).length, 1);
 });
 
 test("peer-session wiring is authorization: allowed, backed, transport-agnostic", () => {
@@ -711,21 +767,22 @@ test("retiredByDerivation: results and register contents survive, stale sources 
   ]);
 });
 
-test("shared-session monotonicity: fork replaces the session, keeps name and peers", () => {
+test("session monotonicity: fork replaces the session, keeps name and peers", () => {
   let state = emptyObjects();
   state = mintSession(state, "lunch").state; // session-1
   state = writeSessionContent(state, "session-1", "psbt-1");
 
-  // Sharing = having authorized peers; an unshared session holds nothing back.
+  // A register holds its value whether or not peers are wired in —
+  // sharing only flavors the dialog copy, not the discipline.
   assert.equal(sessionIsShared(sessionByKey(state, "session-1")), false);
-  assert.deepEqual(sharedSessionsHolding(state, "psbt-1"), []);
+  assert.equal(sessionsHolding(state, "psbt-1").length, 1);
 
   state = mintPeer(state, "Carol", "nostr", "npub1carol").state; // peer-1
   state = authorizePeerOnSession(state, "session-1", "peer-1");
   assert.equal(sessionIsShared(sessionByKey(state, "session-1")), true);
-  assert.equal(sharedSessionsHolding(state, "psbt-1").length, 1);
+  assert.equal(sessionsHolding(state, "psbt-1").length, 1);
   // Only the register's own content counts as held.
-  assert.deepEqual(sharedSessionsHolding(state, "psbt-2"), []);
+  assert.deepEqual(sessionsHolding(state, "psbt-2"), []);
 
   // The fork retires the source session and mints its stand-in: same name,
   // same peer connections, register seeded with the transformed value.

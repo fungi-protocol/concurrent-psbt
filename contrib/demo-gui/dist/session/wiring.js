@@ -242,9 +242,7 @@ export function dropFragmentKey(state, fragmentKey) {
 // anything is published.
 // ---------------------------------------------------------------------------
 export function fragmentSessionKeys(state, fragmentKey) {
-    return state.sessions
-        .filter((session) => session.contentKey === fragmentKey)
-        .map((session) => session.key);
+    return sessionsHolding(state, fragmentKey).map((session) => session.key);
 }
 export function mineFragmentKeys(fragmentKeys, state) {
     return fragmentKeys.filter((fragmentKey) => !state.sessions.some((session) => session.contentKey === fragmentKey));
@@ -262,19 +260,19 @@ export function retiredByDerivation(sourceKeys, resultKeys, state, fragmentKeys)
         !state.sessions.some((session) => session.contentKey === key));
 }
 // ---------------------------------------------------------------------------
-// Monotonicity of SHARED sessions: a session with authorized peers has
-// PUBLISHED its register — peers hold the value, so it may only advance by
-// ⊔. A published value cannot be withdrawn or rewritten in place; the one
-// honest escape hatch for a non-monotone transform is a FORK: abort the
-// shared session and mint a new one in its stead (same name, same peer
-// connections, register seeded with the transformed value). Peers observe
-// an abort plus a new session, never a silent rewrite.
+// Monotonicity of sessions — ALL of them: a register only advances by ⊔.
+// Its value cannot be withdrawn or rewritten in place; the one honest
+// escape hatch for a non-monotone transform is a FORK: abort the session
+// and mint a new one in its stead (same name, same peer connections,
+// register seeded with the transformed value). Sharing raises the stakes
+// (peers hold copies of a published value, and observe the abort plus the
+// new session) but does not change the discipline.
 // ---------------------------------------------------------------------------
 export function sessionIsShared(session) {
     return session.peerKeys.length > 0;
 }
-export function sharedSessionsHolding(state, fragmentKey) {
-    return state.sessions.filter((session) => sessionIsShared(session) && session.contentKey === fragmentKey);
+export function sessionsHolding(state, fragmentKey) {
+    return state.sessions.filter((session) => session.contentKey === fragmentKey);
 }
 export function forkSession(state, sessionKey, contentKey) {
     const source = sessionByKey(state, sessionKey);
@@ -414,6 +412,20 @@ export function peerUsableForSync(peer) {
 function verdict(kind, allowed, backed, reason = null, needs = null, label = null) {
     return { kind, allowed, backed, reason, needs, label };
 }
+// Register value compatibility: a register only advances by ⊔, so it can
+// only hold values whose concurrent evolution IS a join. A BIP 370 PSBT
+// that is MODIFIABLE but ORDERED admits index-sensitive adds with no
+// lattice order over them — only non-modifiable values (updatable/signable:
+// they still grow by signatures and field updates) and unordered-modifiable
+// values (the concurrent constructor) are session-compatible.
+export function registerIncompatibility(summary) {
+    const modifiable = summary.modifiableInputs === true || summary.modifiableOutputs === true;
+    if (!modifiable || summary.ordering === "unordered")
+        return null;
+    return ("a modifiable but ORDERED PSBT cannot live in a register (concurrent adds " +
+        "to an ordered list have no join) — make it unordered first, or clear its " +
+        "modifiable flags");
+}
 function unordered(a, b, x, y) {
     return (a === x && b === y) || (a === y && b === x);
 }
@@ -450,11 +462,11 @@ export function resolveWireEndpoint(ref, state) {
     const holder = state.sessions.find((session) => session.contentKey === ref.key);
     return holder ? { kind: "session", key: holder.key } : ref;
 }
-export function wireVerdict(source, target, state) {
+export function wireVerdict(source, target, state, summaryOf) {
     const resolvedSource = resolveWireEndpoint(source, state);
     const resolvedTarget = resolveWireEndpoint(target, state);
     if (resolvedSource !== source || resolvedTarget !== target) {
-        return wireVerdict(resolvedSource, resolvedTarget, state);
+        return wireVerdict(resolvedSource, resolvedTarget, state, summaryOf);
     }
     const a = source.kind;
     const b = target.kind;
@@ -468,12 +480,19 @@ export function wireVerdict(source, target, state) {
         return verdict("fragment-join", true, true, null, null, label);
     }
     if (unordered(a, b, "fragment", "session")) {
-        // Writing a value to a monotone register is ALWAYS legal: the register
-        // takes content ⊔ fragment. A value it already contains is an absorbed
-        // join the shell reports — never a refusal ("already in the session" is
-        // nonsensical for a register).
+        // Writing a value to a monotone register is ALWAYS legal — as long as
+        // the VALUE is register-compatible: the register takes content ⊔
+        // fragment, so the fragment must have a join-shaped future (see
+        // registerIncompatibility). A compatible value it already contains is
+        // an absorbed join the shell reports — never a refusal ("already in the
+        // session" is nonsensical for a register).
         const fragmentKey = a === "fragment" ? source.key : target.key;
         const label = `Write ${fragmentKey} into session ${a === "session" ? sourceName : targetName} (⊔ into the register)`;
+        const summary = summaryOf?.(fragmentKey) ?? null;
+        const incompatibility = summary ? registerIncompatibility(summary) : null;
+        if (incompatibility) {
+            return verdict("fragment-into-session", false, true, incompatibility, null, label);
+        }
         return verdict("fragment-into-session", true, true, null, null, label);
     }
     if (unordered(a, b, "peer", "session")) {
@@ -534,13 +553,13 @@ export function wireKey(a, b) {
 }
 // Only compatible wires queue; blocked/unbacked verdicts come back for the
 // shell's rejection feedback. Duplicates (either direction) are no-ops.
-export function queueWire(wires, source, target, state) {
+export function queueWire(wires, source, target, state, summaryOf) {
     // The queue stores CANONICAL endpoints (a content card resolves to its
     // session) so execution, edges, and duplicate detection all see the wire
     // the verdict was about.
     const canonicalSource = resolveWireEndpoint(source, state);
     const canonicalTarget = resolveWireEndpoint(target, state);
-    const v = wireVerdict(canonicalSource, canonicalTarget, state);
+    const v = wireVerdict(canonicalSource, canonicalTarget, state, summaryOf);
     if (wireDisposition(v) !== "compatible") {
         return { wires, queued: false, duplicate: false, verdict: v };
     }
@@ -581,7 +600,7 @@ export function nodeExists(ref, state, fragmentKeys) {
 // became a register's content while its wire waited now stands for that
 // session, so the wire executes as the write it now means (and wires that
 // collapse onto an already-queued pair, or onto themselves, drop out).
-export function pruneWires(wires, state, fragmentKeys) {
+export function pruneWires(wires, state, fragmentKeys, summaryOf) {
     const seen = new Set();
     const live = [];
     for (const wire of wires) {
@@ -590,7 +609,7 @@ export function pruneWires(wires, state, fragmentKeys) {
         if (!nodeExists(source, state, fragmentKeys) || !nodeExists(target, state, fragmentKeys)) {
             continue;
         }
-        if (wireDisposition(wireVerdict(source, target, state)) !== "compatible")
+        if (wireDisposition(wireVerdict(source, target, state, summaryOf)) !== "compatible")
             continue;
         const key = wireKey(source, target);
         if (seen.has(key))
@@ -693,14 +712,14 @@ export function beginWire(kind, key) {
 // Tapping the armed source again cancels; tapping any other node yields the
 // verdict for the pair (the shell acts on allowed+backed verdicts and
 // reports the reason/needs text otherwise).
-export function completeWire(gesture, target, state) {
+export function completeWire(gesture, target, state, summaryOf) {
     if (!gesture.source) {
         return { gesture, verdict: null };
     }
     if (gesture.source.kind === target.kind && gesture.source.key === target.key) {
         return { gesture: idleWire(), verdict: null };
     }
-    return { gesture: idleWire(), verdict: wireVerdict(gesture.source, target, state) };
+    return { gesture: idleWire(), verdict: wireVerdict(gesture.source, target, state, summaryOf) };
 }
 const ARITY = {
     join: { min: 2 },

@@ -102,11 +102,12 @@ import {
   peerUsableForSync,
   pruneWires,
   queueWire,
+  registerIncompatibility,
   retiredByDerivation,
   sessionByKey,
   sessionFocus,
   sessionIsShared,
-  sharedSessionsHolding,
+  sessionsHolding,
   unionBridgedPeersIntoSessions,
   unqueueWire,
   validateFocus,
@@ -480,6 +481,13 @@ function fragmentByKey(key: string): SessionFragment | null {
   return session.fragments.find((fragment) => fragment.key === key) ?? null;
 }
 
+// The wiring model tracks keys only; verdicts that depend on a fragment's
+// VALUE (register compatibility) read summaries through this lookup.
+function fragmentSummaryOf(key: string) {
+  const fragment = fragmentByKey(key);
+  return fragment ? fragmentSummary(fragment.inspect) : null;
+}
+
 // ⊥ ⊔ x = x: a join whose result dedupes onto one of its operands is
 // mathematically a success and visually a no-op — every other operand was
 // already contained. Say so where the user looks (status bar + a chip on
@@ -528,11 +536,11 @@ function settleJoin(operandKeys: readonly string[], resultKey: string): void {
 // A minting op replaces its source by default; the surface's "keep the
 // original" checkbox opts the gesture out. The toolbar box governs the
 // one-click ops, each saving drawer carries its own. When a source is a
-// SHARED session's register content the settlement leaves it in place
-// (register guard) and instead offers the monotone escape hatch: abort the
-// shared session and create a new one in its stead, seeded with the
-// result. Joins pass monotone=true — a join result ⊒ its operands, so
-// wiring it into the session is the ordinary register advance, not a fork.
+// session's register content the settlement leaves it in place (register
+// guard) and instead offers the monotone escape hatch: abort the session
+// and create a new one in its stead, seeded with the result. Joins pass
+// monotone=true — a join result ⊒ its operands, so wiring it into the
+// session is the ordinary register advance, not a fork.
 async function settleMint(
   keepBoxId: string,
   sourceKeys: readonly string[],
@@ -549,13 +557,23 @@ async function settleMint(
   const resultKey = resultKeys[0];
   const holders = objects.sessions.filter(
     (holder) =>
-      sessionIsShared(holder) &&
       holder.contentKey !== null &&
       holder.contentKey !== resultKey &&
       sourceKeys.includes(holder.contentKey),
   );
+  // A fork seeds the replacement register with the result — which only
+  // works when the result can live in a register at all.
+  const resultSummary = fragmentSummaryOf(resultKey);
+  const incompatibility = resultSummary ? registerIncompatibility(resultSummary) : null;
   for (const holder of holders) {
     const oldContent = holder.contentKey as string;
+    if (incompatibility) {
+      logEvent(
+        `kept ${holder.name} (${holder.key}) unchanged — ${resultKey} cannot seed a register ` +
+          `(${incompatibility}); it stays a local draft`,
+      );
+      continue;
+    }
     if (!(await promptSessionFork(holder, oldContent, resultKey))) {
       logEvent(
         `kept ${holder.name} (${holder.key}) unchanged — ${resultKey} stays a local draft`,
@@ -566,7 +584,7 @@ async function settleMint(
     if (!fork.forked) continue;
     objects = fork.state;
     logEvent(
-      `aborted ${holder.key} (${holder.name}) — non-monotone transform of its shared register ${oldContent}; ` +
+      `aborted ${holder.key} (${holder.name}) — non-monotone transform of its register ${oldContent}; ` +
         `${fork.forked.key} created in its stead (register: ${resultKey}, ${fork.forked.peerKeys.length} peer(s) kept)`,
     );
     // The abort freed the old register value; the replace-by-default rule
@@ -742,7 +760,7 @@ function paintWireTargets(): void {
       node.classList.add("session-wire-source");
       continue;
     }
-    const v = wireVerdict(wire.source, ref, objects);
+    const v = wireVerdict(wire.source, ref, objects, fragmentSummaryOf);
     switch (wireDisposition(v)) {
       case "compatible":
         node.classList.add("session-wire-target");
@@ -836,7 +854,8 @@ function snapWireTarget(x: number, y: number, source: NodeRef): HTMLElement | nu
     const dy = Math.max(rect.top - y, 0, y - rect.bottom);
     const distance = Math.hypot(dx, dy);
     if (distance >= bestDistance) continue;
-    if (wireDisposition(wireVerdict(source, ref, objects)) !== "compatible") continue;
+    if (wireDisposition(wireVerdict(source, ref, objects, fragmentSummaryOf)) !== "compatible")
+      continue;
     best = node;
     bestDistance = distance;
   }
@@ -928,7 +947,7 @@ function finishWireDrag(event: PointerEvent, completed: boolean): void {
 // reports why it cannot wire (blocked/unbacked) — nothing executes on tap.
 function wireTo(target: NodeRef): void {
   const source = wire.source;
-  const done = completeWire(wire, target, objects);
+  const done = completeWire(wire, target, objects, fragmentSummaryOf);
   wire = done.gesture;
   if (!done.verdict || !source) {
     render();
@@ -949,7 +968,7 @@ function wireTo(target: NodeRef): void {
     render();
     return;
   }
-  const queued = queueWire(pendingWires, source, target, objects);
+  const queued = queueWire(pendingWires, source, target, objects, fragmentSummaryOf);
   pendingWires = queued.wires;
   if (queued.queued) {
     logEvent(
@@ -974,7 +993,7 @@ async function executeWire(
   target: NodeRef,
   remaps?: Map<string, string>,
 ): Promise<boolean> {
-  const v = wireVerdict(source, target, objects);
+  const v = wireVerdict(source, target, objects, fragmentSummaryOf);
   if (wireDisposition(v) !== "compatible") {
     const text =
       `${v.label ?? `${nodeName(source)} → ${nodeName(target)}`} is no longer applicable: ` +
@@ -1182,6 +1201,7 @@ function livePendingWires(): PendingWire[] {
     pendingWires,
     objects,
     session.fragments.map((fragment) => fragment.key),
+    fragmentSummaryOf,
   );
   return pendingWires;
 }
@@ -1213,7 +1233,7 @@ const componentProbes = new Map<string, ProbeEntry>();
 
 function wireLabel(entry: PendingWire): string {
   return (
-    wireVerdict(entry.source, entry.target, objects).label ??
+    wireVerdict(entry.source, entry.target, objects, fragmentSummaryOf).label ??
     `${nodeName(entry.source)} ⋈ ${nodeName(entry.target)}`
   );
 }
@@ -1590,7 +1610,7 @@ function renderCanvas(): void {
   const sessionsLabel = label(
     "label:sessions",
     sessionKeys.length ? "sessions" : "sessions — none yet",
-    "Monotone shared registers for PSBT fragments. Wire a fragment in to write it (⊔); wire a peer in to authorize it.",
+    "Monotone registers for PSBT fragments. Wire a fragment in to write it (⊔); wire a peer in to authorize it.",
   );
   // Three-way: unpublished drafts, everything published, or nothing loaded
   // at all — "every loaded fragment is published" would be a lie on an
@@ -1849,17 +1869,20 @@ function renderFragmentCard(fragment: SessionFragment): HTMLElement {
       render();
     }),
   );
-  // Monotonicity: a shared session's register value is held by peers — it
-  // cannot be withdrawn, only superseded (a non-monotone op offers to fork
-  // the session; a join advances the register).
-  const sharedHolders = sharedSessionsHolding(objects, fragment.key);
-  if (sharedHolders.length) {
+  // Monotonicity: a register only advances by ⊔ — its value cannot be
+  // withdrawn, only superseded (a non-monotone op offers to fork the
+  // session; a join advances the register). Sharing adds peers holding
+  // copies, but the discipline is the same for every session.
+  const holders = sessionsHolding(objects, fragment.key);
+  if (holders.length) {
     const remove = foot.lastElementChild as HTMLButtonElement;
     remove.disabled = true;
+    const peersHold = holders.some(sessionIsShared) ? "peers hold this value, and " : "";
     remove.title =
-      `${fragment.key} is the shared register of ` +
-      `${sharedHolders.map((holder) => holder.name).join(", ")} — peers hold this value, ` +
-      `so it cannot be withdrawn; transform it instead (non-monotone ops offer to fork the session)`;
+      `${fragment.key} is the register of ` +
+      `${holders.map((holder) => holder.name).join(", ")} — ${peersHold}a register only ` +
+      `advances by ⊔, so its value cannot be withdrawn; transform it instead ` +
+      `(non-monotone ops offer to fork the session)`;
   }
   item.append(foot);
   return item;
@@ -3319,8 +3342,8 @@ function settleSortSeed(seed: string | null): void {
   sortSeedResolve = null;
 }
 
-// The shared-session fork prompt (see settleMint): true = abort the shared
-// session and create a new one in its stead, false = keep it untouched.
+// The session fork prompt (see settleMint): true = abort the session and
+// create a new one in its stead, false = keep it untouched.
 let forkSessionResolve: ((fork: boolean) => void) | null = null;
 
 function promptSessionFork(
@@ -3329,11 +3352,14 @@ function promptSessionFork(
   resultKey: string,
 ): Promise<boolean> {
   const dialog = el<HTMLDialogElement>("forkSessionDialog");
+  const shared = sessionIsShared(holder);
+  const peersHold = shared ? ` — ${holder.peerKeys.length} peer(s) hold it` : "";
+  const keepPeers = shared ? ", keeping its peer connections and" : ",";
   el<HTMLElement>("forkSessionDialogWhy").textContent =
-    `${contentKey} is the shared register of ${holder.name} (${holder.key}) — ` +
-    `${holder.peerKeys.length} peer(s) hold it, so it can only grow (⊔); a non-monotone ` +
-    `transform cannot rewrite it in place. Abort ${holder.name} and create a new session ` +
-    `in its stead, keeping its peer connections and holding ${resultKey}?`;
+    `${contentKey} is the register of ${holder.name} (${holder.key})${peersHold}; ` +
+    `a register only grows (⊔), so a non-monotone transform cannot rewrite it in ` +
+    `place. Abort ${holder.name} and create a new session in its stead${keepPeers} ` +
+    `holding ${resultKey}?`;
   return new Promise((resolve) => {
     // A re-prompt settles any dangling prompt AND closes its dialog —
     // showModal() on an already-open dialog throws inside this executor.

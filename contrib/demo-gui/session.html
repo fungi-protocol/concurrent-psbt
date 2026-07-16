@@ -558,21 +558,21 @@
       </div>
     </dialog>
 
-    <!-- Shared-session fork prompt: a non-monotone transform derived a new
-         value from a SHARED register's content. Peers hold the published
-         value, so it can only grow (⊔) — the honest escape hatch is to
-         abort the session and create a new one in its stead, keeping the
-         peer connections and seeding the register with the result. -->
+    <!-- Session fork prompt: a non-monotone transform derived a new value
+         from a register's content. A register only grows (⊔) — the honest
+         escape hatch is to abort the session and create a new one in its
+         stead, keeping any peer connections and seeding the register with
+         the result. -->
     <dialog id="forkSessionDialog" class="session-modal" aria-labelledby="forkSessionDialogTitle">
       <div class="session-output-heading">
-        <h2 id="forkSessionDialogTitle">Shared register transformed — fork the session?</h2>
+        <h2 id="forkSessionDialogTitle">Register transformed — fork the session?</h2>
         <button id="forkSessionCancel" type="button" aria-label="Keep the session unchanged">×</button>
       </div>
       <div class="session-modal-body">
         <p id="forkSessionDialogWhy" class="item-meta"></p>
         <div class="session-card-actions">
-          <button id="forkSessionKeep" type="button" title="The shared session stays as it is; the transformed fragment stays a local draft">Keep the session</button>
-          <button id="forkSessionConfirm" type="button" class="primary" title="Retire the shared session and mint a replacement: same name, same peers, register seeded with the transformed fragment">Abort &amp; replace the session</button>
+          <button id="forkSessionKeep" type="button" title="The session stays as it is; the transformed fragment stays a local draft">Keep the session</button>
+          <button id="forkSessionConfirm" type="button" class="primary" title="Retire the session and mint a replacement: same name, same peers, register seeded with the transformed fragment">Abort &amp; replace the session</button>
         </div>
       </div>
     </dialog>

@@ -85,7 +85,7 @@ export declare function fragmentSessionKeys(state: ObjectsState, fragmentKey: st
 export declare function mineFragmentKeys(fragmentKeys: readonly string[], state: ObjectsState): string[];
 export declare function retiredByDerivation(sourceKeys: readonly string[], resultKeys: readonly string[], state: ObjectsState, fragmentKeys: readonly string[]): string[];
 export declare function sessionIsShared(session: SessionObject): boolean;
-export declare function sharedSessionsHolding(state: ObjectsState, fragmentKey: string): SessionObject[];
+export declare function sessionsHolding(state: ObjectsState, fragmentKey: string): SessionObject[];
 export declare function forkSession(state: ObjectsState, sessionKey: string, contentKey: string): {
     state: ObjectsState;
     forked: SessionObject | null;
@@ -114,11 +114,13 @@ export interface WireVerdict {
     needs: string | null;
     label: string | null;
 }
+export type FragmentSummaryLookup = (key: string) => FragmentSummary | null;
+export declare function registerIncompatibility(summary: FragmentSummary): string | null;
 export declare function nodeDisplayName(ref: NodeRef, state: ObjectsState): string;
 export type WireDisposition = "compatible" | "blocked" | "unbacked";
 export declare function wireDisposition(v: WireVerdict): WireDisposition;
 export declare function resolveWireEndpoint(ref: NodeRef, state: ObjectsState): NodeRef;
-export declare function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsState): WireVerdict;
+export declare function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsState, summaryOf?: FragmentSummaryLookup): WireVerdict;
 export interface PendingWire {
     source: NodeRef;
     target: NodeRef;
@@ -130,10 +132,10 @@ export interface QueueWireResult {
     duplicate: boolean;
     verdict: WireVerdict;
 }
-export declare function queueWire(wires: PendingWire[], source: NodeRef, target: NodeRef, state: ObjectsState): QueueWireResult;
+export declare function queueWire(wires: PendingWire[], source: NodeRef, target: NodeRef, state: ObjectsState, summaryOf?: FragmentSummaryLookup): QueueWireResult;
 export declare function unqueueWire(wires: PendingWire[], key: string): PendingWire[];
 export declare function nodeExists(ref: NodeRef, state: ObjectsState, fragmentKeys: readonly string[]): boolean;
-export declare function pruneWires(wires: PendingWire[], state: ObjectsState, fragmentKeys: readonly string[]): PendingWire[];
+export declare function pruneWires(wires: PendingWire[], state: ObjectsState, fragmentKeys: readonly string[], summaryOf?: FragmentSummaryLookup): PendingWire[];
 export interface WireComponent {
     nodes: NodeRef[];
     wires: PendingWire[];
@@ -160,7 +162,7 @@ export interface WireGesture {
 }
 export declare function idleWire(): WireGesture;
 export declare function beginWire(kind: NodeKind, key: string): WireGesture;
-export declare function completeWire(gesture: WireGesture, target: NodeRef, state: ObjectsState): {
+export declare function completeWire(gesture: WireGesture, target: NodeRef, state: ObjectsState, summaryOf?: FragmentSummaryLookup): {
     gesture: WireGesture;
     verdict: WireVerdict | null;
 };
