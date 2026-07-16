@@ -532,6 +532,36 @@ function wireTargetAt(x, y) {
     const hit = document.elementFromPoint(x, y);
     return hit ? hit.closest("[data-wire-kind]") : null;
 }
+// Near-miss magnet: a pointer close to a compatible card still lands the
+// wire — canvas cards are small islands and a pixel-exact release is a
+// touch-hostile ask. Only compatible targets attract; blocked cards still
+// explain themselves on a direct hit but never pull the pointer.
+const WIRE_SNAP_RADIUS_PX = 32;
+function snapWireTarget(x, y, source) {
+    const direct = wireTargetAt(x, y);
+    if (direct)
+        return direct;
+    let best = null;
+    let bestDistance = WIRE_SNAP_RADIUS_PX;
+    for (const node of Array.from(document.querySelectorAll("[data-wire-kind]"))) {
+        const ref = wireRefOf(node);
+        if (!ref || sameRef(ref, source))
+            continue;
+        const rect = node.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0)
+            continue; // hidden / in a closed drawer
+        const dx = Math.max(rect.left - x, 0, x - rect.right);
+        const dy = Math.max(rect.top - y, 0, y - rect.bottom);
+        const distance = Math.hypot(dx, dy);
+        if (distance >= bestDistance)
+            continue;
+        if (wireDisposition(wireVerdict(source, ref, objects)) !== "compatible")
+            continue;
+        best = node;
+        bestDistance = distance;
+    }
+    return best;
+}
 function cancelWireDrag() {
     if (wireDrag) {
         if (wireDrag.node.hasPointerCapture?.(wireDrag.pointerId)) {
@@ -547,6 +577,11 @@ function cancelWireDrag() {
     hideWireDragLine();
     clearWirePaint();
 }
+// Only the pointerdown that ARMS a gesture lives on the card — cards are
+// rebuilt every render, so the move/finish logic listens on the document
+// (wireDom) and reads the off-DOM wireDrag state. A render replacing the
+// source card mid-gesture loses that card's pointer capture, but the
+// bubbled events still reach the document and the gesture completes.
 function armWireDrag(node, ref) {
     node.addEventListener("pointerdown", (event) => {
         if (event.button !== 0 || wireDrag)
@@ -564,51 +599,52 @@ function armWireDrag(node, ref) {
         };
         node.setPointerCapture(event.pointerId);
     });
-    node.addEventListener("pointermove", (event) => {
-        if (!wireDrag || wireDrag.node !== node || wireDrag.pointerId !== event.pointerId)
+}
+function wireDragMove(event) {
+    if (!wireDrag || wireDrag.pointerId !== event.pointerId)
+        return;
+    if (!wireDrag.active) {
+        if (Math.hypot(event.clientX - wireDrag.startX, event.clientY - wireDrag.startY) <
+            WIRE_DRAG_THRESHOLD_PX) {
             return;
-        if (!wireDrag.active) {
-            if (Math.hypot(event.clientX - wireDrag.startX, event.clientY - wireDrag.startY) <
-                WIRE_DRAG_THRESHOLD_PX) {
-                return;
-            }
-            wireDrag.active = true;
-            wire = beginWire(ref.kind, ref.key);
-            paintWireTargets();
         }
-        updateWireDragLine(wireDrag.startX, wireDrag.startY, event.clientX, event.clientY);
-        const hover = wireTargetAt(event.clientX, event.clientY);
-        for (const painted of Array.from(document.querySelectorAll(".session-wire-hover"))) {
-            if (painted !== hover)
-                painted.classList.remove("session-wire-hover");
-        }
-        if (hover && !sameRef(wireRefOf(hover), ref))
-            hover.classList.add("session-wire-hover");
-    });
-    const finish = (event, completed) => {
-        if (!wireDrag || wireDrag.node !== node || wireDrag.pointerId !== event.pointerId)
-            return;
-        const wasActive = wireDrag.active;
-        if (node.hasPointerCapture?.(event.pointerId))
-            node.releasePointerCapture(event.pointerId);
-        wireDrag = null;
-        if (!wasActive)
-            return; // a plain click: selection/detail handlers take it
-        hideWireDragLine();
-        clearWirePaint();
-        suppressNextClick = true;
-        const target = completed ? wireTargetAt(event.clientX, event.clientY) : null;
-        const targetRef = target ? wireRefOf(target) : null;
-        if (targetRef && !sameRef(targetRef, ref)) {
-            wireTo(targetRef); // queues (or explains) and re-renders
-        }
-        else {
-            wire = idleWire();
-            render();
-        }
-    };
-    node.addEventListener("pointerup", (event) => finish(event, true));
-    node.addEventListener("pointercancel", (event) => finish(event, false));
+        wireDrag.active = true;
+        wire = beginWire(wireDrag.ref.kind, wireDrag.ref.key);
+        paintWireTargets();
+    }
+    updateWireDragLine(wireDrag.startX, wireDrag.startY, event.clientX, event.clientY);
+    // The hover preview uses the same magnet as the drop, so what lights up
+    // is exactly what a release would hit.
+    const hover = snapWireTarget(event.clientX, event.clientY, wireDrag.ref);
+    for (const painted of Array.from(document.querySelectorAll(".session-wire-hover"))) {
+        if (painted !== hover)
+            painted.classList.remove("session-wire-hover");
+    }
+    if (hover && !sameRef(wireRefOf(hover), wireDrag.ref))
+        hover.classList.add("session-wire-hover");
+}
+function finishWireDrag(event, completed) {
+    if (!wireDrag || wireDrag.pointerId !== event.pointerId)
+        return;
+    const { ref, node, active } = wireDrag;
+    if (node.isConnected && node.hasPointerCapture?.(event.pointerId)) {
+        node.releasePointerCapture(event.pointerId);
+    }
+    wireDrag = null;
+    if (!active)
+        return; // a plain click: selection/detail handlers take it
+    hideWireDragLine();
+    clearWirePaint();
+    suppressNextClick = true;
+    const target = completed ? snapWireTarget(event.clientX, event.clientY, ref) : null;
+    const targetRef = target ? wireRefOf(target) : null;
+    if (targetRef && !sameRef(targetRef, ref)) {
+        wireTo(targetRef); // queues (or explains) and re-renders
+    }
+    else {
+        wire = idleWire();
+        render();
+    }
 }
 // Completing a wire gesture QUEUES the edge (compatible verdicts) or
 // reports why it cannot wire (blocked/unbacked) — nothing executes on tap.
@@ -3213,12 +3249,6 @@ function drawWireOverlay() {
     }
 }
 function render() {
-    // A render replaces the card nodes, so a live drag's captured node (and
-    // its finish handlers) would be orphaned — wireDrag would never clear and
-    // every future pointerdown would bail on it. Concurrent renders (an async
-    // sync completing mid-gesture) cancel the gesture instead.
-    if (wireDrag)
-        cancelWireDrag();
     renderFocus();
     // Focus hides the canvas (display:none measures as zero), so exactly one
     // of the two fragment surfaces renders per pass.
@@ -3234,6 +3264,11 @@ function render() {
     renderWireStatus();
     renderOps();
     el("createWireTarget").hidden = !(wire.source && wire.source.kind === "utxo");
+    // A live drag survives the render: the gesture state lives off-DOM and
+    // the document-level handlers finish it, so a probe or sync settling
+    // mid-gesture only needs the target paint re-applied to the fresh cards.
+    if (wireDrag?.active)
+        paintWireTargets();
     // The standing edges reflect the freshly-rendered card geometry.
     drawWireOverlay();
 }
@@ -3242,6 +3277,12 @@ function wireDom() {
     for (const [id] of ACTION_BUTTONS) {
         BASE_TITLE.set(id, el(id).title);
     }
+    // Wire-drag move/finish live on the document, NOT on the cards: cards are
+    // rebuilt every render, and a gesture must outlive the card it started on
+    // (armWireDrag only arms the pointerdown).
+    document.addEventListener("pointermove", wireDragMove);
+    document.addEventListener("pointerup", (event) => finishWireDrag(event, true));
+    document.addEventListener("pointercancel", (event) => finishWireDrag(event, false));
     el("addObject").addEventListener("click", () => void addObject());
     el("uploadInput").addEventListener("change", () => void loadUpload());
     const rawDialog = el("rawDialog");

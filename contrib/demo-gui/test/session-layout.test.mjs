@@ -446,15 +446,41 @@ test("the sync dropdown consumes the capability catalog, not a local mapping", (
   assert.doesNotMatch(app, /webrtc_rs/);
 });
 
-test("a live wire drag survives concurrent renders by cancelling cleanly", () => {
-  // render() must not orphan a captured drag node (wireDrag would never
-  // clear and all future gestures would bail on it).
-  assert.match(app, /function render\(\): void \{\n[^]*?if \(wireDrag\) cancelWireDrag\(\);/);
-  // Cancelling releases the capture and eats the trailing click so the
-  // release does not toggle the source card's selection.
-  const cancel = app.slice(app.indexOf("function cancelWireDrag"), app.indexOf("function armWireDrag"));
-  assert.match(cancel, /releasePointerCapture\(wireDrag\.pointerId\)/);
-  assert.match(cancel, /suppressNextClick = true/);
+test("a live wire drag survives concurrent renders and finishes", () => {
+  // The gesture must NOT die when a probe or sync settles mid-drag: cards
+  // are rebuilt per render, so only the arming pointerdown lives on the
+  // card — move/finish are document-level and read the off-DOM state.
+  const arm = app.slice(app.indexOf("function armWireDrag"), app.indexOf("function wireDragMove"));
+  assert.doesNotMatch(arm, /addEventListener\("pointer(?:move|up|cancel)"/);
+  assert.match(app, /document\.addEventListener\("pointermove", wireDragMove\)/);
+  assert.match(app, /document\.addEventListener\("pointerup", \(event\) => finishWireDrag\(event, true\)\)/);
+  assert.match(app, /document\.addEventListener\("pointercancel", \(event\) => finishWireDrag\(event, false\)\)/);
+  // render() repaints the targets onto the fresh cards instead of
+  // cancelling the gesture.
+  assert.doesNotMatch(app, /if \(wireDrag\) cancelWireDrag\(\);/);
+  assert.match(app, /if \(wireDrag\?\.active\) paintWireTargets\(\);/);
+  // A finished drag releases capture only if the source card survived, and
+  // eats the trailing click so the release does not toggle selection.
+  const finish = app.slice(app.indexOf("function finishWireDrag"), app.indexOf("// Completing a wire gesture"));
+  assert.match(finish, /node\.isConnected && node\.hasPointerCapture/);
+  assert.match(finish, /suppressNextClick = true/);
+});
+
+test("wire drops magnet to the nearest compatible target", () => {
+  // Near-miss releases land: the drop and the hover preview share one
+  // snap search, so what lights up is what a release hits.
+  const snap = app.slice(app.indexOf("function snapWireTarget"), app.indexOf("function cancelWireDrag"));
+  assert.match(snap, /WIRE_SNAP_RADIUS_PX/);
+  // Direct hits win; the search only ever ATTRACTS compatible targets.
+  assert.match(snap, /const direct = wireTargetAt\(x, y\);\n  if \(direct\) return direct;/);
+  assert.match(snap, /wireDisposition\(wireVerdict\(source, ref, objects\)\) !== "compatible"/);
+  // Hidden nodes (closed drawers) never attract.
+  assert.match(snap, /rect\.width === 0 \|\| rect\.height === 0/);
+  // Both the finish and the hover preview go through the magnet.
+  const move = app.slice(app.indexOf("function wireDragMove"), app.indexOf("function finishWireDrag"));
+  assert.match(move, /snapWireTarget\(event\.clientX, event\.clientY, wireDrag\.ref\)/);
+  const finish = app.slice(app.indexOf("function finishWireDrag"), app.indexOf("// Completing a wire gesture"));
+  assert.match(finish, /snapWireTarget\(event\.clientX, event\.clientY, ref\)/);
 });
 
 test("the create form is a reachable drop target for utxo drags", () => {
