@@ -2132,6 +2132,14 @@ h2 {
   min-width: 0;
 }
 
+/* The per-row Raw button under the expanded facts (the level-4 dialog's
+   entry point, since the row click now toggles the expansion). */
+.session-row-raw {
+  margin: 0 0 4px 26px;
+  font-size: 11px;
+  padding: 1px 8px;
+}
+
 /* --- detail ladder ---------------------------------------------------------- */
 
 /* The three-segment detail-mode toggle in the card header. */

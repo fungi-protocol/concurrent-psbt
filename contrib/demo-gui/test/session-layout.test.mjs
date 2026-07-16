@@ -331,6 +331,37 @@ test("row chips are scriptPubKeys only — secondary lifehashes chip their hex i
   assert.match(factsSlice, /if \(pair\.chipHex\) value\.append\(lifehashBadge\(pair\.chipHex/);
 });
 
+test("clicking a row toggles ITS OWN expanded detail; the ladder resets all rows", () => {
+  // The per-row override INVERTS the card-level mode for one entry (so at
+  // "expanded" a click collapses just that row), and the row click no
+  // longer opens the level-4 dialog — a Raw button inside the expanded
+  // facts does.
+  const rowStart = app.indexOf("function coinRow");
+  const rowSlice = app.slice(rowStart, app.indexOf("function signatureMark", rowStart));
+  assert.ok(rowStart >= 0, "coinRow slice is bounded");
+  assert.match(rowSlice, /rowDetailOverrides\.has\(key\)\) rowDetailOverrides\.delete\(key\)/);
+  assert.match(rowSlice, /else rowDetailOverrides\.add\(key\)/);
+  assert.match(rowSlice, /"aria-expanded", String\(expanded\)/);
+  assert.doesNotMatch(rowSlice.split("if (expanded)")[0], /openRawModal/);
+  assert.match(rowSlice, /session-row-raw/);
+  assert.match(styles, /\.session-row-raw\s*\{/);
+  // Guards survive: wiring taps and clicks on interactive children (the
+  // Raw button included) pass through instead of toggling.
+  assert.match(rowSlice, /if \(wire\.source\) return/);
+  assert.match(rowSlice, /closest\("button, a, input"\)/);
+  // The inversion semantics live in one place…
+  assert.match(app, /cardExpanded !== rowDetailOverrides\.has\(rowDetailKey\(/);
+  // …and an explicit ladder press clears every override for the fragment:
+  // the buttons speak for the whole card.
+  const ladderStart = app.indexOf("function detailToggle");
+  const ladderSlice = app.slice(ladderStart, app.indexOf("function aggregateRow", ladderStart));
+  assert.match(ladderSlice, /detailLevels\.set\(key, level\);/);
+  assert.match(ladderSlice, /clearRowOverrides\(key\);/);
+  // A removed/retired fragment forgets its per-row flips with its other state.
+  assert.match(app, /detailLevels\.delete\(key\);\n\s*clearRowOverrides\(key\);/);
+  assert.match(app, /detailLevels\.delete\(fragment\.key\);\n\s*clearRowOverrides\(fragment\.key\);/);
+});
+
 test("disabled ops explain themselves on press, not only on hover", () => {
   const hint = html.indexOf('id="opsHint"');
   assert.ok(hint >= 0, "the ops hint line is present");

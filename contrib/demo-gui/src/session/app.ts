@@ -201,6 +201,29 @@ const detailLevels = new Map<string, DetailLevel>();
 function detailLevel(key: string): DetailLevel {
   return detailLevels.get(key) ?? "grouped";
 }
+// Per-row detail overrides ("<fragment>:<side>:<index>"): an entry INVERTS
+// the card-level expansion for that one row — clicking an input/output flips
+// just that entry open (or closed, when the card mode is already expanded)
+// without paying the vertical cost of expanding every sibling. The ladder
+// buttons speak for the whole card, so pressing one clears every override
+// for the fragment: a stale mix of per-row flips must not survive an
+// explicit card-wide choice.
+const rowDetailOverrides = new Set<string>();
+
+function rowDetailKey(fragmentKey: string, side: "input" | "output", index: number): string {
+  return `${fragmentKey}:${side}:${index}`;
+}
+
+function rowExpanded(fragmentKey: string, side: "input" | "output", index: number): boolean {
+  const cardExpanded = detailLevel(fragmentKey) === "expanded";
+  return cardExpanded !== rowDetailOverrides.has(rowDetailKey(fragmentKey, side, index));
+}
+
+function clearRowOverrides(fragmentKey: string): void {
+  for (const key of [...rowDetailOverrides]) {
+    if (key.startsWith(`${fragmentKey}:`)) rowDetailOverrides.delete(key);
+  }
+}
 // Lineage notes for operation results ("join of psbt-1, psbt-2") — the
 // lattice provenance the card shows under the title.
 const lineage = new Map<string, string>();
@@ -525,6 +548,7 @@ function settleDerivation(
     session = removeFragment(session, key);
     objects = dropFragmentKey(objects, key);
     detailLevels.delete(key);
+    clearRowOverrides(key);
     lineage.delete(key);
     logEvent(`retired ${key} — its value lives on in ${livesOn}`);
   }
@@ -1815,13 +1839,15 @@ function renderFragmentCard(fragment: SessionFragment): HTMLElement {
         outputColumn.append(span("session-column-heading", "outputs"));
       }
       for (const input of group.inputs.slice(0, INPUT_ROWS_SHOWN)) {
-        inputColumn.append(coinRow(fragment, "input", input.index, inputRow(input, level), level));
+        const expanded = rowExpanded(fragment.key, "input", input.index);
+        inputColumn.append(coinRow(fragment, "input", input.index, inputRow(input, expanded), expanded));
       }
       const inputsHidden = elisionLabel(INPUT_ROWS_SHOWN, group.inputs.length);
       if (inputsHidden) inputColumn.append(span("item-meta session-elided", `inputs ${inputsHidden}`));
 
       for (const output of group.outputs.slice(0, OUTPUT_ROWS_SHOWN)) {
-        outputColumn.append(coinRow(fragment, "output", output.index, outputRow(output, level), level));
+        const expanded = rowExpanded(fragment.key, "output", output.index);
+        outputColumn.append(coinRow(fragment, "output", output.index, outputRow(output, expanded), expanded));
       }
       const outputsHidden = elisionLabel(OUTPUT_ROWS_SHOWN, group.outputs.length);
       if (outputsHidden) outputColumn.append(span("item-meta session-elided", `outputs ${outputsHidden}`));
@@ -1865,6 +1891,7 @@ function renderFragmentCard(fragment: SessionFragment): HTMLElement {
       session = removeFragment(session, fragment.key);
       objects = dropFragmentKey(objects, fragment.key);
       detailLevels.delete(fragment.key);
+      clearRowOverrides(fragment.key);
       lineage.delete(fragment.key);
       logEvent(`removed ${fragment.key}`);
       render();
@@ -1906,6 +1933,9 @@ function detailToggle(key: string): HTMLElement {
   for (const level of DETAIL_LEVELS) {
     const segment = button(labels[level], titles[level], () => {
       detailLevels.set(key, level);
+      // The buttons speak for the whole card: an explicit card-wide choice
+      // supersedes any per-row flips accumulated at the previous level.
+      clearRowOverrides(key);
       render();
     });
     segment.classList.add("session-detail-segment");
@@ -2092,11 +2122,13 @@ function balanceReport(sheet: BalanceSheet, feeText: string): HTMLElement {
   return block;
 }
 
-// A coin row: clicking it opens the level-4 dialog — the textual address
-// and EVERY field inspect carries for that index, all decoded entry fields
-// plus the raw keymap entries (display.ts rowDetailPairs), the counterpart
-// of the chips-instead-of-text card face. At the "expanded" mode the row
-// also carries its curated facts inline (display.ts rowFacePairs).
+// A coin row: clicking it toggles expanded detail for THIS entry only —
+// the curated facts inline (display.ts rowFacePairs) — layered over the
+// card-level detail mode (an override INVERTS the card mode for the row,
+// so at "expanded" a click collapses just that row). The level-4 dialog —
+// the textual address and EVERY field inspect carries for that index plus
+// the raw keymap entries (display.ts rowDetailPairs) — moved off the row
+// click to a Raw button inside the expanded facts.
 // During a wire gesture the whole card is the tap target, so the row
 // steps aside (the click bubbles to the card's wire handler).
 function coinRow(
@@ -2104,30 +2136,38 @@ function coinRow(
   side: "input" | "output",
   index: number,
   row: HTMLElement,
-  level: DetailLevel,
+  expanded: boolean,
 ): HTMLElement {
   const host = document.createElement("div");
   host.className = "session-coin-item";
   row.classList.add("session-coin-row-expandable");
   row.setAttribute("role", "button");
   row.tabIndex = 0;
-  row.title = `${side} ${index} — click for every field, raw (address, omitted fields, raw keymap entries)`;
-  const open = () => openRawModal(fragment, { side, index });
+  row.setAttribute("aria-expanded", String(expanded));
+  row.title = expanded
+    ? `${side} ${index} — click to collapse this row's details`
+    : `${side} ${index} — click to expand this row's details inline`;
+  const toggle = () => {
+    const key = rowDetailKey(fragment.key, side, index);
+    if (rowDetailOverrides.has(key)) rowDetailOverrides.delete(key);
+    else rowDetailOverrides.add(key);
+    render();
+  };
   row.addEventListener("click", (event) => {
     if (wire.source) return; // wiring in progress: the card handles the tap
     if ((event.target as HTMLElement).closest("button, a, input")) return;
     event.stopPropagation();
-    open();
+    toggle();
   });
   row.addEventListener("keydown", (event) => {
     if (wire.source) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      open();
+      toggle();
     }
   });
   host.append(row);
-  if (level === "expanded") {
+  if (expanded) {
     const facts = document.createElement("dl");
     facts.className = "session-coin-detail session-coin-facts";
     for (const pair of rowFacePairs(fragment.inspect, side, index, displayNetwork())) {
@@ -2141,6 +2181,13 @@ function coinRow(
       facts.append(term, value);
     }
     if (facts.childElementCount > 0) host.append(facts);
+    const raw = button(
+      "Raw",
+      `${side} ${index}: every field, raw (address, omitted fields, raw keymap entries)`,
+      () => openRawModal(fragment, { side, index }),
+    );
+    raw.classList.add("session-row-raw");
+    host.append(raw);
   }
   return host;
 }
@@ -2159,10 +2206,11 @@ function signatureMark(presence: InputView["signatures"], index: number): HTMLEl
   return mark;
 }
 
-// Row faces. The "grouped" mode is minimal identity — LifeHash chip, amount,
-// signature state; the structural warnings (no utxo data, no id) join at
-// the "expanded" mode, and everything else lives in the dialog.
-function inputRow(input: InputView, level: DetailLevel): HTMLElement {
+// Row faces. The base face is minimal identity — LifeHash chip, amount,
+// signature state; the structural warnings (no utxo data, no id) join when
+// the row is expanded (card-wide or per-row), and everything else lives in
+// the dialog.
+function inputRow(input: InputView, expanded: boolean): HTMLElement {
   const row = document.createElement("div");
   row.className = "session-coin-row";
   row.append(span("session-coin-side", "in"));
@@ -2195,20 +2243,20 @@ function inputRow(input: InputView, level: DetailLevel): HTMLElement {
     row.append(span("item-meta", "amount unknown"));
   }
   row.append(signatureMark(input.signatures, input.index));
-  if (level === "expanded" && !input.hasWitnessUtxo && !input.hasNonWitnessUtxo) {
+  if (expanded && !input.hasWitnessUtxo && !input.hasNonWitnessUtxo) {
     row.append(span("session-badge session-badge-warn", "no utxo data"));
   }
   return row;
 }
 
-function outputRow(output: OutputView, level: DetailLevel): HTMLElement {
+function outputRow(output: OutputView, expanded: boolean): HTMLElement {
   const row = document.createElement("div");
   row.className = "session-coin-row";
   row.append(span("session-coin-side", "out"));
   // The row face carries ONE fingerprint: the scriptPubKey — where the
   // money goes. The unique id's chip is bookkeeping identity; it sits next
   // to its hex in the expanded facts (rowFacePairs chipHex), not here.
-  if (!output.uniqueIdHex && level === "expanded") {
+  if (!output.uniqueIdHex && expanded) {
     row.append(span("session-badge session-badge-warn", "no id"));
   }
   if (output.scriptHex && output.address) {
