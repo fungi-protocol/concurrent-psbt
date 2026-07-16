@@ -5,6 +5,8 @@ pub(crate) mod classify;
 pub(crate) mod concatenate;
 pub(crate) mod create;
 pub(crate) mod export_bip174;
+#[cfg(feature = "webgui")]
+pub(crate) mod faker;
 pub(crate) mod fee;
 #[cfg(feature = "webgui")]
 pub(crate) mod field_edit;

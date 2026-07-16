@@ -170,6 +170,9 @@ pub(crate) fn response_for(method: &str, path: &str, body: &[u8]) -> Response {
             "/api/create" => return create_response(body),
             "/api/edit" => return edit_response(body),
             "/api/export-bip174" => return export_bip174_response(body),
+            "/api/fake/descriptor" => return fake_descriptor_response(body),
+            "/api/fake/psbt" => return fake_psbt_response(body),
+            "/api/fake/utxos" => return fake_utxos_response(body),
             "/api/fee" => return fee_response(body),
             "/api/import-bip174" => return import_bip174_response(body),
             "/api/inspect" => return inspect_response(body),
@@ -873,15 +876,7 @@ fn classify_response_result(body: &[u8]) -> Result<Vec<u8>> {
     let request: serde_json::Value = serde_json::from_slice(body)
         .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
     let payload = request_string(&request, "payload")?;
-    let network = match request.get("network") {
-        Some(value) => {
-            let value = value
-                .as_str()
-                .ok_or_else(|| Error::new("request JSON field `network` must be a string"))?;
-            NetworkArg::from_str(value).map_err(Error::new)?
-        }
-        None => NetworkArg(bitcoin::Network::Bitcoin),
-    };
+    let network = request_network(&request)?;
     Ok(crate::commands::classify::classify(payload, network.0)?
         .to_string()
         .into_bytes())
@@ -1154,15 +1149,7 @@ fn create_config_from_request(request: &serde_json::Value) -> Result<CreateConfi
     let object = request
         .as_object()
         .ok_or_else(|| Error::new("request JSON must be an object"))?;
-    let network = match object.get("network") {
-        Some(value) => {
-            let value = value
-                .as_str()
-                .ok_or_else(|| Error::new("request JSON field `network` must be a string"))?;
-            NetworkArg::from_str(value).map_err(Error::new)?
-        }
-        None => NetworkArg(bitcoin::Network::Bitcoin),
-    };
+    let network = request_network(request)?;
     let seed = object
         .get("seed_hex")
         .map(|value| {
@@ -1274,6 +1261,179 @@ fn object_string<'a>(
         .get(field)
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| Error::new(format!("request JSON {label}.{field} must be a string")))
+}
+
+/// `/api/fake/descriptor`: mint a test-data wallet descriptor (psbt_faker
+/// spirit). Request `{network?, kind?}` (kind: `wpkh` default, `tr`);
+/// response `{descriptor}` — an ordinary payload for the paste flow.
+fn fake_descriptor_response(body: &[u8]) -> Response {
+    match fake_descriptor_response_result(body) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/json; charset=utf-8",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+fn fake_descriptor_response_result(body: &[u8]) -> Result<Vec<u8>> {
+    let request: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
+    let network = request_network(&request)?;
+    let kind = match request.get("kind") {
+        None | Some(serde_json::Value::Null) => crate::commands::faker::DescriptorKind::Wpkh,
+        Some(value) => value
+            .as_str()
+            .ok_or_else(|| Error::new("request JSON field `kind` must be a string"))?
+            .parse()
+            .map_err(Error::new)?,
+    };
+    let descriptor = crate::commands::faker::fake_descriptor(network.0, kind, &mut rand::rng())?;
+    Ok(serde_json::json!({ "descriptor": descriptor })
+        .to_string()
+        .into_bytes())
+}
+
+/// `/api/fake/utxos`: fake a fully-signed transaction paying `count`
+/// outputs (default 3) to the descriptor. Request `{descriptor, network?,
+/// count?}`; response `{tx_hex, txid}` — pasting `tx_hex` classifies as a
+/// signed transaction whose outputs become spendable UTXO objects.
+fn fake_utxos_response(body: &[u8]) -> Response {
+    match fake_utxos_response_result(body) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/json; charset=utf-8",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+fn fake_utxos_response_result(body: &[u8]) -> Result<Vec<u8>> {
+    let request: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
+    let descriptor = request_string(&request, "descriptor")?;
+    let network = request_network(&request)?;
+    let count = optional_count(&request, "count", 3)?;
+    let transaction =
+        crate::commands::faker::fake_coins(descriptor, network.0, count, &mut rand::rng())?;
+    Ok(serde_json::json!({
+        "tx_hex": bitcoin::consensus::encode::serialize_hex(&transaction),
+        "txid": transaction.compute_txid().to_string(),
+    })
+    .to_string()
+    .into_bytes())
+}
+
+/// `/api/fake/psbt`: fake an unordered PSBT spending the given UTXOs to
+/// `recipients` (default 2) invented addresses with change back to the
+/// descriptor. Request `{descriptor, utxos: [{txid, vout, amount_sats}],
+/// network?, recipients?}`; response `{psbt, inspect}` like `/api/create`.
+fn fake_psbt_response(body: &[u8]) -> Response {
+    match fake_psbt_response_result(body) {
+        Ok(body) => Response {
+            status: 200,
+            reason: "OK",
+            content_type: "application/json; charset=utf-8",
+            body,
+        },
+        Err(error) => json_error_response(400, "Bad Request", &error.to_string()),
+    }
+}
+
+fn fake_psbt_response_result(body: &[u8]) -> Result<Vec<u8>> {
+    let request: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
+    let descriptor = request_string(&request, "descriptor")?;
+    let network = request_network(&request)?;
+    let recipients = optional_count(&request, "recipients", 2)?;
+    let utxos = request
+        .get("utxos")
+        .ok_or_else(|| Error::new("request JSON must contain array field `utxos`"))
+        .and_then(parse_fake_utxos)?;
+    let psbt = crate::commands::faker::fake_psbt(
+        descriptor,
+        network.0,
+        &utxos,
+        recipients,
+        &mut rand::rng(),
+    )?;
+    Ok(serde_json::json!({
+        "psbt": crate::io::encode_psbt(&psbt),
+        "inspect": crate::commands::inspect::inspect_psbt(&psbt),
+    })
+    .to_string()
+    .into_bytes())
+}
+
+fn parse_fake_utxos(value: &serde_json::Value) -> Result<Vec<crate::commands::faker::FakeUtxo>> {
+    let utxos = value
+        .as_array()
+        .ok_or_else(|| Error::new("request JSON field `utxos` must be an array"))?;
+    utxos
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let object = value.as_object().ok_or_else(|| {
+                Error::new(format!("request JSON utxos[{index}] must be an object"))
+            })?;
+            let txid = object_string(object, "txid", &format!("utxos[{index}]"))?;
+            let vout = object
+                .get("vout")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|vout| u32::try_from(vout).ok())
+                .ok_or_else(|| {
+                    Error::new(format!(
+                        "request JSON utxos[{index}].vout must be a non-negative integer"
+                    ))
+                })?;
+            let amount_sats = object
+                .get("amount_sats")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| {
+                    Error::new(format!(
+                        "request JSON utxos[{index}].amount_sats must be a non-negative integer"
+                    ))
+                })?;
+            Ok(crate::commands::faker::FakeUtxo {
+                outpoint: bitcoin::OutPoint {
+                    txid: txid
+                        .parse()
+                        .map_err(|error| Error::new(format!("invalid txid {txid}: {error}")))?,
+                    vout,
+                },
+                amount: bitcoin::Amount::from_sat(amount_sats),
+            })
+        })
+        .collect()
+}
+
+/// Ceiling for the fake generators' `count`/`recipients` fields. Not a
+/// security boundary — the operator on both ends of this API is the same
+/// person (in the PWA/tauri shells there is no boundary at all: one process).
+/// It is typo protection: a fat-fingered count would wedge the operator's own
+/// session grinding key derivations, or abort the whole app on allocation
+/// failure — and no test fixture needs more than a handful of items anyway.
+const MAX_FAKE_ITEMS: u32 = 100;
+
+/// Read an optional small-count field with a default, bounded by
+/// [`MAX_FAKE_ITEMS`]; absent or null means the default.
+fn optional_count(request: &serde_json::Value, field: &str, default: u32) -> Result<u32> {
+    match request.get(field) {
+        None | Some(serde_json::Value::Null) => Ok(default),
+        Some(value) => value
+            .as_u64()
+            .and_then(|count| u32::try_from(count).ok())
+            .filter(|&count| count <= MAX_FAKE_ITEMS)
+            .ok_or_else(|| {
+                Error::new(format!(
+                    "request JSON field `{field}` must be an integer between 0 and {MAX_FAKE_ITEMS}"
+                ))
+            }),
+    }
 }
 
 fn export_bip174_response(body: &[u8]) -> Response {
@@ -1616,15 +1776,7 @@ fn payment_record_from_request(request: &serde_json::Value) -> Result<Vec<u8>> {
             )
         })?;
     let amount_btc = request_string(request, "amount_btc")?;
-    let network = match request.get("network") {
-        Some(value) => {
-            let value = value
-                .as_str()
-                .ok_or_else(|| Error::new("request JSON field `network` must be a string"))?;
-            NetworkArg::from_str(value).map_err(Error::new)?
-        }
-        None => NetworkArg(bitcoin::Network::Bitcoin),
-    };
+    let network = request_network(request)?;
     let label = match request.get("label") {
         None => None,
         Some(value) => Some(
@@ -1646,6 +1798,20 @@ fn request_string<'a>(request: &'a serde_json::Value, field: &str) -> Result<&'a
         .get(field)
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| Error::new(format!("request JSON must contain string field `{field}`")))
+}
+
+/// Read the optional `network` selector shared by the request routes; absent
+/// or null means bitcoin, like the CLI's `--network` default.
+fn request_network(request: &serde_json::Value) -> Result<NetworkArg> {
+    match request.get("network") {
+        None | Some(serde_json::Value::Null) => Ok(NetworkArg(bitcoin::Network::Bitcoin)),
+        Some(value) => {
+            let value = value
+                .as_str()
+                .ok_or_else(|| Error::new("request JSON field `network` must be a string"))?;
+            NetworkArg::from_str(value).map_err(Error::new)
+        }
+    }
 }
 
 /// Read an optional boolean field (`allow_short_seed`, ...); absent or null
@@ -2240,6 +2406,135 @@ mod tests {
         let error = String::from_utf8(response.body).unwrap();
         assert!(error.contains("not an output descriptor"), "{error}");
         assert!(error.contains("not payment instructions"), "{error}");
+    }
+
+    /// The full fake test-data pipeline over the routes, feeding each
+    /// result into the next exactly like the frontend would: descriptor →
+    /// coins (classified back into spendable UTXOs) → PSBT.
+    #[test]
+    fn fake_endpoints_generate_a_classifiable_pipeline() {
+        // Descriptor: taproot flavor on regtest, an ordinary paste payload.
+        let request = serde_json::json!({ "network": "regtest", "kind": "tr" }).to_string();
+        let response = response_for("POST", "/api/fake/descriptor", request.as_bytes());
+        assert_eq!(response.status, 200);
+        let value: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let descriptor = value["descriptor"].as_str().unwrap().to_owned();
+        let request =
+            serde_json::json!({ "payload": descriptor, "network": "regtest" }).to_string();
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+        let classified: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(classified["kind"], "descriptor");
+        assert_eq!(classified["descriptor_type"], "Tr");
+        assert_eq!(classified["is_ranged"], true);
+
+        // Coins: the tx hex classifies as fully signed with two outputs.
+        let request = serde_json::json!({
+            "descriptor": descriptor, "network": "regtest", "count": 2,
+        })
+        .to_string();
+        let response = response_for("POST", "/api/fake/utxos", request.as_bytes());
+        assert_eq!(response.status, 200);
+        let value: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let tx_hex = value["tx_hex"].as_str().unwrap().to_owned();
+        let request = serde_json::json!({ "payload": tx_hex, "network": "regtest" }).to_string();
+        let response = response_for("POST", "/api/classify", request.as_bytes());
+        let classified: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(classified["kind"], "transaction");
+        assert_eq!(classified["txid"], value["txid"]);
+        assert_eq!(classified["fully_signed"], true);
+        assert_eq!(classified["output_count"], 2);
+
+        // PSBT: spend the classified outpoints; defaults (2 recipients).
+        let utxos: Vec<serde_json::Value> = classified["outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|output| {
+                serde_json::json!({
+                    "txid": classified["txid"],
+                    "vout": output["vout"],
+                    "amount_sats": output["amount_sats"],
+                })
+            })
+            .collect();
+        let request = serde_json::json!({
+            "descriptor": descriptor, "network": "regtest", "utxos": utxos,
+        })
+        .to_string();
+        let response = response_for("POST", "/api/fake/psbt", request.as_bytes());
+        assert_eq!(response.status, 200);
+        let value: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(value["psbt"].as_str().unwrap().starts_with("cHNidP"));
+        assert_eq!(value["inspect"]["input_count"], 2);
+        assert_eq!(value["inspect"]["output_count"], 3, "2 recipients + change");
+        assert_eq!(value["inspect"]["ordering"], "unordered");
+    }
+
+    #[test]
+    fn fake_endpoints_report_json_errors() {
+        let response = response_for("POST", "/api/fake/descriptor", b"{\"kind\": \"pkh\"}");
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("unknown descriptor kind")
+        );
+
+        let response = response_for("POST", "/api/fake/utxos", b"{}");
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("`descriptor`")
+        );
+
+        let request = serde_json::json!({ "descriptor": "wpkh(nonsense)" }).to_string();
+        let response = response_for("POST", "/api/fake/utxos", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("parsing descriptor")
+        );
+
+        let response = response_for("POST", "/api/fake/psbt", b"{\"descriptor\": \"x\"}");
+        assert_eq!(response.status, 400);
+        assert!(String::from_utf8(response.body).unwrap().contains("`utxos`"));
+
+        // Counts are bounded as typo protection (see MAX_FAKE_ITEMS): a
+        // mistyped count gets a clear 400 instead of wedging the operator's
+        // own app.
+        let request =
+            serde_json::json!({ "descriptor": "wpkh(x)", "count": 4_000_000_000u64 }).to_string();
+        let response = response_for("POST", "/api/fake/utxos", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("between 0 and 100")
+        );
+
+        // Underfunded PSBTs are a clean 400, not a panic or wraparound.
+        let request = serde_json::json!({ "network": "regtest" }).to_string();
+        let response = response_for("POST", "/api/fake/descriptor", request.as_bytes());
+        let value: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let request = serde_json::json!({
+            "descriptor": value["descriptor"],
+            "network": "regtest",
+            "utxos": [{
+                "txid": "0000000000000000000000000000000000000000000000000000000000000001",
+                "vout": 0,
+                "amount_sats": 1500,
+            }],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/fake/psbt", request.as_bytes());
+        assert_eq!(response.status, 400);
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("too small")
+        );
     }
 
     /// The fixture PSBT with its output unique ids stripped — imported
