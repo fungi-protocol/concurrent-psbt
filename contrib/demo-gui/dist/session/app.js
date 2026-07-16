@@ -3474,7 +3474,18 @@ function wireDom() {
     el("displayNetwork").addEventListener("change", render);
     // Edges live in world coordinates, so scrolling needs nothing; a resize
     // changes the layout's minWidth (the viewport), so the canvas re-lays out.
-    window.addEventListener("resize", () => render());
+    // Latched to one render per animation frame — a live window drag fires
+    // resize far faster than the full measure-and-place pass can run.
+    let resizeRenderQueued = false;
+    window.addEventListener("resize", () => {
+        if (resizeRenderQueued)
+            return;
+        resizeRenderQueued = true;
+        requestAnimationFrame(() => {
+            resizeRenderQueued = false;
+            render();
+        });
+    });
     // Descriptor-hover cross-referencing: hovering a descriptor card dims
     // every colorized node of a DIFFERENT identity, so everything the
     // descriptor touches (provenance groups, coins, peers) pops. Delegated,

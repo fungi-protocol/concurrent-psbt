@@ -196,9 +196,11 @@ test("standing wire edges: Mine sees every session, peers their authorized ones"
   assert.match(overlay, /sessionObject\.peerKeys/);
   assert.match(overlay, /"session-edge-auth"/);
   // Redraw hooks: every render; a resize re-lays the canvas out (the SVG
-  // lives in world coordinates, so scrolling needs no hook at all).
+  // lives in world coordinates, so scrolling needs no hook at all), latched
+  // to one render per animation frame.
   assert.match(app, /drawWireOverlay\(\);\n\}/);
-  assert.match(app, /window\.addEventListener\("resize", \(\) => render\(\)\)/);
+  assert.match(app, /if \(resizeRenderQueued\) return;/);
+  assert.match(app, /requestAnimationFrame\(\(\) => \{\n\s*resizeRenderQueued = false;\n\s*render\(\);/);
   assert.doesNotMatch(app, /addEventListener\("scroll", drawWireOverlay/);
   assert.match(styles, /\.session-edge-mine\s*\{/);
   assert.match(styles, /\.session-edge-auth\s*\{/);
