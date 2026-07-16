@@ -552,7 +552,7 @@ test("rowFacePairs is the curated level-3 subset, not the raw dump", () => {
   const output = rowFacePairs(INSPECT, "output", 0, "regtest");
   assert.deepEqual(
     output.map((pair) => pair.label),
-    ["address", "script", "unique id"],
+    ["address", "type", "unique id"],
   );
   assert.equal(output[0].value, "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080");
 
@@ -560,7 +560,7 @@ test("rowFacePairs is the curated level-3 subset, not the raw dump", () => {
   const nonstandard = rowFacePairs(INSPECT, "output", 2, "regtest");
   assert.deepEqual(
     nonstandard.map((pair) => pair.label),
-    ["script", "unique id"],
+    ["type", "unique id"],
   );
 
   // Never the raw keymap: face pairs stay curated even when raw data exists.

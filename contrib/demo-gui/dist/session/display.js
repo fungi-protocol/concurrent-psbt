@@ -623,8 +623,10 @@ export function rowFacePairs(inspect, side, index, network) {
         return pairs;
     if (output.address)
         pairs.push({ label: "address", value: output.address });
+    // scriptLabel is the TEMPLATE KIND (taproot, segwit v0…), not the script
+    // bytes — "type" says what the value is; the bytes live in the modal.
     if (output.scriptKind !== "absent")
-        pairs.push({ label: "script", value: output.scriptLabel });
+        pairs.push({ label: "type", value: output.scriptLabel });
     if (output.uniqueIdHex)
         pairs.push({ label: "unique id", value: output.uniqueIdHex });
     return pairs;
