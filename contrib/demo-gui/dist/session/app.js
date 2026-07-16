@@ -303,7 +303,9 @@ function addAndRender(psbt, inspect, origin, note) {
     const added = addFragment(session, psbt, inspect, origin);
     session = added.state;
     if (added.duplicate) {
-        logEvent(`${added.fragment.key} already loaded; selected it (${origin})`);
+        logEvent(origin === "sync"
+            ? `${added.fragment.key} already loaded (${origin})`
+            : `${added.fragment.key} already loaded; selected it (${origin})`);
     }
     else {
         logEvent(`added ${added.fragment.key} (${origin})`);

@@ -102,6 +102,23 @@ export function addFragment(
   if (existing) {
     const absorbed =
       existing.psbt === compact ? existing : { ...existing, psbt: compact, inspect };
+    // Re-selecting the surviving card shows the user where their paste went,
+    // but only user gestures earn that: "sync" is a background origin, and a
+    // convergence echo completing mid-gesture must not grow the selection —
+    // though the echo's value (possibly a richer join result) is still absorbed.
+    if (origin === "sync") {
+      if (absorbed === existing) {
+        return { state, fragment: existing, duplicate: true };
+      }
+      const fragments = state.fragments.map((fragment) =>
+        fragment.key === existing.key ? absorbed : fragment,
+      );
+      return {
+        state: { fragments, counter: state.counter },
+        fragment: absorbed,
+        duplicate: true,
+      };
+    }
     const fragments = state.fragments.map((fragment) =>
       fragment.key === existing.key ? { ...absorbed, selected: true } : fragment,
     );

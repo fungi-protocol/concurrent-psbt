@@ -118,6 +118,41 @@ test("canonical unique id dedupes shuffled serializations and absorbs the incomi
   assert.equal(other.state.fragments.length, 2);
 });
 
+test("sync-origin dedupe never touches the selection", () => {
+  let state = emptySession();
+  state = addFragment(state, PSBT, INSPECT, "paste").state;
+  assert.equal(state.fragments[0].selected, false);
+
+  // A background convergence echo dedupes without selecting: an
+  // auto-broadcast completing mid-gesture must not grow the selection.
+  const echoed = addFragment(state, PSBT, null, "sync");
+  assert.equal(echoed.duplicate, true);
+  assert.equal(echoed.state, state);
+  assert.equal(echoed.state.fragments[0].selected, false);
+
+  // And it never de-selects either: a fragment the user selected stays put.
+  state = setSelected(state, state.fragments[0].key, true);
+  const again = addFragment(state, PSBT, null, "sync");
+  assert.equal(again.duplicate, true);
+  assert.equal(again.state.fragments[0].selected, true);
+
+  // A shuffled sync echo still absorbs the incoming value — it may be the
+  // join result carrying more data — but the selection stays untouched.
+  const reshuffled = `${PSBT.slice(4)}${PSBT.slice(0, 4)}`;
+  const richer = { ...INSPECT, output_count: 3 };
+  const absorbed = addFragment(state, reshuffled, richer, "sync");
+  assert.equal(absorbed.duplicate, true);
+  assert.equal(absorbed.state.fragments.length, 1);
+  assert.equal(absorbed.state.fragments[0].psbt, reshuffled);
+  assert.equal(absorbed.state.fragments[0].inspect, richer);
+  assert.equal(absorbed.state.fragments[0].selected, true);
+
+  // User-gesture origins keep the re-select affordance.
+  const pasted = addFragment(echoed.state, PSBT, null, "paste");
+  assert.equal(pasted.duplicate, true);
+  assert.equal(pasted.state.fragments[0].selected, true);
+});
+
 test("fragmentSummary projects inspect JSON defensively", () => {
   const summary = fragmentSummary(INSPECT);
   assert.equal(summary.format, "bip370");
