@@ -130,6 +130,7 @@ export interface GroupAggregate {
     signedInputCount: number;
 }
 export declare function groupAggregate(group: CardGroup): GroupAggregate;
+export declare function sequenceReading(sequence: string | null): string | null;
 export declare function rowFacePairs(inspect: InspectResponse | null, side: "input" | "output", index: number, network: Network): RowDetailPair[];
 export interface BadgeView {
     emoji: string | null;

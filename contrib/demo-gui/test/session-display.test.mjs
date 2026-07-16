@@ -21,6 +21,7 @@ import {
   rowDetailPairs,
   rowFacePairs,
   scriptTemplate,
+  sequenceReading,
   signaturePresence,
   signedAmountSpanParts,
   sizeEstimateVbytesFromInspect,
@@ -538,6 +539,8 @@ test("rowFacePairs is the curated level-3 subset, not the raw dump", () => {
     ["outpoint", "sequence", "utxo data", "signatures"],
   );
   assert.equal(input[0].value, `${"aa".repeat(32)}:0`);
+  // The sequence fact keeps the hex and appends its BIP 68 reading.
+  assert.equal(input[1].value, "0xfffffffe — no relative locktime (BIP 68 disable bit)");
   assert.equal(input[2].value, "witness utxo");
   assert.equal(input[3].value, "unsigned");
 
@@ -567,6 +570,49 @@ test("rowFacePairs is the curated level-3 subset, not the raw dump", () => {
   assert.ok(rowFacePairs(INSPECT, "output", 0, "regtest").every((pair) => !pair.label.startsWith("raw ")));
   assert.deepEqual(rowFacePairs(null, "input", 0, "regtest"), []);
   assert.deepEqual(rowFacePairs(INSPECT, "output", 9, "regtest"), []);
+});
+
+test("sequenceReading decodes nSequence per BIP 68 (+finality, +BIP 125)", () => {
+  // The two all-ones neighbors: final vs merely locktime-enabled.
+  assert.equal(sequenceReading("0xffffffff"), "final — relative and absolute locktimes disabled");
+  assert.equal(sequenceReading("0xfffffffe"), "no relative locktime (BIP 68 disable bit)");
+  // Below 0xfffffffe the input signals BIP 125 replaceability — including
+  // with the BIP 68 disable bit still set.
+  assert.equal(
+    sequenceReading("0xfffffffd"),
+    "no relative locktime (BIP 68 disable bit); signals RBF (BIP 125)",
+  );
+  // Bit 22 clear: the low 16 bits count blocks.
+  assert.equal(
+    sequenceReading("0x00000090"),
+    "relative locktime ≥ 144 blocks; signals RBF (BIP 125)",
+  );
+  assert.equal(
+    sequenceReading("0x00000001"),
+    "relative locktime ≥ 1 block; signals RBF (BIP 125)",
+  );
+  // Bit 22 set: the low 16 bits count 512-second units.
+  assert.equal(
+    sequenceReading("0x00400004"),
+    "relative locktime ≥ 4 × 512s (≈34 min); signals RBF (BIP 125)",
+  );
+  assert.equal(
+    sequenceReading("0x004000a8"),
+    "relative locktime ≥ 168 × 512s (≈23.9 h); signals RBF (BIP 125)",
+  );
+  assert.equal(
+    sequenceReading("0x0040ffff"),
+    "relative locktime ≥ 65535 × 512s (≈388.4 days); signals RBF (BIP 125)",
+  );
+  // Reserved bits (16–21, 23–30) do not disturb the value read.
+  assert.equal(
+    sequenceReading("0x00230090"),
+    "relative locktime ≥ 144 blocks; signals RBF (BIP 125)",
+  );
+  // Absent or unparseable sequences yield no reading.
+  assert.equal(sequenceReading(null), null);
+  assert.equal(sequenceReading("not-hex"), null);
+  assert.equal(sequenceReading("0x1ffffffff"), null);
 });
 
 // --- amount emphasis (BIP 177 sat-first; the ead6ca05 convention) ----------

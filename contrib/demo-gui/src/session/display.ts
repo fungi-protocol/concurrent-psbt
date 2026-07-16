@@ -869,6 +869,33 @@ export function groupAggregate(group: CardGroup): GroupAggregate {
   };
 }
 
+// nSequence, read per BIP 68 and its neighbors: bit 31 disables the
+// relative locktime; bit 22 picks 512-second granularity over blocks; the
+// low 16 bits are the value. 0xffffffff additionally makes the input final
+// (nLockTime loses force), and any value below 0xfffffffe signals BIP 125
+// replaceability. The reading rides NEXT TO the hex, never instead of it —
+// the raw field stays the authoritative fact.
+export function sequenceReading(sequence: string | null): string | null {
+  if (!sequence) return null;
+  const value = Number.parseInt(sequence, 16);
+  if (!Number.isFinite(value) || value < 0 || value > 0xffff_ffff) return null;
+  if (value === 0xffff_ffff) return "final — relative and absolute locktimes disabled";
+  const rbf = value < 0xffff_fffe ? "; signals RBF (BIP 125)" : "";
+  if (value >= 0x8000_0000) return `no relative locktime (BIP 68 disable bit)${rbf}`;
+  const units = value & 0xffff;
+  if (value & 0x0040_0000) {
+    const seconds = units * 512;
+    return `relative locktime ≥ ${units} × 512s (${approxDuration(seconds)})${rbf}`;
+  }
+  return `relative locktime ≥ ${units} block${units === 1 ? "" : "s"}${rbf}`;
+}
+
+function approxDuration(seconds: number): string {
+  if (seconds < 3600) return `≈${Math.round(seconds / 60)} min`;
+  if (seconds < 48 * 3600) return `≈${(seconds / 3600).toFixed(1)} h`;
+  return `≈${(seconds / 86400).toFixed(1)} days`;
+}
+
 // The level-3 facts for one row: a curated subset of rowDetailPairs — the
 // textual identity behind the chips plus the row's structural facts. The
 // exhaustive field-by-field projection stays in rowDetailPairs (the modal).
@@ -883,7 +910,13 @@ export function rowFacePairs(
     const [input] = inputViews(inspect).slice(index, index + 1);
     if (!input) return pairs;
     if (input.outpointText) pairs.push({ label: "outpoint", value: input.outpointText });
-    if (input.sequence) pairs.push({ label: "sequence", value: input.sequence });
+    if (input.sequence) {
+      const reading = sequenceReading(input.sequence);
+      pairs.push({
+        label: "sequence",
+        value: reading ? `${input.sequence} — ${reading}` : input.sequence,
+      });
+    }
     pairs.push({
       label: "utxo data",
       value: input.hasWitnessUtxo
