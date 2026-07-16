@@ -5,7 +5,7 @@ use psbt_v2::v2::Psbt;
 
 use crate::cli::{SyncConfig, TransportKind};
 use crate::transport::message::Message;
-use crate::transport::{LocalTransport, Transport};
+use crate::transport::{LocalTransport, Transport, WatchedDirTransport};
 use crate::{Error, Result, io};
 
 /// THE async→sync boundary for the whole sync driver.
@@ -32,6 +32,19 @@ where
 }
 
 pub(super) fn run(config: SyncConfig, stdin: Option<&[u8]>) -> Result<Psbt> {
+    if config.transport == TransportKind::WatchedDir {
+        // One-shot watched-dir sync: one collect (register + seeds + stdin),
+        // one join, one write-once publish back into the register. The
+        // `--ongoing` loop is the runner's job (`lib.rs::run_ongoing_watched_dir`),
+        // like the local `--state` loop; reaching here with it set is a bug.
+        if config.ongoing {
+            return Err(Error::new(
+                "ongoing watched-dir sync is driven by the runner",
+            ));
+        }
+        let mut transport = watched_dir_transport(&config, stdin)?;
+        return drive_async(async move { sync_once_over(&mut transport).await });
+    }
     if config.uses_network() {
         // One-shot sync over a real network transport: converge our local
         // sources, publish that state, wait for peers, then fold the collected
@@ -81,6 +94,13 @@ pub(crate) fn build_transport(config: &SyncConfig) -> Result<Box<dyn Transport>>
             // network dispatch returns one uniform `dyn Transport`.
             let transport =
                 local_transport(config, None, None, crate::cli::OutputFileFormat::Base64);
+            Ok(Box::new(transport))
+        }
+
+        TransportKind::WatchedDir => {
+            // Built in, like `local` — no feature gate. The webgui reaches the
+            // register through this arm (no runner stdin on that path).
+            let transport = watched_dir_transport(config, None)?;
             Ok(Box::new(transport))
         }
 
@@ -550,6 +570,33 @@ pub(crate) fn local_transport(
     )
 }
 
+/// Build the watched-dir register transport: the first positional source is
+/// the register directory (created if absent), the rest are seed PSBTs.
+pub(crate) fn watched_dir_transport(
+    config: &SyncConfig,
+    stdin: Option<&[u8]>,
+) -> Result<WatchedDirTransport> {
+    if config.state.is_some() {
+        return Err(Error::new(
+            "watched-dir sync keeps its state in the directory; drop --state (the directory is the register)",
+        ));
+    }
+    let mut sources = config.sources.iter();
+    let dir = sources.next().ok_or_else(|| {
+        Error::new(
+            "watched-dir sync requires a directory source: \
+             ptj sync --transport watched-dir <dir> [seed PSBTs...]",
+        )
+    })?;
+    if io::is_stdin_path(dir) {
+        return Err(Error::new(
+            "watched-dir sync requires a directory as its first source, not '-'",
+        ));
+    }
+    let seeds: Vec<std::path::PathBuf> = sources.cloned().collect();
+    WatchedDirTransport::new(dir.clone(), seeds, stdin)
+}
+
 pub(crate) fn validate_ongoing(config: &SyncConfig, stdin: Option<&[u8]>) -> Result<()> {
     if config
         .sources
@@ -608,6 +655,37 @@ mod tests {
             .err()
             .expect("dispatch must fail")
             .to_string()
+    }
+
+    // ---- watched-dir dispatch: built in, params validated ------------------
+
+    #[test]
+    fn watched_dir_dispatch_requires_a_directory_source() {
+        let error = dispatch_error(&config_for(TransportKind::WatchedDir));
+        assert!(
+            error.contains("requires a directory source"),
+            "got: {error}"
+        );
+    }
+
+    #[test]
+    fn watched_dir_dispatch_rejects_state_and_stdin_registers() {
+        let mut config = config_for(TransportKind::WatchedDir);
+        config.sources = vec![std::path::PathBuf::from("-")];
+        let error = dispatch_error(&config);
+        assert!(error.contains("not '-'"), "got: {error}");
+
+        let dir = tempfile::tempdir().unwrap();
+        config.sources = vec![dir.path().to_path_buf()];
+        config.state = Some(dir.path().join("state.psbt"));
+        let error = dispatch_error(&config);
+        assert!(
+            error.contains("the directory is the register"),
+            "got: {error}"
+        );
+
+        config.state = None;
+        assert!(build_transport(&config).is_ok());
     }
 
     // ---- feature-OFF dispatch: the precise rebuild hint -------------------

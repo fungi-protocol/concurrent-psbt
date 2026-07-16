@@ -352,11 +352,15 @@ pub struct SyncConfig {
 }
 
 impl SyncConfig {
-    /// Whether this sync runs over a real network transport (anything other than
-    /// the default file/dir `local` transport). Network syncs go through
-    /// `commands::sync::build_transport` rather than the plain local file path.
+    /// Whether this sync runs over a real network transport (anything other
+    /// than the built-in filesystem transports, `local` and `watched-dir`).
+    /// Network syncs go through `commands::sync::build_transport` rather than
+    /// the plain local file path.
     pub(crate) fn uses_network(&self) -> bool {
-        self.transport != TransportKind::Local
+        !matches!(
+            self.transport,
+            TransportKind::Local | TransportKind::WatchedDir
+        )
     }
 }
 
@@ -368,6 +372,12 @@ impl SyncConfig {
 pub enum TransportKind {
     /// File/dir transport: positional PSBT sources plus `--state` (the default).
     Local,
+    /// A shared directory as a write-once content-addressed register (built
+    /// in, like `local`): the first positional source is the directory, any
+    /// further sources are seed PSBTs. Files are only created and unlinked,
+    /// never overwritten, so any folder peers can both reach (USB stick,
+    /// synced folder) is a convergence channel.
+    WatchedDir,
     /// iroh-docs collaborative document (feature `iroh-sync`).
     Iroh,
     /// Tor onion-service transport (feature `arti`).

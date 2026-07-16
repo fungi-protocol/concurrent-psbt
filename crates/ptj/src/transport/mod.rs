@@ -12,6 +12,10 @@
 //! idempotent/commutative/associative, so ordering and duplicates cost nothing.
 
 pub(crate) mod local;
+// A shared directory as a write-once content-addressed register: the
+// filesystem spelling of replace-by-LUB (new files + atomic link/unlink,
+// never an overwrite).
+pub(crate) mod watched_dir;
 // Out-of-process plugin host: spawn a plugin binary (its OWN lockfile — for
 // transport stacks that cannot share this workspace's lock) and drive it over
 // child stdio via Cap'n Proto RPC (wire contract: transport-plugin-api). The
@@ -26,6 +30,7 @@ pub mod plugin;
 pub(crate) mod signaling;
 
 pub(crate) use local::LocalTransport;
+pub(crate) use watched_dir::WatchedDirTransport;
 // `Transport` is re-exported here so `use crate::transport::{LocalTransport,
 // Transport};` call sites keep resolving; `Message` is served by the `message`
 // submodule shim below (the only path any call site imports it from).

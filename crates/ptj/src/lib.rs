@@ -52,13 +52,26 @@ pub fn run_or_write_with_stdin(cli: cli::Cli, stdin: Option<&[u8]>) -> Result<Op
         if config.uses_network() {
             return Err(Error::new("network sync does not support --ongoing yet"));
         }
+        if config.transport == cli::TransportKind::WatchedDir {
+            if output_path.is_some() {
+                return Err(Error::new(
+                    "ongoing watched-dir sync writes into the register directory; drop -o/--state",
+                ));
+            }
+            return run_ongoing_watched_dir(config, stdin);
+        }
         let path = output_path.ok_or_else(|| {
             Error::new("ongoing sync requires --state or --output-file to update")
         })?;
         return run_ongoing_sync(config, stdin, &path, output_file_format);
     }
     if let Some(path) = output_path {
-        if matches!(&cli.command, cli::Command::Sync(config) if config.uses_network()) {
+        // Every non-`local` sync transport owns its own publish target (the
+        // network channel, the watched-dir register), so `-o` just captures
+        // the returned join; only the `local` transport routes the write
+        // through the runner below.
+        if matches!(&cli.command, cli::Command::Sync(config) if config.transport != cli::TransportKind::Local)
+        {
             let command = cli.command;
             io::with_file_lock(&path, || {
                 let output = commands::run_with_stdin(command, stdin)?;
@@ -84,6 +97,72 @@ pub fn run_or_write_with_stdin(cli: cli::Cli, stdin: Option<&[u8]>) -> Result<Op
     } else {
         let output = commands::run_with_stdin(cli.command, stdin)?;
         Ok(Some(output))
+    }
+}
+
+/// The `--ongoing` loop for the watched-dir register: notify-watch the
+/// register directory (and any seed sources) and run one tolerant convergence
+/// step per change burst. No state file and no lock — the register's
+/// write-once link/unlink protocol makes concurrent steppers safe — so this
+/// is `run_ongoing_sync` minus the runner-owned publish target.
+fn run_ongoing_watched_dir(
+    config: cli::SyncConfig,
+    stdin: Option<&[u8]>,
+) -> Result<Option<String>> {
+    use std::sync::mpsc::{RecvTimeoutError, channel};
+
+    use notify::{RecursiveMode, Watcher as _};
+
+    commands::validate_ongoing_sync(&config, stdin)?;
+
+    // The first step runs before the watcher exists: it validates the
+    // invocation and CREATES the register directory, which the watcher needs.
+    // A change landing in that gap is caught by the poll-interval fallback (a
+    // missed event can never wedge the loop).
+    commands::run_sync_over_watched_dir(&config)?;
+    let mut iterations = 1usize;
+    if config.max_iterations.is_some_and(|max| iterations >= max) {
+        return Ok(None);
+    }
+
+    let (tx, rx) = channel();
+    let mut watcher = notify::recommended_watcher(move |event| {
+        // A closed receiver just means the loop has exited; drop the event.
+        let _ = tx.send(event);
+    })
+    .map_err(|error| Error::new(format!("ongoing sync: building file watcher: {error}")))?;
+    for source in &config.sources {
+        watcher
+            .watch(source, RecursiveMode::Recursive)
+            .map_err(|error| {
+                Error::new(format!(
+                    "ongoing sync: watching {}: {error}",
+                    source.display()
+                ))
+            })?;
+    }
+
+    let poll_interval = commands::sync_poll_interval(&config);
+    loop {
+        // Park until a change event arrives, or the poll-interval fallback
+        // fires; drain the queue so a burst coalesces into one step. Our own
+        // publish wakes the loop once more, collects only the file it just
+        // wrote, and re-links the same name (EEXIST, no mutation) — so the
+        // loop quiesces instead of ping-ponging.
+        match rx.recv_timeout(poll_interval) {
+            Ok(_event) => {
+                while rx.try_recv().is_ok() {}
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(Error::new("ongoing sync: file watcher stopped unexpectedly"));
+            }
+        }
+        commands::run_sync_over_watched_dir(&config)?;
+        iterations += 1;
+        if config.max_iterations.is_some_and(|max| iterations >= max) {
+            return Ok(None);
+        }
     }
 }
 

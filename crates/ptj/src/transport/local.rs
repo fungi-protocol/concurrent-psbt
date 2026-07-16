@@ -161,7 +161,9 @@ fn single_psbt_output_bytes(output: &str) -> Result<Vec<u8>> {
         .map_err(|error| Error::new(format!("decoding command output as PSBT base64: {error}")))
 }
 
-fn psbt_files_in_directory(directory: &Path) -> Result<Vec<PathBuf>> {
+// `pub(super)`: the watched-dir transport reuses the same sorted *.psbt scan
+// and source expansion, so the two directory readings cannot drift apart.
+pub(super) fn psbt_files_in_directory(directory: &Path) -> Result<Vec<PathBuf>> {
     let entries = std::fs::read_dir(directory).map_err(|error| {
         Error::new(format!(
             "reading directory {}: {error}",
@@ -188,7 +190,7 @@ fn psbt_files_in_directory(directory: &Path) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
-fn psbt_paths_from_sources(sources: &[PathBuf]) -> Result<Vec<PathBuf>> {
+pub(super) fn psbt_paths_from_sources(sources: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     for source in sources {
         if io::is_stdin_path(source) {

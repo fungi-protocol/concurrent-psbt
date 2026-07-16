@@ -85,6 +85,19 @@ pub(crate) fn run_sync_over_local(
     Ok(())
 }
 
+/// One tolerant convergence step over the watched-dir register, for the
+/// runner's `--ongoing` loop: an empty register parks the loop rather than
+/// erroring (the CLI's one-shot path stays strict). No file lock — the
+/// register's write-once link/unlink protocol needs none.
+pub(crate) fn run_sync_over_watched_dir(config: &crate::cli::SyncConfig) -> Result<()> {
+    let mut transport = sync::watched_dir_transport(config, None)?;
+    sync::drive_async(async {
+        sync::sync_step_allow_empty(&mut transport)
+            .await
+            .map(|_| ())
+    })
+}
+
 pub(crate) fn validate_ongoing_sync(
     config: &crate::cli::SyncConfig,
     stdin: Option<&[u8]>,

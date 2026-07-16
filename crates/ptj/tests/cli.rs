@@ -1252,6 +1252,141 @@ fn sync_ongoing_can_run_a_bounded_poll_and_update_state() {
     assert_eq!(updated.global.output_count, 2);
 }
 
+/// The watched-dir register: a sync step replaces the fragments it folded
+/// with one content-addressed join file — never overwriting, only creating
+/// the new file and unlinking the subsumed ones.
+#[test]
+fn sync_watched_dir_replaces_register_fragments_with_their_join() {
+    let temp = tempfile::tempdir().unwrap();
+    let register = temp.path().join("register");
+    std::fs::create_dir(&register).unwrap();
+    write_psbt(&register, "a.psbt", create_psbt(TXID, 0, 1, 50_000));
+    write_psbt(
+        &register,
+        "b.psbt",
+        create_psbt(
+            "0000000000000000000000000000000000000000000000000000000000000002",
+            1,
+            2,
+            70_000,
+        ),
+    );
+
+    let cli = Cli::try_parse_from([
+        "ptj",
+        "sync",
+        "--transport",
+        "watched-dir",
+        path_str(&register),
+    ])
+    .unwrap();
+    let joined = decode_psbt(&ptj::run_or_write(cli).unwrap().unwrap());
+    assert_eq!(joined.global.input_count, 2);
+
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&register)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    files.sort();
+    assert_eq!(files.len(), 1, "{files:?}");
+    let stored = decode_psbt(&std::fs::read_to_string(&files[0]).unwrap());
+    assert_eq!(stored.global.input_count, 2);
+    // The surviving name is the sha256 of the file's bytes.
+    use psbt_v2::bitcoin::hashes::{Hash as _, sha256};
+    let expected = format!(
+        "{}.psbt",
+        sha256::Hash::hash(&std::fs::read(&files[0]).unwrap())
+    );
+    assert_eq!(files[0].file_name().unwrap().to_str().unwrap(), expected);
+}
+
+/// Seed sources fold into the register (published as part of the join) but
+/// are never pruned from where they live; `--ongoing --max-iterations` gives
+/// the bounded daemon shape, with no `--state` file anywhere.
+#[test]
+fn sync_watched_dir_ongoing_folds_seeds_into_the_register() {
+    let temp = tempfile::tempdir().unwrap();
+    let register = temp.path().join("register");
+    let seed = write_psbt(temp.path(), "seed.psbt", create_psbt(TXID, 0, 1, 50_000));
+
+    let cli = Cli::try_parse_from([
+        "ptj",
+        "sync",
+        "--ongoing",
+        "--max-iterations",
+        "1",
+        "--poll-interval-ms",
+        "1",
+        "--transport",
+        "watched-dir",
+        path_str(&register),
+        path_str(&seed),
+    ])
+    .unwrap();
+    assert_eq!(ptj::run_or_write(cli).unwrap(), None);
+
+    assert!(seed.is_file(), "seed sources are never pruned");
+    let files: Vec<PathBuf> = std::fs::read_dir(&register)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 1, "{files:?}");
+    let stored = decode_psbt(&std::fs::read_to_string(&files[0]).unwrap());
+    assert_eq!(stored.global.input_count, 1);
+}
+
+/// The register owns its state: `--state`/`-o` combinations are refused with
+/// the contract spelled out, and the transport parses from the CLI name.
+#[test]
+fn sync_watched_dir_rejects_runner_state_files() {
+    let parsed =
+        Cli::try_parse_from(["ptj", "sync", "--transport", "watched-dir", "register"]).unwrap();
+    let Command::Sync(config) = &parsed.command else {
+        panic!("expected sync command");
+    };
+    assert_eq!(config.transport, ptj::cli::TransportKind::WatchedDir);
+
+    let temp = tempfile::tempdir().unwrap();
+    let register = temp.path().join("register");
+    let state = temp.path().join("state.psbt");
+    let error = ptj::run_or_write(
+        Cli::try_parse_from([
+            "ptj",
+            "sync",
+            "--transport",
+            "watched-dir",
+            "--state",
+            path_str(&state),
+            path_str(&register),
+        ])
+        .unwrap(),
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("the directory is the register"),
+        "got: {error}"
+    );
+
+    let error = ptj::run_or_write(
+        Cli::try_parse_from([
+            "ptj",
+            "sync",
+            "--ongoing",
+            "--transport",
+            "watched-dir",
+            "--state",
+            path_str(&state),
+            path_str(&register),
+        ])
+        .unwrap(),
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("drop -o/--state"),
+        "got: {error}"
+    );
+}
+
 #[test]
 fn sync_output_can_replace_a_source_file_after_joining() {
     let temp = tempfile::tempdir().unwrap();

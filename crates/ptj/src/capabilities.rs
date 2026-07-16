@@ -163,6 +163,15 @@ pub fn catalog() -> Vec<TransportCapability> {
             pairing: Pairing::None,
             unavailable: None,
         },
+        // Built in alongside `local` (no provider crate, no feature gate):
+        // a shared directory as a write-once content-addressed register.
+        TransportCapability {
+            kind: "watched-dir",
+            provider: None,
+            channel: ChannelSemantics::Local,
+            pairing: Pairing::None,
+            unavailable: None,
+        },
         TransportCapability {
             kind: "iroh",
             provider: Some("transport-iroh"),
@@ -322,8 +331,18 @@ mod tests {
         deduped.dedup();
         assert_eq!(kinds, deduped, "duplicate kind in the catalog");
         for kind in [
-            "local", "iroh", "arti", "nym", "emissary", "mdk", "str0m", "webrtc-rs",
-            "payjoin-dir", "plugin", "nostr",
+            "local",
+            "watched-dir",
+            "iroh",
+            "arti",
+            "nym",
+            "emissary",
+            "mdk",
+            "str0m",
+            "webrtc-rs",
+            "payjoin-dir",
+            "plugin",
+            "nostr",
         ] {
             assert!(kinds.contains(&kind), "missing kind {kind}");
         }
@@ -336,6 +355,7 @@ mod tests {
         for capability in catalog() {
             let expected = match capability.kind {
                 "local" => true,
+                "watched-dir" => true,
                 "iroh" => cfg!(feature = "iroh-sync"),
                 "arti" => cfg!(feature = "arti"),
                 "nym" => cfg!(feature = "nym"),
