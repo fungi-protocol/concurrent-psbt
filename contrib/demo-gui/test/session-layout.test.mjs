@@ -405,6 +405,12 @@ test("distribution is need-based: session changes auto-broadcast to stale replic
   assert.match(app, /if \(ok\) settleSessionDelivery\(sessionObject\.key, sentTo, content\.key\);/);
   // Sync now survives — demoted to the demonstration/debugging affordance.
   assert.match(app, /"Sync now",\n\s*"Demonstration\/debugging: broadcasting is automatic/);
+  // …and it IS the manual retry the tooltip promises: it un-burns the
+  // session's once-per-value attempts so reconciliation re-broadcasts.
+  const manualStart = app.indexOf("async function syncSessionOverPeer");
+  const manualSlice = app.slice(manualStart, app.indexOf("// --- need-based auto-broadcast", manualStart));
+  assert.match(manualSlice, /broadcastAttempts\.delete\(attempt\)/);
+  assert.match(manualSlice, /attempt\.startsWith\(`\$\{sessionKey\}→`\)/);
 });
 
 test("a mid-drag scroll re-anchors the wire to the source card", () => {

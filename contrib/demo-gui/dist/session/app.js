@@ -3523,6 +3523,13 @@ async function syncSessionOverPeer(sessionKey, peerKey) {
     const sessionObject = sessionByKey(objects, sessionKey);
     if (!sessionObject)
         return;
+    // "Sync now" is also the manual retry the tooltip promises: un-burn this
+    // session's broadcast attempts so the reconciliation pass re-broadcasts to
+    // every replica still marked stale (a burned attempt otherwise runs once).
+    for (const attempt of broadcastAttempts) {
+        if (attempt.startsWith(`${sessionKey}→`))
+            broadcastAttempts.delete(attempt);
+    }
     const peer = peerKey ? peerByKey(objects, peerKey) : null;
     const memberPeer = sessionObject.peerKeys
         .map((key) => usablePeerForSync(peerByKey(objects, key)))
