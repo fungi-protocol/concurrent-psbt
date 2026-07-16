@@ -25,7 +25,7 @@ import { amountBits, amountSpanParts, DETAIL_LEVELS, elisionLabel, fragmentBadge
 import { addressFromScript } from "./encoding.js";
 import { classifyPaste, mintFromPaste, SAMPLE_PASTES, } from "./ingest.js";
 import { actionState, addBridge, authorizePeerOnSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, enrichPayment, idleWire, mergeSessions, mineFragmentKeys, writeSessionContent, mintPeer, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, sessionByKey, sessionFocus, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
-import { laneLayout } from "./layout.js";
+import { curveBetween, laneLayout, } from "./layout.js";
 import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, toggledBitfieldValue, TX_MODIFIABLE_BITS, validateEditor, violationsFromServer, } from "./editor.js";
 import { descriptorColorKey, groupColorKey, paletteColor, paletteRegistry, peerColorKey, } from "./palette.js";
 const backend = new HttpBackend();
@@ -2938,65 +2938,54 @@ async function listPayments(event) {
 // --- persistent wire overlay --------------------------------------------------
 // The standing edges of the wire metaphor: Mine (the local network peer)
 // sees every session register, and each remote peer is wired to the
-// sessions whose peer set contains it. Drawn as one SVG across the spatial
-// workbench, redrawn after every render and on resize/scroll. The overlay
-// is pointer-transparent — the cards beneath stay interactive; the
-// transient drag line and pending-queue chips are separate mechanisms.
-function overlayCurve(x1, y1, x2, y2) {
-    const midY = (y1 + y2) / 2;
-    return `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+// sessions whose peer set contains it. Edges draw entirely from the SAME
+// laneLayout rects that placed the cards — no DOM measurement — so the SVG
+// (viewBox = world coordinates) scrolls and resizes with the world for
+// free. The overlay is pointer-transparent; the transient drag line is a
+// separate client-coordinate mechanism.
+// The layout rect a wire endpoint occupies on the canvas, or null when the
+// endpoint doesn't render there (payments/utxos live in the objects panel).
+function canvasRectFor(ref) {
+    if (!canvasLayout)
+        return null;
+    // A bridged peer group renders as ONE card keyed by its first member.
+    const key = ref.kind === "peer"
+        ? `peer:${bridgeGroupContaining(objects, ref.key)[0] ?? ref.key}`
+        : ref.kind === "session" || ref.kind === "fragment"
+            ? `${ref.kind}:${ref.key}`
+            : null;
+    return key === null ? null : (canvasLayout.positions.get(key) ?? null);
 }
 function drawWireOverlay() {
     const overlay = document.getElementById("wireOverlay");
     if (!overlay)
         return;
-    const world = el("canvasWorld");
-    const base = world.getBoundingClientRect();
-    overlay.setAttribute("viewBox", `0 0 ${base.width} ${base.height}`);
     overlay.textContent = "";
-    // Focus mode hides the whole canvas; hidden endpoints measure as
-    // zero-rects, so the standing edges stand down with it.
-    if (focus.mode === "session")
+    // Focus mode swaps the canvas out; the standing edges stand down with it.
+    if (focus.mode === "session" || !canvasLayout)
         return;
-    const anchor = (node, edge) => {
-        const rect = node.getBoundingClientRect();
-        if (rect.width === 0 && rect.height === 0)
-            return null;
-        return {
-            x: rect.left + rect.width / 2 - base.left,
-            y: (edge === "top" ? rect.top : rect.bottom) - base.top,
-        };
-    };
+    overlay.setAttribute("viewBox", `0 0 ${canvasLayout.world.width} ${canvasLayout.world.height}`);
     const addEdge = (from, to, cls) => {
         if (!from || !to)
             return;
         const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        path.setAttribute("d", overlayCurve(from.x, from.y, to.x, to.y));
+        path.setAttribute("d", curveBetween(from, to));
         path.setAttribute("class", cls);
         overlay.append(path);
     };
-    const mine = world.querySelector(".session-mine-frame");
+    const mineFrame = canvasLayout.mineFrame;
     const seen = new Set();
     for (const sessionObject of objects.sessions) {
-        const container = world.querySelector(`[data-wire-kind="session"][data-wire-key="${sessionObject.key}"]`);
-        if (!container)
-            continue;
+        const container = canvasRectFor({ kind: "session", key: sessionObject.key });
         // Mine sits BELOW the sessions; its edges rise from the frame's top.
-        if (mine)
-            addEdge(anchor(mine, "top"), anchor(container, "bottom"), "session-edge-mine");
+        addEdge(mineFrame, container, "session-edge-mine");
         for (const peerKey of sessionObject.peerKeys) {
-            // A bridged peer group renders as ONE card keyed by its first member.
-            const cardKey = world.querySelector(`[data-wire-kind="peer"][data-wire-key="${peerKey}"]`)
-                ? peerKey
-                : bridgeGroupContaining(objects, peerKey)[0];
-            const peerCard = world.querySelector(`[data-wire-kind="peer"][data-wire-key="${cardKey}"]`);
-            if (!peerCard)
-                continue;
-            const edgeKey = `${cardKey}→${sessionObject.key}`;
+            const groupKey = bridgeGroupContaining(objects, peerKey)[0] ?? peerKey;
+            const edgeKey = `${groupKey}→${sessionObject.key}`;
             if (seen.has(edgeKey))
                 continue;
             seen.add(edgeKey);
-            addEdge(anchor(peerCard, "bottom"), anchor(container, "top"), "session-edge-auth");
+            addEdge(canvasRectFor({ kind: "peer", key: groupKey }), container, "session-edge-auth");
         }
     }
 }
@@ -3152,10 +3141,9 @@ function wireDom() {
         closeDrawer("assignIdsDrawer");
     });
     el("displayNetwork").addEventListener("change", render);
-    // Standing wire edges track card geometry, which shifts on viewport
-    // resizes and scrolls without a render.
-    window.addEventListener("resize", drawWireOverlay);
-    window.addEventListener("scroll", drawWireOverlay, true);
+    // Edges live in world coordinates, so scrolling needs nothing; a resize
+    // changes the layout's minWidth (the viewport), so the canvas re-lays out.
+    window.addEventListener("resize", () => render());
     el("wireJoinAll").addEventListener("click", () => void joinAllWires());
     el("wireClearAll").addEventListener("click", clearPendingWires);
     el("focusBack").addEventListener("click", () => {

@@ -173,15 +173,26 @@ test("standing wire edges: Mine sees every session, peers their authorized ones"
   const main = html.slice(html.indexOf("<main"), html.indexOf("</main>"));
   assert.match(main, /<svg id="wireOverlay" class="session-wire-overlay"/);
   assert.match(styles, /\.session-wire-overlay\s*\{[\s\S]*?pointer-events:\s*none;/);
+  // Edges draw from the SAME layout rects that placed the cards — never
+  // from DOM measurement — so the overlay scrolls with the world for free.
+  const overlayStart = app.indexOf("function canvasRectFor");
+  const overlayEnd = app.indexOf("function render(", overlayStart);
+  assert.ok(overlayStart >= 0 && overlayEnd > overlayStart, "overlay slice is bounded");
+  const overlay = app.slice(overlayStart, overlayEnd);
+  assert.doesNotMatch(overlay, /getBoundingClientRect/);
+  assert.match(overlay, /curveBetween\(from, to\)/);
+  assert.match(overlay, /viewBox[\s\S]*?canvasLayout\.world\.width/);
   // Both edge builders exist: Mine → every session container…
-  assert.match(app, /anchor\(mine, "top"\), anchor\(container, "bottom"\), "session-edge-mine"/);
-  // …and peer → each session whose peer set contains it.
-  assert.match(app, /sessionObject\.peerKeys/);
-  assert.match(app, /anchor\(peerCard, "bottom"\), anchor\(container, "top"\), "session-edge-auth"/);
-  // Redraw hooks: every render plus resize and scroll.
+  assert.match(overlay, /addEdge\(mineFrame, container, "session-edge-mine"\)/);
+  // …and peer → each session whose peer set contains it (bridge groups
+  // collapse to their first member's card, deduplicated).
+  assert.match(overlay, /sessionObject\.peerKeys/);
+  assert.match(overlay, /"session-edge-auth"/);
+  // Redraw hooks: every render; a resize re-lays the canvas out (the SVG
+  // lives in world coordinates, so scrolling needs no hook at all).
   assert.match(app, /drawWireOverlay\(\);\n\}/);
-  assert.match(app, /window\.addEventListener\("resize", drawWireOverlay\)/);
-  assert.match(app, /window\.addEventListener\("scroll", drawWireOverlay, true\)/);
+  assert.match(app, /window\.addEventListener\("resize", \(\) => render\(\)\)/);
+  assert.doesNotMatch(app, /addEventListener\("scroll", drawWireOverlay/);
   assert.match(styles, /\.session-edge-mine\s*\{/);
   assert.match(styles, /\.session-edge-auth\s*\{/);
 });
