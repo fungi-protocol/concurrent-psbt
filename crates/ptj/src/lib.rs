@@ -147,8 +147,9 @@ fn run_ongoing_watched_dir(
         // Park until a change event arrives, or the poll-interval fallback
         // fires; drain the queue so a burst coalesces into one step. Our own
         // publish wakes the loop once more, collects only the file it just
-        // wrote, and re-links the same name (EEXIST, no mutation) — so the
-        // loop quiesces instead of ping-ponging.
+        // wrote, and finds that name already present — publish performs no
+        // directory mutation at all, so the loop quiesces instead of
+        // ping-ponging on its own writes.
         match rx.recv_timeout(poll_interval) {
             Ok(_event) => {
                 while rx.try_recv().is_ok() {}

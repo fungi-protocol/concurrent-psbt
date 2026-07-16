@@ -1302,7 +1302,9 @@ fn sync_watched_dir_replaces_register_fragments_with_their_join() {
 
 /// Seed sources fold into the register (published as part of the join) but
 /// are never pruned from where they live; `--ongoing --max-iterations` gives
-/// the bounded daemon shape, with no `--state` file anywhere.
+/// the bounded daemon shape, with no `--state` file anywhere. Two iterations,
+/// so the second one runs against the already-converged register — the
+/// quiescent no-op step the watch loop settles into.
 #[test]
 fn sync_watched_dir_ongoing_folds_seeds_into_the_register() {
     let temp = tempfile::tempdir().unwrap();
@@ -1314,7 +1316,7 @@ fn sync_watched_dir_ongoing_folds_seeds_into_the_register() {
         "sync",
         "--ongoing",
         "--max-iterations",
-        "1",
+        "2",
         "--poll-interval-ms",
         "1",
         "--transport",

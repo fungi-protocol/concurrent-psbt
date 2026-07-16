@@ -87,7 +87,12 @@ impl WatchedDirTransport {
                     return Err(Error::new(format!("reading {}: {error}", path.display())));
                 }
             };
-            let psbt = io::parse_psbt_bytes(&path.display().to_string(), &raw)?;
+            // Quarantine by exclusion: a truncated or foreign `.psbt` (easy
+            // on sneakernet media) is skipped — never folded, so never
+            // pruned — instead of wedging every reader of the register.
+            let Ok(psbt) = io::parse_psbt_bytes(&path.display().to_string(), &raw) else {
+                continue;
+            };
             messages.push(io::encode_psbt(&psbt).into_bytes());
             folded.push(path);
         }
@@ -109,7 +114,10 @@ impl WatchedDirTransport {
     fn publish_dir(&mut self, message: Vec<u8>) -> Result<()> {
         // Only PSBTs persist, matching the local transport: in the sneakernet
         // setting negotiation rides inside the PSBT as proprietary fields.
+        // A non-PSBT publish subsumes nothing — drop the collected frontier
+        // so a later publish can never prune files its join does not contain.
         let Message::Psbt(payload) = Message::decode(&message)? else {
+            self.folded.clear();
             return Ok(());
         };
         let text = String::from_utf8(payload)
@@ -122,7 +130,21 @@ impl WatchedDirTransport {
         bytes.push(b'\n');
         let hash = sha256::Hash::hash(&bytes);
         let target = self.dir.join(format!("{hash}.psbt"));
-        link_new(&self.dir, &target, &bytes)?;
+        // Existence equals content under content-addressed names, so a
+        // present target makes the whole write a no-op (a concurrent prune
+        // of that name means a peer published a superseding join that holds
+        // this value). This is also what lets the ongoing watcher quiesce:
+        // a step that changes nothing performs zero directory mutations, so
+        // it cannot wake itself through its own temp-file churn.
+        if !target.exists() {
+            link_new(&self.dir, &target, &bytes)?;
+            // The join must be durably in the directory BEFORE the folded
+            // fragments are pruned: on a power cut the register may hold
+            // both, never neither. This ordering fsync is the one that
+            // guards data, so it is error-checked.
+            sync_dir(&self.dir)
+                .map_err(|error| Error::new(format!("syncing register directory: {error}")))?;
+        }
 
         // Replace-by-LUB: the published join subsumes everything this step
         // folded, so those register files can go. Only files actually read
@@ -140,11 +162,14 @@ impl WatchedDirTransport {
                 }
             }
         }
-        if let Ok(dir) = File::open(&self.dir) {
-            let _ = dir.sync_all();
-        }
+        // Best-effort: prunes are safe to lose (a replay just re-prunes).
+        let _ = sync_dir(&self.dir);
         Ok(())
     }
+}
+
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    File::open(dir)?.sync_all()
 }
 
 /// The write-once half of the protocol: create-new temp file, atomic
@@ -177,7 +202,19 @@ fn link_new(dir: &Path, target: &Path, bytes: &[u8]) -> Result<()> {
         }
     })();
     let _ = fs::remove_file(&temp_path);
-    result.map_err(|error| Error::new(format!("publishing {}: {error}", target.display())))
+    result.map_err(|error| {
+        // FAT/exFAT — the default format of most USB sticks — has no hard
+        // links; the OS reports that as a bare EPERM/ENOTSUP, so name the
+        // actual limitation.
+        let hint = match error.kind() {
+            std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Unsupported => {
+                " (does this filesystem support hard links? FAT/exFAT USB sticks do not — \
+                 use an ext4/APFS/NTFS location for the register)"
+            }
+            _ => "",
+        };
+        Error::new(format!("publishing {}: {error}{hint}", target.display()))
+    })
 }
 
 #[async_trait]
@@ -326,6 +363,53 @@ mod tests {
         let mut fresh = register(dir.path());
         drive_async(async { Ok(fresh.publish(envelope(&psbt_spending(1))).await?) }).unwrap();
         assert_eq!(register_files(dir.path()).len(), 2);
+    }
+
+    #[test]
+    fn a_converged_step_mutates_nothing() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut transport = register(dir.path());
+        drive_async(async { Ok(transport.publish(envelope(&psbt_spending(0))).await?) }).unwrap();
+        let before = register_files(dir.path());
+        assert_eq!(before.len(), 1);
+
+        // The ongoing watcher's steady state: the register holds exactly the
+        // join, so a step collects it and publishes it right back. With the
+        // directory read-only the OS vetoes ANY create, link, or unlink — the
+        // step succeeds only if it truly performs zero mutations, which is
+        // what lets the watch loop quiesce instead of waking itself.
+        let writable = fs::metadata(dir.path()).unwrap().permissions();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        let mut stepper = register(dir.path());
+        let result = drive_async(async { sync_step(&mut stepper).await });
+        fs::set_permissions(dir.path(), writable).unwrap();
+        result.unwrap();
+        assert_eq!(register_files(dir.path()), before);
+    }
+
+    #[test]
+    fn unparsable_register_files_are_quarantined_not_folded() {
+        let dir = tempfile::tempdir().unwrap();
+        let junk = dir.path().join("junk.psbt");
+        fs::write(&junk, b"not a psbt").unwrap();
+        let mut transport = register(dir.path());
+        drive_async(async { Ok(transport.publish(envelope(&psbt_spending(0))).await?) }).unwrap();
+        drive_async(async { Ok(transport.publish(envelope(&psbt_spending(1))).await?) }).unwrap();
+
+        let mut stepper = register(dir.path());
+        let (joined, _messages) = drive_async(async { sync_step(&mut stepper).await }).unwrap();
+        assert_eq!(joined.inputs.len(), 2);
+
+        // The garbage neither wedged the fold nor entered it: the two real
+        // fragments were replaced by their join while junk.psbt sits in the
+        // register untouched — excluded from the fold, so excluded from the
+        // prune.
+        let files = register_files(dir.path());
+        assert_eq!(files.len(), 2, "{files:?}");
+        assert!(files.contains(&junk));
+        assert_eq!(fs::read(&junk).unwrap(), b"not a psbt");
     }
 
     #[test]
