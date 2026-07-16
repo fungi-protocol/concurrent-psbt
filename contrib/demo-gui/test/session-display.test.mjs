@@ -544,6 +544,24 @@ test("rowFacePairs is the curated level-3 subset, not the raw dump", () => {
   assert.equal(input[2].value, "witness utxo");
   assert.equal(input[3].value, "unsigned");
 
+  // With a raw witness utxo the input facts carry the prevout's identity —
+  // address and type, the output-fact vocabulary; the amount stays on the
+  // row face.
+  const withPrevout = {
+    ...INSPECT,
+    raw: {
+      inputs: [[{ key_hex: "01", value_hex: "f04902000000000016" + P2WPKH, kind: "known" }], []],
+      outputs: [[], [], []],
+    },
+  };
+  const prevout = rowFacePairs(withPrevout, "input", 0, "regtest");
+  assert.deepEqual(
+    prevout.map((pair) => pair.label),
+    ["outpoint", "prevout address", "prevout type", "sequence", "utxo data", "signatures"],
+  );
+  assert.equal(prevout[1].value, "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080");
+  assert.match(prevout[2].value, /P2WPKH/);
+
   // Sparse input: no sequence pair, honest "none" for utxo data.
   const sparse = rowFacePairs(INSPECT, "input", 1, "regtest");
   assert.deepEqual(

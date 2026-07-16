@@ -910,6 +910,14 @@ export function rowFacePairs(
     const [input] = inputViews(inspect).slice(index, index + 1);
     if (!input) return pairs;
     if (input.outpointText) pairs.push({ label: "outpoint", value: input.outpointText });
+    // The prevout the input spends, when the PSBT carries it (witness utxo
+    // today): who is paying, in the same address/type vocabulary as the
+    // output facts. The amount stays on the row face — no duplicate here.
+    if (input.prevoutScriptHex) {
+      const prevoutAddress = addressFromScript(input.prevoutScriptHex, network);
+      if (prevoutAddress) pairs.push({ label: "prevout address", value: prevoutAddress });
+      pairs.push({ label: "prevout type", value: scriptTemplate(input.prevoutScriptHex).label });
+    }
     if (input.sequence) {
       const reading = sequenceReading(input.sequence);
       pairs.push({
