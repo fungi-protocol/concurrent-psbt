@@ -4191,9 +4191,16 @@ function carrierOverrides(carrier: PeerObject): {
 
 // A successful session broadcast means the carrier's replica (and, through
 // it, its whole bridge group) now holds the value — record that, so the
-// need-based auto-broadcast has nothing left to do for those peers.
-function settleSessionDelivery(sessionKey: string, carrier: PeerObject, fragmentKey: string): void {
-  objects = markReplicas(objects, sessionKey, bridgeGroupContaining(objects, carrier.key), fragmentKey);
+// need-based auto-broadcast has nothing left to do for those peers. The
+// group is the one captured when the payload was SENT: a peer bridged in
+// while the sync was in flight never received anything, and marking it
+// would silently suppress its broadcast until the register next advances.
+function settleSessionDelivery(
+  sessionKey: string,
+  deliveredPeerKeys: readonly string[],
+  fragmentKey: string,
+): void {
+  objects = markReplicas(objects, sessionKey, deliveredPeerKeys, fragmentKey);
   render();
 }
 
@@ -4228,6 +4235,7 @@ async function syncSessionOverPeer(sessionKey: string, peerKey: string | null): 
   // The state chip and results land in the sync drawer — open it, or the
   // container's Sync now reads as a dead button.
   revealPanel("syncResults");
+  const sentTo = carrier ? bridgeGroupContaining(objects, carrier.key) : [];
   const ok = await withBusy(
     [`session:${sessionKey}`, ...(carrier ? [`peer:${carrier.key}`] : [])],
     () =>
@@ -4237,7 +4245,7 @@ async function syncSessionOverPeer(sessionKey: string, peerKey: string | null): 
         `session ${sessionObject.name} (register ${content?.key ?? "empty"})`,
       ),
   );
-  if (ok && carrier && content) settleSessionDelivery(sessionKey, carrier, content.key);
+  if (ok && carrier && content) settleSessionDelivery(sessionKey, sentTo, content.key);
 }
 
 // --- need-based auto-broadcast ----------------------------------------------
@@ -4278,6 +4286,7 @@ async function autoBroadcast(
     `auto-broadcast: ${peer.name}'s replica of ${sessionObject.name} is behind — ` +
       `sending ${content.key} over ${overrides.transport}`,
   );
+  const sentTo = bridgeGroupContaining(objects, peer.key);
   const ok = await withBusy(
     [`session:${sessionObject.key}`, `peer:${peer.key}`],
     () =>
@@ -4287,7 +4296,7 @@ async function autoBroadcast(
         `auto-broadcast of ${sessionObject.name} to ${peer.name}`,
       ),
   );
-  if (ok) settleSessionDelivery(sessionObject.key, peer, content.key);
+  if (ok) settleSessionDelivery(sessionObject.key, sentTo, content.key);
 }
 
 // --- negotiation panel -----------------------------------------------------------

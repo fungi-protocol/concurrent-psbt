@@ -382,13 +382,18 @@ test("distribution is need-based: session changes auto-broadcast to stale replic
   const autoSlice = app.slice(autoStart, app.indexOf("// --- negotiation panel", autoStart));
   assert.match(autoSlice, /\{ \.\.\.syncFormSnapshot\(\), \.\.\.overrides \}/);
   // A successful delivery marks the carrier's whole bridge group as holding
-  // the value (manual Sync now and auto-broadcast share this settlement).
+  // the value (manual Sync now and auto-broadcast share this settlement) —
+  // the group CAPTURED WHEN THE PAYLOAD WAS SENT, never re-derived at settle
+  // time: a peer bridged in mid-flight received nothing, and marking it
+  // would silently suppress its broadcast.
   const settleStart = app.indexOf("function settleSessionDelivery");
   const settleSlice = app.slice(settleStart, app.indexOf("async function syncSessionOverPeer", settleStart));
-  assert.match(
-    settleSlice,
-    /markReplicas\(objects, sessionKey, bridgeGroupContaining\(objects, carrier\.key\), fragmentKey\)/,
-  );
+  assert.match(settleSlice, /markReplicas\(objects, sessionKey, deliveredPeerKeys, fragmentKey\)/);
+  assert.doesNotMatch(settleSlice, /bridgeGroupContaining/);
+  assert.match(app, /const sentTo = carrier \? bridgeGroupContaining\(objects, carrier\.key\) : \[\];/);
+  assert.match(app, /const sentTo = bridgeGroupContaining\(objects, peer\.key\);/);
+  assert.match(app, /if \(ok && carrier && content\) settleSessionDelivery\(sessionKey, sentTo, content\.key\);/);
+  assert.match(app, /if \(ok\) settleSessionDelivery\(sessionObject\.key, sentTo, content\.key\);/);
   // Sync now survives — demoted to the demonstration/debugging affordance.
   assert.match(app, /"Sync now",\n\s*"Demonstration\/debugging: broadcasting is automatic/);
 });
