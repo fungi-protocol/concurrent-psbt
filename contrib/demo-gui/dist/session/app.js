@@ -2789,6 +2789,30 @@ function settleSessionFork(fork) {
     forkSessionResolve?.(fork);
     forkSessionResolve = null;
 }
+// The make-modifiable prompt (see makeUnorderedSelected): true = also set
+// TX_MODIFIABLE, false = just unordered, null = cancel the whole op.
+let makeModifiableResolve = null;
+function promptMakeModifiable(fragmentKey) {
+    const dialog = el("makeModifiableDialog");
+    el("makeModifiableDialogWhy").textContent =
+        `${fragmentKey} is not modifiable (TX_MODIFIABLE clear). Unordered alone only ` +
+            `changes how existing entries are identified — concurrent input/output adds also ` +
+            `need the modifiable flags. Set TX_MODIFIABLE (inputs + outputs) in the same go?`;
+    return new Promise((resolve) => {
+        // A re-prompt settles any dangling prompt AND closes its dialog —
+        // showModal() on an already-open dialog throws inside this executor.
+        settleMakeModifiable(null);
+        makeModifiableResolve = resolve;
+        dialog.showModal();
+    });
+}
+function settleMakeModifiable(choice) {
+    const dialog = el("makeModifiableDialog");
+    if (dialog.open)
+        dialog.close();
+    makeModifiableResolve?.(choice);
+    makeModifiableResolve = null;
+}
 // Resolve the seed to send for a fragment: undefined = the PSBT's own
 // records suffice; a string = the prompted seed; null = the user cancelled.
 async function sortSeedFor(fragment) {
@@ -2818,8 +2842,35 @@ async function makeUnorderedSelected() {
     if (!selected)
         return;
     try {
-        const minted = await addResponse(await backend.makeUnordered(selected[0].psbt), "make-unordered", `make-unordered of ${selected[0].key}`);
-        await settleMint("opsKeepOriginal", [selected[0].key], [minted.key]);
+        const source = selected[0];
+        // Unordered is only half of the concurrent constructor: without
+        // TX_MODIFIABLE the result still admits no concurrent adds. When the
+        // flags are clear, offer to set them in the same gesture — the raw
+        // edit chains onto the make-unordered result BEFORE the mint, so one
+        // fragment lands either way.
+        const summary = fragmentSummary(source.inspect);
+        const modifiable = summary.modifiableInputs === true || summary.modifiableOutputs === true;
+        let alsoModifiable = false;
+        if (summary.format === "bip370" && !modifiable) {
+            const choice = await promptMakeModifiable(source.key);
+            if (choice === null)
+                return; // cancelled: nothing minted
+            alsoModifiable = choice;
+        }
+        let response = await backend.makeUnordered(source.psbt);
+        let note = `make-unordered of ${source.key}`;
+        if (alsoModifiable) {
+            const edited = await backend.applyPsbtEdits(response.psbt, [
+                { map: "global", key: TX_MODIFIABLE_KEY_HEX, value: TX_MODIFIABLE_BOTH_HEX },
+            ]);
+            if (edited.psbt === undefined) {
+                throw new Error(edited.error ?? "the tx-modifiable raw edit failed save-time validation");
+            }
+            response = { psbt: edited.psbt, inspect: edited.inspect };
+            note += " + TX_MODIFIABLE set to both";
+        }
+        const minted = await addResponse(response, "make-unordered", note);
+        await settleMint("opsKeepOriginal", [source.key], [minted.key]);
         showStatus("", false);
     }
     catch (error) {
@@ -3582,6 +3633,17 @@ function wireDom() {
             settleSessionFork(false);
     });
     forkSessionDialog.addEventListener("cancel", () => settleSessionFork(false));
+    // The make-modifiable prompt is three-way: yes/no answer the question,
+    // ×/backdrop/Esc cancel the whole make-unordered op (nothing minted).
+    const makeModifiableDialog = el("makeModifiableDialog");
+    el("makeModifiableYes").addEventListener("click", () => settleMakeModifiable(true));
+    el("makeModifiableNo").addEventListener("click", () => settleMakeModifiable(false));
+    el("makeModifiableCancel").addEventListener("click", () => settleMakeModifiable(null));
+    makeModifiableDialog.addEventListener("click", (event) => {
+        if (event.target === makeModifiableDialog)
+            settleMakeModifiable(null);
+    });
+    makeModifiableDialog.addEventListener("cancel", () => settleMakeModifiable(null));
     // The payment-amount prompt settles the same way: confirm resolves sats,
     // cancel/backdrop/Esc resolve null (the txout intent is abandoned). A
     // non-positive or non-numeric confirm keeps the dialog open and says why.

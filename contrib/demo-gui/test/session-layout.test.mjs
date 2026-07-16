@@ -374,6 +374,24 @@ test("the sort seed is PSBT state: no ops-bar field, a prompt only when absent",
   assert.match(app, /reportValidity\(\)/);
 });
 
+test("make-unordered offers TX_MODIFIABLE in the same gesture when the flags are clear", () => {
+  // The prompt exists and opens only for a BIP 370 PSBT with the
+  // modifiable flags clear.
+  assert.match(html, /<dialog id="makeModifiableDialog"/);
+  const op = app.slice(
+    app.indexOf("async function makeUnorderedSelected"),
+    app.indexOf("// --- override fixes"),
+  );
+  assert.match(op, /summary\.format === "bip370" && !modifiable/);
+  // Three-way settle: cancel aborts the whole op (nothing minted)…
+  assert.match(op, /if \(choice === null\) return;/);
+  assert.match(app, /makeModifiableDialog\.addEventListener\("cancel", \(\) => settleMakeModifiable\(null\)\)/);
+  // …and the raw edit chains onto the make-unordered result BEFORE the
+  // mint, so one fragment lands either way.
+  assert.match(op, /applyPsbtEdits\(response\.psbt, \[\s*\n\s*\{ map: "global", key: TX_MODIFIABLE_KEY_HEX, value: TX_MODIFIABLE_BOTH_HEX \}/);
+  assert.match(op, /note \+= " \+ TX_MODIFIABLE set to both"/);
+});
+
 test("a bitcoin: URI mints a txout-intent fragment, prompting only for a missing amount", () => {
   // The paste path hands payment URIs to the shell (backend round-trip),
   // never to the node-graph mint.

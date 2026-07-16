@@ -577,6 +577,24 @@
       </div>
     </dialog>
 
+    <!-- Make-modifiable prompt: Make unordered on a BIP 370 PSBT whose
+         TX_MODIFIABLE flags are clear. Unordered alone only changes how
+         entries are identified — concurrent adds also need the modifiable
+         flags, so offer to set them in the same gesture. -->
+    <dialog id="makeModifiableDialog" class="session-modal" aria-labelledby="makeModifiableDialogTitle">
+      <div class="session-output-heading">
+        <h2 id="makeModifiableDialogTitle">Also make it modifiable?</h2>
+        <button id="makeModifiableCancel" type="button" aria-label="Cancel the make-unordered op">×</button>
+      </div>
+      <div class="session-modal-body">
+        <p id="makeModifiableDialogWhy" class="item-meta"></p>
+        <div class="session-card-actions">
+          <button id="makeModifiableNo" type="button" title="Make it unordered only; TX_MODIFIABLE stays clear">Just unordered</button>
+          <button id="makeModifiableYes" type="button" class="primary" title="Make it unordered AND set TX_MODIFIABLE (inputs + outputs) — the full concurrent constructor">Unordered + modifiable</button>
+        </div>
+      </div>
+    </dialog>
+
     <script type="module" src="dist/session/app.js?v=20260716-faker1"></script>
   </body>
 </html>
