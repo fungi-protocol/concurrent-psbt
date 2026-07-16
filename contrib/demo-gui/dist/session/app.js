@@ -3565,6 +3565,39 @@ async function syncSessionOverPeer(sessionKey, peerKey) {
 // and sync drawer, and "Sync now" survives as the demonstration/debugging
 // affordance and manual retry.
 const broadcastAttempts = new Set();
+// A carrier the auto path may drive: every transport parameter must be
+// derivable from the peer object itself. The manual-signaling transports
+// (str0m/webrtc-rs) are excluded even though Sync now can drive them — their
+// role and signal paths live in the sync form, and a background broadcast
+// riding whatever the form happens to hold would either fail (empty form,
+// burning the attempt) or silently handshake at the FORM's addresses
+// instead of the peer's. Skipped peers stay stale; Sync now is their path.
+function autoCarrierOverrides(peer) {
+    if (peer.transport === "str0m" || peer.transport === "webrtc-rs")
+        return null;
+    return carrierOverrides(peer);
+}
+// The auto path's request base: neutral defaults, NOT the live sync form.
+// A background broadcast must neither clobber a half-configured manual sync
+// nor inherit its residue (a stale state path or garbage wait-ms would poison
+// every broadcast). The carrier's overrides supply everything transport-
+// specific; the rest is empty.
+function autoSyncSnapshot(overrides) {
+    return {
+        transport: overrides.transport,
+        sources: overrides.sources ?? "",
+        state: "",
+        irohTicket: overrides.irohTicket ?? "",
+        irohTicketOut: overrides.irohTicketOut ?? false,
+        irohWaitMs: "",
+        webrtcRole: "",
+        signalOut: "",
+        signalIn: "",
+        webrtcBind: "",
+        iceServers: "",
+        signalTimeoutMs: "",
+    };
+}
 function scheduleAutoBroadcasts() {
     for (const sessionObject of objects.sessions) {
         const content = sessionObject.contentKey ? fragmentByKey(sessionObject.contentKey) : null;
@@ -3574,22 +3607,24 @@ function scheduleAutoBroadcasts() {
             const peer = usablePeerForSync(peerByKey(objects, stalePeerKey));
             if (!peer)
                 continue; // no drivable transport: Sync now stays the path
+            const overrides = autoCarrierOverrides(peer);
+            // The attempt burns only for a broadcast that actually launches —
+            // a manual-signaling peer skipped here must not lose its one shot.
+            if (!overrides)
+                continue;
             const attempt = `${sessionObject.key}→${peer.key}:${content.key}`;
             if (broadcastAttempts.has(attempt))
                 continue;
             broadcastAttempts.add(attempt);
-            void autoBroadcast(sessionObject, peer, content);
+            void autoBroadcast(sessionObject, peer, content, overrides);
         }
     }
 }
-async function autoBroadcast(sessionObject, peer, content) {
-    const overrides = carrierOverrides(peer);
-    if (!overrides)
-        return;
+async function autoBroadcast(sessionObject, peer, content, overrides) {
     logEvent(`auto-broadcast: ${peer.name}'s replica of ${sessionObject.name} is behind — ` +
         `sending ${content.key} over ${overrides.transport}`);
     const sentTo = bridgeGroupContaining(objects, peer.key);
-    const ok = await withBusy([`session:${sessionObject.key}`, `peer:${peer.key}`], () => runSyncRequest({ ...syncFormSnapshot(), ...overrides }, [content.psbt], `auto-broadcast of ${sessionObject.name} to ${peer.name}`));
+    const ok = await withBusy([`session:${sessionObject.key}`, `peer:${peer.key}`], () => runSyncRequest(autoSyncSnapshot(overrides), [content.psbt], `auto-broadcast of ${sessionObject.name} to ${peer.name}`));
     if (ok)
         settleSessionDelivery(sessionObject.key, sentTo, content.key);
 }

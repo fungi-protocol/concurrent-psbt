@@ -376,11 +376,20 @@ test("distribution is need-based: session changes auto-broadcast to stale replic
   assert.match(schedSlice, /staleReplicaPeers\(sessionObject\)/);
   assert.match(schedSlice, /broadcastAttempts\.has\(attempt\)\) continue/);
   assert.match(schedSlice, /broadcastAttempts\.add\(attempt\)/);
-  // The auto path composes its own snapshot from the carrier — a background
-  // broadcast must not clobber a half-configured manual sync form.
+  // Only self-describing carriers auto-broadcast (the manual-signaling
+  // transports ride the form, which a background call must not read), and
+  // a skipped carrier must not burn its once-per-value attempt.
+  assert.match(app, /if \(peer\.transport === "str0m" \|\| peer\.transport === "webrtc-rs"\) return null;/);
+  const overridesAt = schedSlice.indexOf("autoCarrierOverrides(peer)");
+  const burnAt = schedSlice.indexOf("broadcastAttempts.add(attempt)");
+  assert.ok(overridesAt >= 0 && overridesAt < burnAt, "carrier gate precedes the attempt burn");
+  // The auto path composes a NEUTRAL snapshot from the carrier — a
+  // background broadcast must not clobber a half-configured manual sync
+  // form, nor inherit its residue.
   const autoStart = app.indexOf("async function autoBroadcast");
   const autoSlice = app.slice(autoStart, app.indexOf("// --- negotiation panel", autoStart));
-  assert.match(autoSlice, /\{ \.\.\.syncFormSnapshot\(\), \.\.\.overrides \}/);
+  assert.match(autoSlice, /autoSyncSnapshot\(overrides\)/);
+  assert.doesNotMatch(autoSlice, /syncFormSnapshot\(\)/);
   // A successful delivery marks the carrier's whole bridge group as holding
   // the value (manual Sync now and auto-broadcast share this settlement) —
   // the group CAPTURED WHEN THE PAYLOAD WAS SENT, never re-derived at settle
