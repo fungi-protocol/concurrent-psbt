@@ -411,6 +411,13 @@ test("a local 'peer' presents as a disk location, not an identity", () => {
   assert.match(html, /<option value="local">local \(disk path/);
 });
 
+test("every path into the assign-ids panel parameterizes it first", () => {
+  // The bar toggle must not unhide the drawer raw: openAssignIds gates on
+  // the selection and renders the rows before revealing.
+  assert.match(app, /if \(id === "assignIdsDrawer" && openDrawerId\(\) !== id\) \{\s*\n\s*openAssignIds\(\);/);
+  assert.match(app, /el<HTMLButtonElement>\("opAssignIds"\)\.addEventListener\("click", openAssignIds\)/);
+});
+
 test("canvas cards are articles; the workbench viewport is focusable and named", () => {
   // The node layer is a div, not a list — cards must not be stray <li>.
   for (const fn of [

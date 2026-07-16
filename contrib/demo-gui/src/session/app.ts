@@ -4042,6 +4042,14 @@ function wireDom(): void {
         setAddDrawer(openDrawerId() !== "addDrawer");
         return;
       }
+      // The assign-ids panel is parameterized by the selected fragment;
+      // opening it from the bar takes the same gate as the ops-bar button,
+      // so it never opens blank (or armed at a stale fragment). A wrong
+      // selection reports its reason instead of showing a dead panel.
+      if (id === "assignIdsDrawer" && openDrawerId() !== id) {
+        openAssignIds();
+        return;
+      }
       setDrawer(openDrawerId() === id ? null : id);
     });
   }
