@@ -404,6 +404,16 @@ test("a local 'peer' presents as a disk location, not an identity", () => {
   assert.match(html, /<option value="local">local \(disk path/);
 });
 
+test("one queue drain at a time; busy cards hold interaction for real", () => {
+  // joinAllWires spans many awaits — a second press mid-drain must not
+  // re-plan and double-execute the queue…
+  assert.match(app, /if \(joinAllRunning\) return;/);
+  assert.match(app, /joinAllRunning = true;\s*\n\s*try \{/);
+  assert.match(app, /\} finally \{\s*\n\s*joinAllRunning = false;/);
+  // …and a card with an in-flight backend call takes no clicks/drags/focus.
+  assert.match(app, /node\.inert = true;/);
+});
+
 test("a join absorbed by its operand reports itself instead of looking broken", () => {
   // ⊥ ⊔ x = x: the result dedupes onto an operand's card, so every join
   // path routes its outcome through the reporter…

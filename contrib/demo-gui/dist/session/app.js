@@ -1033,7 +1033,14 @@ async function joinPendingWire(key) {
 // remaining wires run with consumed fragment endpoints remapped to their
 // cluster's result. Applied wires leave the queue; failed ones stay queued
 // (their cards pulse) so the user can retry or cancel.
+//
+// The drain spans many awaits, so a second toolbar press (or a pill click
+// routed here) mid-drain would re-plan and double-execute wires the first
+// pass is still applying — one drain runs at a time.
+let joinAllRunning = false;
 async function joinAllWires() {
+    if (joinAllRunning)
+        return;
     const wires = livePendingWires();
     const components = wireComponents(wires);
     if (!components.length) {
@@ -1051,45 +1058,51 @@ async function joinAllWires() {
     const consumed = new Set();
     let applied = 0;
     let failed = 0;
-    for (const component of components) {
-        const plan = componentPlan(component);
-        const remap = new Map();
-        for (const group of plan.joinGroups) {
-            const resultKey = await withBusy([
-                ...group.fragments.map((memberKey) => `fragment:${memberKey}`),
-                ...group.wires.map((wireEntry) => `edge:${wireKey(wireEntry.source, wireEntry.target)}`),
-            ], () => executeJoinGroup(group));
-            if (resultKey !== null) {
-                applied += group.wires.length;
-                for (const wireEntry of group.wires) {
+    joinAllRunning = true;
+    try {
+        for (const component of components) {
+            const plan = componentPlan(component);
+            const remap = new Map();
+            for (const group of plan.joinGroups) {
+                const resultKey = await withBusy([
+                    ...group.fragments.map((memberKey) => `fragment:${memberKey}`),
+                    ...group.wires.map((wireEntry) => `edge:${wireKey(wireEntry.source, wireEntry.target)}`),
+                ], () => executeJoinGroup(group));
+                if (resultKey !== null) {
+                    applied += group.wires.length;
+                    for (const wireEntry of group.wires) {
+                        consumed.add(wireKey(wireEntry.source, wireEntry.target));
+                    }
+                    for (const memberKey of group.fragments) {
+                        remap.set(`fragment:${memberKey}`, resultKey);
+                    }
+                }
+                else {
+                    failed += group.wires.length;
+                }
+            }
+            for (const wireEntry of plan.rest) {
+                // Session merges in this component record their result into the
+                // remap, so later wires follow the merged session.
+                const source = remapWireRef(wireEntry.source, remap);
+                const target = remapWireRef(wireEntry.target, remap);
+                const ok = await withBusy([
+                    busyToken(source),
+                    busyToken(target),
+                    `edge:${wireKey(wireEntry.source, wireEntry.target)}`,
+                ], () => executeWire(source, target, remap));
+                if (ok) {
+                    applied += 1;
                     consumed.add(wireKey(wireEntry.source, wireEntry.target));
                 }
-                for (const memberKey of group.fragments) {
-                    remap.set(`fragment:${memberKey}`, resultKey);
+                else {
+                    failed += 1;
                 }
             }
-            else {
-                failed += group.wires.length;
-            }
         }
-        for (const wireEntry of plan.rest) {
-            // Session merges in this component record their result into the
-            // remap, so later wires follow the merged session.
-            const source = remapWireRef(wireEntry.source, remap);
-            const target = remapWireRef(wireEntry.target, remap);
-            const ok = await withBusy([
-                busyToken(source),
-                busyToken(target),
-                `edge:${wireKey(wireEntry.source, wireEntry.target)}`,
-            ], () => executeWire(source, target, remap));
-            if (ok) {
-                applied += 1;
-                consumed.add(wireKey(wireEntry.source, wireEntry.target));
-            }
-            else {
-                failed += 1;
-            }
-        }
+    }
+    finally {
+        joinAllRunning = false;
     }
     pendingWires = pendingWires.filter((wireEntry) => !consumed.has(wireKey(wireEntry.source, wireEntry.target)));
     const summary = `Join applied ${applied} wire${applied === 1 ? "" : "s"} across ` +
@@ -1792,9 +1805,12 @@ function decorateWireTarget(node, ref) {
     }
     // A backend call is in flight against this node: pulse, announce, and
     // hold interaction until the promise settles (withBusy re-renders then).
+    // inert makes the hold real — no clicks, drags, or focus land on a card
+    // whose state is about to be replaced.
     if (inflight.has(busyToken(ref))) {
         node.classList.add("session-busy");
         node.setAttribute("aria-busy", "true");
+        node.inert = true;
     }
 }
 // --- spatial shelves and remaining objects -----------------------------------------
