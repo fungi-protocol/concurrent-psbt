@@ -12,13 +12,11 @@ import {
   dropFragmentKey,
   emptyObjects,
   enrichDescriptor,
-  enrichPayment,
   idleWire,
   fragmentSessionKeys,
   mergeSessions,
   mineFragmentKeys,
   mintDescriptor,
-  mintPayment,
   mintPeer,
   mintSession,
   componentPlan,
@@ -70,7 +68,7 @@ function ref(kind, key) {
 
 // --- object model -----------------------------------------------------------
 
-test("minting sessions, peers, payments, utxos, and descriptors is grow-only", () => {
+test("minting sessions, peers, utxos, and descriptors is grow-only", () => {
   let state = emptyObjects();
   const s1 = mintSession(state, "  alpha  ");
   state = s1.state;
@@ -84,20 +82,16 @@ test("minting sessions, peers, payments, utxos, and descriptors is grow-only", (
   assert.equal(p1.peer.name, "peer-2"); // blank names fall back to the key
   assert.equal(p1.peer.identity, "doc-ticket");
 
-  const pay = mintPayment(state, "bitcoin:bcrt1qx?amount=0.001", "bcrt1qx", 100000, "lunch");
-  state = pay.state;
-  assert.equal(pay.payment.key, "payment-3");
-
   const utxo = mintUtxo(state, "02000000...");
   state = utxo.state;
-  assert.equal(utxo.utxo.key, "utxo-4");
+  assert.equal(utxo.utxo.key, "utxo-3");
   // Deep decode is a backend seam: minted spendable outputs stay pending.
   assert.equal(utxo.utxo.txid, null);
   assert.equal(utxo.utxo.vout, null);
 
   const desc = mintDescriptor(state, " wpkh(xpub6...) ", false);
   state = desc.state;
-  assert.equal(desc.descriptor.key, "descriptor-5");
+  assert.equal(desc.descriptor.key, "descriptor-4");
   assert.equal(desc.descriptor.descriptor, "wpkh(xpub6...)");
 
   assert.equal(sessionByKey(state, "session-1").name, "alpha");
@@ -214,15 +208,8 @@ test("peer-session wiring is authorization: allowed, backed, transport-agnostic"
   assert.equal(nostr.backed, true);
 });
 
-test("payment and utxo wiring rows", () => {
+test("utxo wiring rows", () => {
   const state = emptyObjects();
-  const attach = wireVerdict(ref("payment", "payment-1"), ref("fragment", "psbt-1"), state);
-  assert.equal(attach.kind, "attach-payment");
-  assert.equal(attach.allowed, true);
-  assert.equal(attach.backed, true);
-  // Symmetric.
-  assert.equal(wireVerdict(ref("fragment", "psbt-1"), ref("payment", "payment-1"), state).kind, "attach-payment");
-
   const create = wireVerdict(ref("utxo", "utxo-1"), ref("create", "create"), state);
   assert.equal(create.kind, "add-create-input");
   assert.equal(create.allowed, true);
@@ -231,10 +218,6 @@ test("payment and utxo wiring rows", () => {
   const toFragment = wireVerdict(ref("utxo", "utxo-1"), ref("fragment", "psbt-1"), state);
   assert.equal(toFragment.allowed, false);
   assert.match(toFragment.reason, /create form/);
-
-  const toSession = wireVerdict(ref("payment", "payment-1"), ref("session", "session-1"), state);
-  assert.equal(toSession.allowed, false);
-  assert.match(toSession.reason, /to a fragment/);
 });
 
 test("session merge and peer bridge are wired; attribute-scripts still names its seam", () => {
@@ -316,14 +299,12 @@ test("wire verdicts carry concrete action labels built from display names", () =
   let state = emptyObjects();
   state = mintSession(state, "lunch").state;
   state = mintPeer(state, "alice", "iroh", "doc-abc").state;
-  state = mintPayment(state, "bitcoin:bcrt1qx?amount=0.001", "bcrt1qx", 100000, "rent").state;
   state = mintUtxo(state, "020000dead").state;
   state = mintDescriptor(state, "wpkh(xpub6...)", false).state;
 
   assert.equal(nodeDisplayName(ref("fragment", "psbt-7"), state), "psbt-7");
   assert.equal(nodeDisplayName(ref("session", "session-1"), state), "lunch");
   assert.equal(nodeDisplayName(ref("peer", "peer-2"), state), "alice");
-  assert.equal(nodeDisplayName(ref("payment", "payment-3"), state), "rent");
   // Unknown keys and label-less objects fall back to the key.
   assert.equal(nodeDisplayName(ref("session", "session-404"), state), "session-404");
 
@@ -345,12 +326,8 @@ test("wire verdicts carry concrete action labels built from display names", () =
     "Authorize peer alice on session lunch",
   );
   assert.equal(
-    wireVerdict(ref("payment", "payment-3"), ref("fragment", "psbt-1"), state).label,
-    "Attach payment rent to psbt-1",
-  );
-  assert.equal(
-    wireVerdict(ref("utxo", "utxo-4"), ref("create", "create"), state).label,
-    "Use utxo-4 as a create-form input",
+    wireVerdict(ref("utxo", "utxo-3"), ref("create", "create"), state).label,
+    "Use utxo-3 as a create-form input",
   );
   assert.equal(
     wireVerdict(ref("session", "session-1"), ref("session", "session-9"), state).label,
@@ -361,8 +338,8 @@ test("wire verdicts carry concrete action labels built from display names", () =
     "Bridge peers alice, peer-9",
   );
   assert.equal(
-    wireVerdict(ref("descriptor", "descriptor-5"), ref("fragment", "psbt-1"), state).label,
-    "Attribute descriptor-5 scripts to psbt-1",
+    wireVerdict(ref("descriptor", "descriptor-4"), ref("fragment", "psbt-1"), state).label,
+    "Attribute descriptor-4 scripts to psbt-1",
   );
 
   // Undefined pairs carry no action label.
@@ -977,36 +954,6 @@ test("enrichDescriptor folds the miniscript details into the shallow node", () =
   assert.deepEqual(enrichDescriptor(state, "descriptor-404", { kind: "descriptor" }), state);
 });
 
-test("enrichPayment folds variant, methods, and description in", () => {
-  let state = emptyObjects();
-  state = mintPayment(state, "bitcoin:bcrt1qx?amount=0.001", "bcrt1qx", 100000, "lunch").state;
-
-  state = enrichPayment(state, "payment-1", {
-    kind: "payment",
-    variant: "fixed_amount",
-    description: "lunch money",
-    methods: [
-      { type: "onchain", address: "bcrt1qx" },
-      { type: "bolt11", invoice: "lnbcrt1..." },
-      { type: "cashu" },
-      { no_type: true },
-    ],
-  });
-
-  const enriched = state.payments[0];
-  assert.equal(enriched.variant, "fixed_amount");
-  assert.equal(enriched.description, "lunch money");
-  assert.deepEqual(enriched.methods, [
-    "onchain: bcrt1qx",
-    "bolt11: lnbcrt1...",
-    "cashu",
-  ]);
-  // The shallow-parsed URI fields stay authoritative for what they carried.
-  assert.equal(enriched.address, "bcrt1qx");
-  assert.equal(enriched.amountSats, 100000);
-
-  assert.deepEqual(enrichPayment(state, "payment-1", { kind: "transaction" }), state);
-});
 
 test("applyTxOutputs updates the pending node and mints per-output siblings", () => {
   let state = emptyObjects();

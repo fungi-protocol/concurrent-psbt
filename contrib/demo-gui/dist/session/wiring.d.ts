@@ -1,6 +1,6 @@
 import type { ClassifyResponse } from "../shared-frontend/core/backend.js";
 import { type FragmentSummary, type SyncTransport } from "./state.js";
-export type NodeKind = "fragment" | "session" | "peer" | "payment" | "utxo" | "descriptor" | "create";
+export type NodeKind = "fragment" | "session" | "peer" | "utxo" | "descriptor" | "create";
 export interface NodeRef {
     kind: NodeKind;
     key: string;
@@ -16,16 +16,6 @@ export interface PeerObject {
     name: string;
     transport: SyncTransport | "nostr" | "unknown";
     identity: string;
-}
-export interface PaymentObject {
-    key: string;
-    uri: string;
-    address: string;
-    amountSats: number;
-    label: string;
-    variant: string | null;
-    methods: string[];
-    description: string | null;
 }
 export interface UtxoObject {
     key: string;
@@ -58,7 +48,6 @@ export interface PeerBridge {
 export interface ObjectsState {
     sessions: SessionObject[];
     peers: PeerObject[];
-    payments: PaymentObject[];
     utxos: UtxoObject[];
     descriptors: DescriptorObject[];
     bridges: PeerBridge[];
@@ -74,10 +63,6 @@ export declare function mintPeer(state: ObjectsState, name: string, transport: P
     peer: PeerObject;
     created: boolean;
 };
-export declare function mintPayment(state: ObjectsState, uri: string, address: string, amountSats: number, label: string): {
-    state: ObjectsState;
-    payment: PaymentObject;
-};
 export declare function mintUtxo(state: ObjectsState, rawTxHex: string): {
     state: ObjectsState;
     utxo: UtxoObject;
@@ -87,7 +72,6 @@ export declare function mintDescriptor(state: ObjectsState, descriptor: string, 
     descriptor: DescriptorObject;
 };
 export declare function enrichDescriptor(state: ObjectsState, key: string, classified: ClassifyResponse): ObjectsState;
-export declare function enrichPayment(state: ObjectsState, key: string, classified: ClassifyResponse): ObjectsState;
 export declare function applyTxOutputs(state: ObjectsState, key: string, classified: ClassifyResponse): {
     state: ObjectsState;
     utxos: UtxoObject[];
@@ -114,7 +98,7 @@ export declare function peerBridgeGroups(state: ObjectsState): string[][];
 export declare function bridgeGroupContaining(state: ObjectsState, peerKey: string): string[];
 export declare function unionBridgedPeersIntoSessions(state: ObjectsState): ObjectsState;
 export declare function peerUsableForSync(peer: PeerObject): boolean;
-export type WireKind = "fragment-join" | "fragment-into-session" | "peer-into-session" | "attach-payment" | "add-create-input" | "session-merge" | "peer-bridge" | "attribute-scripts" | "none";
+export type WireKind = "fragment-join" | "fragment-into-session" | "peer-into-session" | "add-create-input" | "session-merge" | "peer-bridge" | "attribute-scripts" | "none";
 export interface WireVerdict {
     kind: WireKind;
     allowed: boolean;

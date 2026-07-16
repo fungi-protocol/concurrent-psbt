@@ -7,14 +7,13 @@
 // it never re-derives them.
 //
 // The wiring metaphor: every card on the page is a NODE (PSBT fragment,
-// session, peer, payment instruction, spendable output, descriptor), and
-// connecting two nodes performs the join appropriate to the PAIR:
+// session, peer, spendable output, descriptor), and connecting two nodes
+// performs the join appropriate to the PAIR:
 //
 //   fragment ⋈ fragment  = PSBT lattice join            (/api/join, backed)
 //   fragment → session   = incorporate into the session (UI membership, backed)
 //   peer     → session   = participate: sync the session over the peer's
 //                          transport                     (/api/sync, backed)
-//   payment  → fragment  = attach the payment record    (/api/pay, backed)
 //   utxo     → create    = use the outpoint as a create-form input (backed)
 //   session  ⋈ session   = MERGE: sessions are fragment-state carriers, so
 //                          the merge joins their fragment states (via the
@@ -54,7 +53,6 @@ export type NodeKind =
   | "fragment"
   | "session"
   | "peer"
-  | "payment"
   | "utxo"
   | "descriptor"
   | "create";
@@ -91,23 +89,6 @@ export interface PeerObject {
   name: string;
   transport: SyncTransport | "nostr" | "unknown";
   identity: string;
-}
-
-// Payment instruction minted from a BIP 21 / BIP 321 URI paste. The deep
-// fields arrive from Backend.classifyPaste (bitcoin-payment-instructions):
-// null/[] until the enrichment lands (or when it fails — the shallow parse
-// stays authoritative for the fields it produced).
-export interface PaymentObject {
-  key: string;
-  uri: string;
-  address: string;
-  amountSats: number;
-  label: string;
-  // "fixed_amount" | "configurable_amount" (deep).
-  variant: string | null;
-  // Payment methods the instruction carries, one display line each (deep).
-  methods: string[];
-  description: string | null;
 }
 
 // Spendable output minted from a pasted fully-signed transaction. The
@@ -160,7 +141,6 @@ export interface PeerBridge {
 export interface ObjectsState {
   sessions: SessionObject[];
   peers: PeerObject[];
-  payments: PaymentObject[];
   utxos: UtxoObject[];
   descriptors: DescriptorObject[];
   bridges: PeerBridge[];
@@ -171,7 +151,6 @@ export function emptyObjects(): ObjectsState {
   return {
     sessions: [],
     peers: [],
-    payments: [],
     utxos: [],
     descriptors: [],
     bridges: [],
@@ -227,27 +206,6 @@ export function mintPeer(
     peer,
     created: true,
   };
-}
-
-export function mintPayment(
-  state: ObjectsState,
-  uri: string,
-  address: string,
-  amountSats: number,
-  label: string,
-): { state: ObjectsState; payment: PaymentObject } {
-  const next = nextKey(state, "payment");
-  const payment: PaymentObject = {
-    key: next.key,
-    uri,
-    address,
-    amountSats,
-    label,
-    variant: null,
-    methods: [],
-    description: null,
-  };
-  return { state: { ...next.state, payments: [...next.state.payments, payment] }, payment };
 }
 
 export function mintUtxo(
@@ -326,35 +284,6 @@ export function enrichDescriptor(
             derived,
           }
         : descriptor,
-    ),
-  };
-}
-
-export function enrichPayment(
-  state: ObjectsState,
-  key: string,
-  classified: ClassifyResponse,
-): ObjectsState {
-  if (classified.kind !== "payment") return state;
-  const methods = (asArray(classified.methods) ?? []).flatMap((raw): string[] => {
-    const entry = asObject(raw);
-    const type = asString(entry?.type);
-    if (type === null) return [];
-    const detail =
-      asString(entry?.address) ?? asString(entry?.invoice) ?? asString(entry?.offer);
-    return [detail ? `${type}: ${detail}` : type];
-  });
-  return {
-    ...state,
-    payments: state.payments.map((payment) =>
-      payment.key === key
-        ? {
-            ...payment,
-            variant: asString(classified.variant),
-            methods,
-            description: asString(classified.description),
-          }
-        : payment,
     ),
   };
 }
@@ -644,7 +573,6 @@ export type WireKind =
   | "fragment-join"
   | "fragment-into-session"
   | "peer-into-session"
-  | "attach-payment"
   | "add-create-input"
   | "session-merge"
   | "peer-bridge"
@@ -686,18 +614,14 @@ function unordered(a: NodeKind, b: NodeKind, x: NodeKind, y: NodeKind): boolean 
 }
 
 // Display name for a node in wire action labels: sessions and peers carry
-// human names, payments a user label; fragments (and everything else) go by
-// their key, which is already the visible card title.
+// human names; fragments (and everything else) go by their key, which is
+// already the visible card title.
 export function nodeDisplayName(ref: NodeRef, state: ObjectsState): string {
   switch (ref.kind) {
     case "session":
       return sessionByKey(state, ref.key)?.name ?? ref.key;
     case "peer":
       return peerByKey(state, ref.key)?.name ?? ref.key;
-    case "payment": {
-      const payment = state.payments.find((candidate) => candidate.key === ref.key);
-      return payment && payment.label ? payment.label : ref.key;
-    }
     default:
       return ref.key;
   }
@@ -783,13 +707,6 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
     return verdict("peer-into-session", true, true, null, null, label);
   }
 
-  if (unordered(a, b, "payment", "fragment")) {
-    const paymentRef = a === "payment" ? source : target;
-    const fragmentKey = a === "fragment" ? source.key : target.key;
-    const label = `Attach payment ${nodeDisplayName(paymentRef, state)} to ${fragmentKey}`;
-    return verdict("attach-payment", true, true, null, null, label);
-  }
-
   if (a === "utxo" && b === "create") {
     return verdict(
       "add-create-input",
@@ -862,9 +779,6 @@ export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsStat
 
   if (unordered(a, b, "peer", "fragment")) {
     return verdict("none", false, false, "wire the peer to a session; fragments sync through sessions");
-  }
-  if (a === "payment" && b === "session") {
-    return verdict("none", false, false, "wire the payment instruction to a fragment");
   }
 
   return verdict("none", false, false, `no join is defined for ${a} + ${b}`);
@@ -954,8 +868,6 @@ export function nodeExists(
       return sessionByKey(state, ref.key) !== null;
     case "peer":
       return peerByKey(state, ref.key) !== null;
-    case "payment":
-      return state.payments.some((payment) => payment.key === ref.key);
     case "utxo":
       return state.utxos.some((utxo) => utxo.key === ref.key);
     case "descriptor":

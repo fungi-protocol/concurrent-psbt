@@ -222,8 +222,7 @@ function lifehashPlaceholder(hex, title) {
 // An address slot on a card: the LifeHash chip of the script the address
 // encodes (display.js addressChipDigestHex — identical scripts fingerprint
 // identically), the address itself riding the chip title/aria-label. Strings
-// that decode to no script (a lightning invoice or offer in a payment's
-// address slot) stay textual — there is no script to fingerprint.
+// that decode to no script stay textual — there is no script to fingerprint.
 function addressNode(address, what, className = "session-address") {
     const digest = addressChipDigestHex(address);
     return digest ? lifehashBadge(digest, `${address}\n${what}`) : span(className, address);
@@ -758,23 +757,6 @@ async function executeWire(source, target, remaps) {
                 objects = unionBridgedPeersIntoSessions(objects);
                 logEvent(`authorized ${authPeer.name} on ${sessionObject.name} — the peer can now read/write the register` +
                     ` (bridged peers ride along)`);
-                break;
-            }
-            case "attach-payment": {
-                const paymentKey = source.kind === "payment" ? source.key : target.key;
-                const fragmentKey = source.kind === "fragment" ? source.key : target.key;
-                const payment = objects.payments.find((candidate) => candidate.key === paymentKey);
-                const fragment = fragmentByKey(fragmentKey);
-                if (!payment || !fragment)
-                    return false;
-                const paid = await addResponse(await backend.pay(fragment.psbt, {
-                    address: payment.address,
-                    amountBtc: (payment.amountSats / 100_000_000).toFixed(8),
-                    network: displayNetwork(),
-                    label: payment.label || undefined,
-                    payerHex: undefined,
-                }), "pay", `payment ${payment.key} attached to ${fragment.key}`);
-                logEvent(`wired ${payment.key} → ${fragment.key}: payment attached, result ${paid.key}`);
                 break;
             }
             case "add-create-input": {
@@ -1862,35 +1844,6 @@ function unavailablePairButton() {
 function renderObjects() {
     const list = el("objectList");
     list.textContent = "";
-    for (const payment of objects.payments) {
-        const item = document.createElement("li");
-        item.className = "list-item session-card";
-        decorateWireTarget(item, { kind: "payment", key: payment.key });
-        const head = document.createElement("div");
-        head.className = "session-fragment-row";
-        head.append(span("item-title", payment.label || payment.key), badge("payment", "session-badge"), addressNode(payment.address, "payment address"), amountSpan(payment.amountSats));
-        item.append(head);
-        // Deep classification details (bitcoin-payment-instructions): variant,
-        // recipient description, and the instruction's payment methods.
-        if (payment.variant || payment.description || payment.methods.length) {
-            const parts = [
-                payment.variant,
-                payment.description,
-                ...payment.methods,
-            ].filter((part) => part !== null && part !== "");
-            item.append(span("item-meta", parts.join(" · ")));
-        }
-        const actions = document.createElement("div");
-        actions.className = "session-card-actions";
-        actions.append(button("Prefill Pay", "Copy this instruction into the Pay form", () => {
-            el("payAddress").value = payment.address;
-            el("payAmount").value = (payment.amountSats / 100_000_000).toFixed(8);
-            el("payLabel").value = payment.label;
-            logEvent(`prefilled the Pay form from ${payment.key}`);
-        }));
-        item.append(actions);
-        list.append(item);
-    }
     for (const utxo of objects.utxos) {
         const item = document.createElement("li");
         item.className = "list-item session-card";
@@ -3229,7 +3182,7 @@ async function listPayments(event) {
 // free. The overlay is pointer-transparent; the transient drag line is a
 // separate client-coordinate mechanism.
 // The layout rect a wire endpoint occupies on the canvas, or null when the
-// endpoint doesn't render there (payments/utxos live in the objects panel).
+// endpoint doesn't render there (utxos live in the objects panel).
 function canvasRectFor(ref) {
     if (!canvasLayout)
         return null;
@@ -3279,8 +3232,8 @@ function drawWireOverlay() {
     // cards with a pill at its midpoint. The pill is the wire's own commit —
     // Join collapses exactly that edge — unless the probe already computed
     // the join to fail, in which case the pill explains the conflict
-    // instead. Wires whose endpoints live off-canvas (payments, utxos in the
-    // objects panel) stay queue-panel-only.
+    // instead. Wires whose endpoints live off-canvas (utxos in the objects
+    // panel) stay queue-panel-only.
     for (const entry of livePendingWires()) {
         const from = canvasRectFor(entry.source);
         const to = canvasRectFor(entry.target);

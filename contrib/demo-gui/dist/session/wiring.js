@@ -7,14 +7,13 @@
 // it never re-derives them.
 //
 // The wiring metaphor: every card on the page is a NODE (PSBT fragment,
-// session, peer, payment instruction, spendable output, descriptor), and
-// connecting two nodes performs the join appropriate to the PAIR:
+// session, peer, spendable output, descriptor), and connecting two nodes
+// performs the join appropriate to the PAIR:
 //
 //   fragment ⋈ fragment  = PSBT lattice join            (/api/join, backed)
 //   fragment → session   = incorporate into the session (UI membership, backed)
 //   peer     → session   = participate: sync the session over the peer's
 //                          transport                     (/api/sync, backed)
-//   payment  → fragment  = attach the payment record    (/api/pay, backed)
 //   utxo     → create    = use the outpoint as a create-form input (backed)
 //   session  ⋈ session   = MERGE: sessions are fragment-state carriers, so
 //                          the merge joins their fragment states (via the
@@ -44,7 +43,6 @@ export function emptyObjects() {
     return {
         sessions: [],
         peers: [],
-        payments: [],
         utxos: [],
         descriptors: [],
         bridges: [],
@@ -87,20 +85,6 @@ export function mintPeer(state, name, transport, identity) {
         peer,
         created: true,
     };
-}
-export function mintPayment(state, uri, address, amountSats, label) {
-    const next = nextKey(state, "payment");
-    const payment = {
-        key: next.key,
-        uri,
-        address,
-        amountSats,
-        label,
-        variant: null,
-        methods: [],
-        description: null,
-    };
-    return { state: { ...next.state, payments: [...next.state.payments, payment] }, payment };
 }
 export function mintUtxo(state, rawTxHex) {
     const next = nextKey(state, "utxo");
@@ -165,29 +149,6 @@ export function enrichDescriptor(state, key, classified) {
                 derived,
             }
             : descriptor),
-    };
-}
-export function enrichPayment(state, key, classified) {
-    if (classified.kind !== "payment")
-        return state;
-    const methods = (asArray(classified.methods) ?? []).flatMap((raw) => {
-        const entry = asObject(raw);
-        const type = asString(entry?.type);
-        if (type === null)
-            return [];
-        const detail = asString(entry?.address) ?? asString(entry?.invoice) ?? asString(entry?.offer);
-        return [detail ? `${type}: ${detail}` : type];
-    });
-    return {
-        ...state,
-        payments: state.payments.map((payment) => payment.key === key
-            ? {
-                ...payment,
-                variant: asString(classified.variant),
-                methods,
-                description: asString(classified.description),
-            }
-            : payment),
     };
 }
 // Fold a transaction decode into the pending utxo node: the FIRST output
@@ -408,18 +369,14 @@ function unordered(a, b, x, y) {
     return (a === x && b === y) || (a === y && b === x);
 }
 // Display name for a node in wire action labels: sessions and peers carry
-// human names, payments a user label; fragments (and everything else) go by
-// their key, which is already the visible card title.
+// human names; fragments (and everything else) go by their key, which is
+// already the visible card title.
 export function nodeDisplayName(ref, state) {
     switch (ref.kind) {
         case "session":
             return sessionByKey(state, ref.key)?.name ?? ref.key;
         case "peer":
             return peerByKey(state, ref.key)?.name ?? ref.key;
-        case "payment": {
-            const payment = state.payments.find((candidate) => candidate.key === ref.key);
-            return payment && payment.label ? payment.label : ref.key;
-        }
         default:
             return ref.key;
     }
@@ -486,12 +443,6 @@ export function wireVerdict(source, target, state) {
         const label = `Authorize ${groupLabel} on session ${sessionName}`;
         return verdict("peer-into-session", true, true, null, null, label);
     }
-    if (unordered(a, b, "payment", "fragment")) {
-        const paymentRef = a === "payment" ? source : target;
-        const fragmentKey = a === "fragment" ? source.key : target.key;
-        const label = `Attach payment ${nodeDisplayName(paymentRef, state)} to ${fragmentKey}`;
-        return verdict("attach-payment", true, true, null, null, label);
-    }
     if (a === "utxo" && b === "create") {
         return verdict("add-create-input", true, true, null, null, `Use ${sourceName} as a create-form input`);
     }
@@ -520,9 +471,6 @@ export function wireVerdict(source, target, state) {
     }
     if (unordered(a, b, "peer", "fragment")) {
         return verdict("none", false, false, "wire the peer to a session; fragments sync through sessions");
-    }
-    if (a === "payment" && b === "session") {
-        return verdict("none", false, false, "wire the payment instruction to a fragment");
     }
     return verdict("none", false, false, `no join is defined for ${a} + ${b}`);
 }
@@ -567,8 +515,6 @@ export function nodeExists(ref, state, fragmentKeys) {
             return sessionByKey(state, ref.key) !== null;
         case "peer":
             return peerByKey(state, ref.key) !== null;
-        case "payment":
-            return state.payments.some((payment) => payment.key === ref.key);
         case "utxo":
             return state.utxos.some((utxo) => utxo.key === ref.key);
         case "descriptor":
