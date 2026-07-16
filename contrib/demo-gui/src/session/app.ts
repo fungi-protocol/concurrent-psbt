@@ -3170,26 +3170,30 @@ function addManualPeer(event: SubmitEvent): void {
   render();
 }
 
+// A successful add ends the paste gesture: the new card is the thing to
+// look at, and the still-open drawer just covers it. Failures leave the
+// drawer (and the pasted text) in place so it can be corrected.
+function settlePaste(): void {
+  el<HTMLTextAreaElement>("pasteInput").value = "";
+  setAddDrawer(false);
+}
+
 async function addObject(): Promise<void> {
   const raw = textareaValue("pasteInput");
   const pasted = classifyPaste(raw);
   if (pasted.kind === "psbt") {
-    if (await addPsbtText(raw)) {
-      el<HTMLTextAreaElement>("pasteInput").value = "";
-    }
+    if (await addPsbtText(raw)) settlePaste();
     return;
   }
   if (pasted.kind === "payment-uri") {
-    if (await addPaymentUri(pasted.payload)) {
-      el<HTMLTextAreaElement>("pasteInput").value = "";
-    }
+    if (await addPaymentUri(pasted.payload)) settlePaste();
     return;
   }
   const minted = mintFromPaste(objects, pasted);
   objects = minted.state;
   logEvent(minted.log);
   if (minted.minted) {
-    el<HTMLTextAreaElement>("pasteInput").value = "";
+    settlePaste();
     if (pasted.needsBackend) {
       logEvent(`${minted.minted.key}: deep parsing pending — needs backend: ${pasted.needsBackend}`);
     }

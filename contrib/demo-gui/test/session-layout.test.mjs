@@ -615,6 +615,23 @@ test("the create form is a reachable drop target for utxo drags", () => {
   assert.match(paint, /createWireTarget"\)\.hidden = wire\.source\.kind !== "utxo"/);
 });
 
+test("a successful Add settles the paste gesture — drawer closes, text clears", () => {
+  // Every success path funnels through settlePaste (clear + close); a
+  // failed classify keeps the drawer and the text for correction.
+  const settle = app.slice(app.indexOf("function settlePaste"), app.indexOf("async function addObject"));
+  assert.match(settle, /pasteInput"\)\.value = ""/);
+  assert.match(settle, /setAddDrawer\(false\)/);
+  const add = app.slice(
+    app.indexOf("async function addObject"),
+    app.indexOf("// Deep classification (Backend.classifyPaste"),
+  );
+  assert.match(add, /if \(await addPsbtText\(raw\)\) settlePaste\(\);/);
+  assert.match(add, /if \(await addPaymentUri\(pasted\.payload\)\) settlePaste\(\);/);
+  assert.match(add, /if \(minted\.minted\) \{\n    settlePaste\(\);/);
+  // The failure branch reports and leaves the drawer alone.
+  assert.match(add, /showStatus\(pasted\.detail, true\)/);
+});
+
 test("generator chips fill the paste box like samples — never ingest directly", () => {
   // The Generate group lives in the samples popover, after the sample list.
   assert.match(html, /id="generatorsList" class="session-samples-list"/);
