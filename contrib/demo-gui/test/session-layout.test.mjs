@@ -547,6 +547,12 @@ test("a disk-location peer syncs over the watched-dir register", () => {
   assert.match(html, /data-transport="local watched-dir"/);
   assert.match(html, /<span data-transport="watched-dir">Register directory/);
   assert.match(html, /data-transport="local" for="syncState"/);
+  // …and [hidden] must actually beat `.field-label { display: grid }`, or
+  // the state-path field stays visible under watched-dir (seen live).
+  assert.match(styles, /\.field-label\[hidden\]\s*\{\s*display:\s*none;/);
+  // The manual-peer identity for the local kind is a register DIRECTORY,
+  // not a state file.
+  assert.match(html, /placeholder="npub1… \/ doc… \/ signaling address \/ register directory"/);
   // Syncing over a "local" peer (a storage place, not an endpoint) drives
   // the register rooted at its path.
   assert.match(app, /carrier\?\.transport === "local" \? "watched-dir"/);

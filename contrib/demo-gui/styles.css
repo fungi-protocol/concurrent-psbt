@@ -236,6 +236,12 @@ h2 {
   letter-spacing: 0;
 }
 
+/* `display: grid` outranks the UA [hidden] rule; restate it so
+   transport-dependent fields really disappear (renderSyncFields). */
+.field-label[hidden] {
+  display: none;
+}
+
 .field-label input,
 .field-label select,
 .field-label textarea {
