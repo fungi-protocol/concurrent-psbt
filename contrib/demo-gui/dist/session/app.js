@@ -1624,7 +1624,11 @@ function coinRow(fragment, side, index, row, level) {
             const term = document.createElement("dt");
             term.textContent = pair.label;
             const value = document.createElement("dd");
-            value.textContent = pair.value;
+            // A fingerprintable fact renders chip-then-hex: the LifeHash sits
+            // NEXT TO the bitvomit it identifies, one visual unit.
+            if (pair.chipHex)
+                value.append(lifehashBadge(pair.chipHex, `${pair.label} fingerprint`));
+            value.append(pair.value);
             facts.append(term, value);
         }
         if (facts.childElementCount > 0)
@@ -1661,8 +1665,13 @@ function inputRow(input, level) {
             (input.outpointText ? `\noutpoint ${input.outpointText}` : "")));
     }
     else if (input.outpointTxid) {
-        row.append(lifehashBadge(input.outpointTxid, `outpoint txid (input ${input.index}) — prevout script unknown, fingerprint is the txid`));
-        row.append(span("item-meta", `:${input.outpointVout ?? "?"}`));
+        // No prevout script known: the row face stays textual — a txid chip
+        // here would read as a payer identity, which the txid is not. The
+        // txid's own fingerprint lives in the expanded facts, next to the
+        // full outpoint (rowFacePairs chipHex).
+        const short = span("item-meta", `${input.outpointTxid.slice(0, 8)}…:${input.outpointVout ?? "?"}`);
+        short.title = `outpoint ${input.outpointText ?? input.outpointTxid} — prevout script unknown`;
+        row.append(short);
     }
     else {
         row.append(span("item-meta", "outpoint unknown"));
@@ -1683,10 +1692,10 @@ function outputRow(output, level) {
     const row = document.createElement("div");
     row.className = "session-coin-row";
     row.append(span("session-coin-side", "out"));
-    if (output.uniqueIdHex) {
-        row.append(lifehashBadge(output.uniqueIdHex, `output unique id (output ${output.index})`));
-    }
-    else if (level === "expanded") {
+    // The row face carries ONE fingerprint: the scriptPubKey — where the
+    // money goes. The unique id's chip is bookkeeping identity; it sits next
+    // to its hex in the expanded facts (rowFacePairs chipHex), not here.
+    if (!output.uniqueIdHex && level === "expanded") {
         row.append(span("session-badge session-badge-warn", "no id"));
     }
     if (output.scriptHex && output.address) {

@@ -107,6 +107,7 @@ export declare function elisionLabel(shown: number, total: number): string | nul
 export interface RowDetailPair {
     label: string;
     value: string;
+    chipHex?: string | null;
 }
 export declare function rowDetailPairs(inspect: InspectResponse | null, side: "input" | "output", index: number, network: Network): RowDetailPair[];
 export interface RawKeymapEntry {

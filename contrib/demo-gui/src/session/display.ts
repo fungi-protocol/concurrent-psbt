@@ -659,6 +659,10 @@ export function elisionLabel(shown: number, total: number): string | null {
 export interface RowDetailPair {
   label: string;
   value: string;
+  // When the value is (or names) fingerprintable bytes, the digest a
+  // LifeHash chip should ride NEXT TO the value — the chip and the hex it
+  // identifies read as one fact (outpoint txids, output unique ids).
+  chipHex?: string | null;
 }
 
 function detailValue(value: unknown): string {
@@ -909,7 +913,9 @@ export function rowFacePairs(
   if (side === "input") {
     const [input] = inputViews(inspect).slice(index, index + 1);
     if (!input) return pairs;
-    if (input.outpointText) pairs.push({ label: "outpoint", value: input.outpointText });
+    if (input.outpointText) {
+      pairs.push({ label: "outpoint", value: input.outpointText, chipHex: input.outpointTxid });
+    }
     // The prevout the input spends, when the PSBT carries it (witness utxo
     // today): who is paying, in the same address/type vocabulary as the
     // output facts. The amount stays on the row face — no duplicate here.
@@ -942,7 +948,9 @@ export function rowFacePairs(
   // scriptLabel is the TEMPLATE KIND (taproot, segwit v0…), not the script
   // bytes — "type" says what the value is; the bytes live in the modal.
   if (output.scriptKind !== "absent") pairs.push({ label: "type", value: output.scriptLabel });
-  if (output.uniqueIdHex) pairs.push({ label: "unique id", value: output.uniqueIdHex });
+  if (output.uniqueIdHex) {
+    pairs.push({ label: "unique id", value: output.uniqueIdHex, chipHex: output.uniqueIdHex });
+  }
   return pairs;
 }
 

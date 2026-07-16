@@ -303,6 +303,27 @@ test("mockup parity: peer reach, breathing selection, identity hover", () => {
   assert.match(styles, /\.session-identity-dim\s*\{/);
 });
 
+test("row chips are scriptPubKeys only — secondary lifehashes chip their hex in the facts", () => {
+  // Output rows: the one fingerprint is where the money goes. The unique
+  // id's chip retreats to the expanded facts.
+  const outputStart = app.indexOf("function outputRow");
+  const outputSlice = app.slice(outputStart, app.indexOf("\n}", outputStart));
+  assert.ok(outputStart >= 0, "outputRow slice is bounded");
+  assert.doesNotMatch(outputSlice, /lifehashBadge\(output\.uniqueIdHex/);
+  assert.match(outputSlice, /lifehashBadge\(output\.scriptHex/);
+  // Input rows: no prevout script means a TEXTUAL outpoint, never a txid
+  // chip masquerading as a payer identity.
+  const inputStart = app.indexOf("function inputRow");
+  const inputSlice = app.slice(inputStart, app.indexOf("\n}", inputStart));
+  assert.doesNotMatch(inputSlice, /lifehashBadge\(\s*input\.outpointTxid/);
+  assert.match(inputSlice, /lifehashBadge\(\s*input\.prevoutScriptHex/);
+  // The expanded facts chip fingerprintable pairs beside their hex — the
+  // LifeHash sits next to the bitvomit it identifies.
+  const factsStart = app.indexOf("function coinRow");
+  const factsSlice = app.slice(factsStart, app.indexOf("function signatureMark", factsStart));
+  assert.match(factsSlice, /if \(pair\.chipHex\) value\.append\(lifehashBadge\(pair\.chipHex/);
+});
+
 test("disabled ops explain themselves on press, not only on hover", () => {
   const hint = html.indexOf('id="opsHint"');
   assert.ok(hint >= 0, "the ops hint line is present");

@@ -634,8 +634,9 @@ export function rowFacePairs(inspect, side, index, network) {
         const [input] = inputViews(inspect).slice(index, index + 1);
         if (!input)
             return pairs;
-        if (input.outpointText)
-            pairs.push({ label: "outpoint", value: input.outpointText });
+        if (input.outpointText) {
+            pairs.push({ label: "outpoint", value: input.outpointText, chipHex: input.outpointTxid });
+        }
         // The prevout the input spends, when the PSBT carries it (witness utxo
         // today): who is paying, in the same address/type vocabulary as the
         // output facts. The amount stays on the row face — no duplicate here.
@@ -672,8 +673,9 @@ export function rowFacePairs(inspect, side, index, network) {
     // bytes — "type" says what the value is; the bytes live in the modal.
     if (output.scriptKind !== "absent")
         pairs.push({ label: "type", value: output.scriptLabel });
-    if (output.uniqueIdHex)
-        pairs.push({ label: "unique id", value: output.uniqueIdHex });
+    if (output.uniqueIdHex) {
+        pairs.push({ label: "unique id", value: output.uniqueIdHex, chipHex: output.uniqueIdHex });
+    }
     return pairs;
 }
 // The serialization format wears its BIP number on the card; inspect's

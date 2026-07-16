@@ -539,6 +539,9 @@ test("rowFacePairs is the curated level-3 subset, not the raw dump", () => {
     ["outpoint", "sequence", "utxo data", "signatures"],
   );
   assert.equal(input[0].value, `${"aa".repeat(32)}:0`);
+  // Fingerprintable facts carry a chip digest so the LifeHash renders next
+  // to the hex it identifies: the outpoint fact chips its txid.
+  assert.equal(input[0].chipHex, "aa".repeat(32));
   // The sequence fact keeps the hex and appends its BIP 68 reading.
   assert.equal(input[1].value, "0xfffffffe — no relative locktime (BIP 68 disable bit)");
   assert.equal(input[2].value, "witness utxo");
@@ -576,6 +579,8 @@ test("rowFacePairs is the curated level-3 subset, not the raw dump", () => {
     ["address", "type", "unique id"],
   );
   assert.equal(output[0].value, "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080");
+  // The unique id is its own fingerprint: chip and hex read as one fact.
+  assert.equal(output.find((pair) => pair.label === "unique id").chipHex, "11".repeat(32));
 
   // OP_RETURN output: no address, script label still present, uid present.
   const nonstandard = rowFacePairs(INSPECT, "output", 2, "regtest");
