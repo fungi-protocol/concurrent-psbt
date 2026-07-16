@@ -595,6 +595,10 @@ export interface BalanceSheet {
   // incomplete)", "amounts unknown (not decoded)") — non-null exactly when
   // the delta cannot be computed.
   fallbackText: string | null;
+  // A total over at most one line per side repeats the rows right above it
+  // — the shell elides the whole-transaction totals row (fee, balance, and
+  // declared-fee information still render).
+  totalsRedundant: boolean;
 }
 
 export function balanceSheet(summary: FragmentSummary, inspect: InspectResponse | null): BalanceSheet {
@@ -627,6 +631,8 @@ export function balanceSheet(summary: FragmentSummary, inspect: InspectResponse 
         : null,
     showFeeRate,
     fallbackText: feeSats === null ? feeLine(summary).text : null,
+    totalsRedundant:
+      (summary.inputCount ?? 0) <= 1 && (summary.outputCount ?? 0) <= 1,
   };
 }
 

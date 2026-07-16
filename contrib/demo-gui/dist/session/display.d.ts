@@ -90,6 +90,7 @@ export interface BalanceSheet {
     feeRateText: string | null;
     showFeeRate: boolean;
     fallbackText: string | null;
+    totalsRedundant: boolean;
 }
 export declare function balanceSheet(summary: FragmentSummary, inspect: InspectResponse | null): BalanceSheet;
 export interface FragmentCardModel {

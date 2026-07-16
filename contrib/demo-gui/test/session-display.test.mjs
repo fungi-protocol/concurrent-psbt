@@ -796,6 +796,17 @@ test("balanceSheet consumes the declared-fee and size seams when present", () =>
   assert.equal(allDeclared.outputTotalElidedByDeclaredFees, true);
 });
 
+test("balanceSheet: the grand total elides when each side is one line", () => {
+  // 2 in / 3 out (the stock fixture): the totals genuinely sum something.
+  assert.equal(balanceSheet(fragmentSummary(INSPECT), INSPECT).totalsRedundant, false);
+  // 1 in / 1 out: a totals row would repeat the two rows right above it.
+  const single = { ...INSPECT, input_count: 1, output_count: 1 };
+  assert.equal(balanceSheet(fragmentSummary(single), single).totalsRedundant, true);
+  // 0 in / 1 out (a txout intent): still nothing to sum on either side.
+  const intent = { ...INSPECT, input_count: 0, output_count: 1 };
+  assert.equal(balanceSheet(fragmentSummary(intent), intent).totalsRedundant, true);
+});
+
 test("seam readers accept the emitted totals.size and tolerated size_estimate shapes", () => {
   assert.equal(declaredFeeSatsFromInspect(INSPECT), null);
   assert.equal(declaredFeeSatsFromInspect(null), null);

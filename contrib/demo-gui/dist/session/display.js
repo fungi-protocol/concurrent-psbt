@@ -448,6 +448,7 @@ export function balanceSheet(summary, inspect) {
             : null,
         showFeeRate,
         fallbackText: feeSats === null ? feeLine(summary).text : null,
+        totalsRedundant: (summary.inputCount ?? 0) <= 1 && (summary.outputCount ?? 0) <= 1,
     };
 }
 export function fragmentCardModel(inspect, network, provenance, dimension = "provenance") {

@@ -1550,17 +1550,22 @@ function balanceReport(sheet, feeText) {
         row.append(cell);
         block.append(row);
     }
-    block.append(span("session-balance-sumline", ""));
-    const totals = span("session-balance-row session-balance-totals", "");
-    totals.append(balanceCell("input", "in", sheet.inputTotalSats, "input amounts incomplete (missing UTXO data)", "total"));
-    if (!sheet.outputTotalElidedByDeclaredFees) {
-        const outCell = balanceCell("output", "out", sheet.outputAccountingTotalSats, "outputs not decoded", "total");
-        if (sheet.declaredFeeSats !== null && sheet.declaredFeeSats > 0) {
-            outCell.title = "outputs + declared fees";
+    // A total over one line per side would repeat the row right above it —
+    // it elides (the demo's grand-total rule); the delta block below keeps
+    // its own sum line, so the fee story stays readable.
+    if (!sheet.totalsRedundant) {
+        block.append(span("session-balance-sumline", ""));
+        const totals = span("session-balance-row session-balance-totals", "");
+        totals.append(balanceCell("input", "in", sheet.inputTotalSats, "input amounts incomplete (missing UTXO data)", "total"));
+        if (!sheet.outputTotalElidedByDeclaredFees) {
+            const outCell = balanceCell("output", "out", sheet.outputAccountingTotalSats, "outputs not decoded", "total");
+            if (sheet.declaredFeeSats !== null && sheet.declaredFeeSats > 0) {
+                outCell.title = "outputs + declared fees";
+            }
+            totals.append(outCell);
         }
-        totals.append(outCell);
+        block.append(totals);
     }
-    block.append(totals);
     if (sheet.delta) {
         // The demo's imbalance block: a second thinner sum line (red-tinted for
         // a deficit) and the `balance:` label on the shortfall side.
