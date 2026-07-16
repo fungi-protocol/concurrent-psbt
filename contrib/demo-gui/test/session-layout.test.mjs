@@ -539,6 +539,22 @@ test("the sync dropdown consumes the capability catalog, not a local mapping", (
   assert.doesNotMatch(app, /webrtc_rs/);
 });
 
+test("a disk-location peer syncs over the watched-dir register", () => {
+  // The form offers the kind; the sources field is shared with local (two
+  // label texts, one textarea) while the state file stays local-only — the
+  // CLI rejects --state for watched-dir (the directory IS the register).
+  assert.match(html, /<option value="watched-dir">/);
+  assert.match(html, /data-transport="local watched-dir"/);
+  assert.match(html, /<span data-transport="watched-dir">Register directory/);
+  assert.match(html, /data-transport="local" for="syncState"/);
+  // Syncing over a "local" peer (a storage place, not an endpoint) drives
+  // the register rooted at its path.
+  assert.match(app, /carrier\?\.transport === "local" \? "watched-dir"/);
+  assert.match(app, /transport === "watched-dir" && carrier\.identity/);
+  // Empty session registers are admitted: the directory may hold the frontier.
+  assert.match(app, /transport !== "local" && transport !== "watched-dir"/);
+});
+
 test("a live wire drag survives concurrent renders and finishes", () => {
   // The gesture must NOT die when a probe or sync settles mid-drag: cards
   // are rebuilt per render, so only the arming pointerdown lives on the

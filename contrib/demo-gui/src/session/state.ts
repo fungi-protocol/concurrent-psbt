@@ -348,7 +348,7 @@ export function buildCreateRequest(form: CreateForm): FormResult<CreatePsbtReque
   };
 }
 
-export type SyncTransport = "local" | "iroh" | "str0m" | "webrtc-rs";
+export type SyncTransport = "local" | "watched-dir" | "iroh" | "str0m" | "webrtc-rs";
 
 export interface SyncForm {
   transport: SyncTransport;
@@ -400,6 +400,18 @@ export function buildSyncRequest(form: SyncForm, psbts: string[]): FormResult<Sy
     if (!psbts.length && !sources.length && !state) {
       return fail("select fragments or provide server-side sources/state paths");
     }
+    return { ok: true, value: request };
+  }
+
+  if (form.transport === "watched-dir") {
+    // First source line = the register directory; extra lines are read-only
+    // seeds. Selected fragments are optional — the register itself may
+    // already hold the frontier. No state file: the directory IS the register.
+    const sources = parseLines(form.sources);
+    if (!sources.length) {
+      return fail("watched-dir sync needs the register directory as a source line");
+    }
+    request.sources = sources;
     return { ok: true, value: request };
   }
 

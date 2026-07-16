@@ -209,17 +209,19 @@
                     Transport
                     <select id="syncTransport">
                       <option value="local" selected>local (files/dirs on this machine)</option>
+                      <option value="watched-dir">watched-dir (shared directory register)</option>
                       <option value="iroh">iroh (document ticket)</option>
                       <option value="str0m">str0m (WebRTC, manual signaling)</option>
                       <option value="webrtc-rs">webrtc-rs (WebRTC, manual signaling)</option>
                     </select>
                   </label>
-                  <div data-transport="local">
+                  <div data-transport="local watched-dir">
                     <label class="field-label" for="syncSources">
-                      Source paths (one per line: .psbt files or directories)
+                      <span data-transport="local">Source paths (one per line: .psbt files or directories)</span>
+                      <span data-transport="watched-dir">Register directory (first line; extra lines are read-only seeds)</span>
                       <textarea id="syncSources" rows="2" spellcheck="false" placeholder="/path/to/psbts"></textarea>
                     </label>
-                    <label class="field-label" for="syncState">
+                    <label class="field-label" data-transport="local" for="syncState">
                       State PSBT file (read-only)
                       <input id="syncState" autocomplete="off" spellcheck="false" placeholder="/path/to/state.psbt">
                     </label>

@@ -282,6 +282,43 @@ test("buildSyncRequest local transport folds psbts, sources, and state", () => {
   assert.match(badWait.error, /wait ms/);
 });
 
+test("buildSyncRequest watched-dir needs the register directory, tolerates an empty selection", () => {
+  const base = {
+    transport: "watched-dir",
+    sources: "/tmp/register\n/tmp/seed.psbt\n",
+    state: "",
+    irohTicket: "",
+    irohTicketOut: false,
+    irohWaitMs: "",
+    webrtcRole: "",
+    signalOut: "",
+    signalIn: "",
+    webrtcBind: "",
+    iceServers: "",
+    signalTimeoutMs: "",
+  };
+  // Zero fragments is fine: the register itself may hold the frontier. The
+  // state field never rides along — the directory IS the register.
+  const registerOnly = buildSyncRequest({ ...base, state: "/tmp/ignored.psbt" }, []);
+  assert.equal(registerOnly.ok, true);
+  assert.deepEqual(registerOnly.value, {
+    transport: "watched-dir",
+    sources: ["/tmp/register", "/tmp/seed.psbt"],
+  });
+
+  const withFragment = buildSyncRequest(base, [PSBT]);
+  assert.equal(withFragment.ok, true);
+  assert.deepEqual(withFragment.value, {
+    transport: "watched-dir",
+    psbts: [PSBT],
+    sources: ["/tmp/register", "/tmp/seed.psbt"],
+  });
+
+  const noRegister = buildSyncRequest({ ...base, sources: " \n" }, [PSBT]);
+  assert.equal(noRegister.ok, false);
+  assert.match(noRegister.error, /register directory/);
+});
+
 test("buildSyncRequest iroh transport takes a ticket in xor out", () => {
   const base = {
     transport: "iroh",

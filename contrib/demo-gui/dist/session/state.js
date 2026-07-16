@@ -229,6 +229,17 @@ export function buildSyncRequest(form, psbts) {
         }
         return { ok: true, value: request };
     }
+    if (form.transport === "watched-dir") {
+        // First source line = the register directory; extra lines are read-only
+        // seeds. Selected fragments are optional — the register itself may
+        // already hold the frontier. No state file: the directory IS the register.
+        const sources = parseLines(form.sources);
+        if (!sources.length) {
+            return fail("watched-dir sync needs the register directory as a source line");
+        }
+        request.sources = sources;
+        return { ok: true, value: request };
+    }
     if (form.transport === "iroh") {
         const ticket = form.irohTicket.trim();
         if (ticket && form.irohTicketOut) {

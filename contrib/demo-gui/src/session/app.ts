@@ -3658,13 +3658,15 @@ async function runSyncRequest(psbts: string[], sourceLabel: string): Promise<voi
 async function runSync(event: Event): Promise<void> {
   event.preventDefault();
   const state = actionState("sync", enablementContext());
-  // Zero-selection syncs that are legitimate: local sync runs from
-  // server-side sources, and iroh with ticket-out CREATES an empty shared
-  // document (peers publish into it later). Every other shape syncs the
-  // selection.
+  // Zero-selection syncs that are legitimate: local and watched-dir run
+  // from server-side sources (the register may already hold the frontier),
+  // and iroh with ticket-out CREATES an empty shared document (peers
+  // publish into it later). Every other shape syncs the selection.
+  const serverSideSources =
+    syncTransportValue() === "local" || syncTransportValue() === "watched-dir";
   const createsEmptyDoc =
     syncTransportValue() === "iroh" && el<HTMLInputElement>("syncIrohTicketOut").checked;
-  if (!state.enabled && syncTransportValue() !== "local" && !createsEmptyDoc) {
+  if (!state.enabled && !serverSideSources && !createsEmptyDoc) {
     showStatus(`sync: ${state.reason ?? "not available"}`, true);
     return;
   }
@@ -3698,15 +3700,24 @@ async function syncSessionOverPeer(sessionKey: string, peerKey: string | null): 
     .map((key) => usablePeerForSync(peerByKey(objects, key)))
     .find((candidate): candidate is PeerObject => candidate !== null);
   const carrier = usablePeerForSync(peer) ?? memberPeer ?? null;
-  const transport = carrier?.transport ?? "local";
+  // A disk-location peer is a storage place, not an endpoint: syncing over
+  // it means driving the watched-dir register rooted at its path. Bare
+  // "local" survives only as the no-carrier fallback (form-configured
+  // server-side sources/state).
+  const transport = carrier?.transport === "local" ? "watched-dir" : (carrier?.transport ?? "local");
   el<HTMLSelectElement>("syncTransport").value = transport;
   renderSyncFields();
+  if (carrier && transport === "watched-dir" && carrier.identity) {
+    el<HTMLTextAreaElement>("syncSources").value = carrier.identity;
+  }
   if (carrier && carrier.transport === "iroh" && carrier.identity) {
     el<HTMLTextAreaElement>("syncIrohTicket").value = carrier.identity;
     el<HTMLInputElement>("syncIrohTicketOut").checked = false;
   }
   const content = sessionObject.contentKey ? fragmentByKey(sessionObject.contentKey) : null;
-  if (!content && transport !== "local") {
+  // local reads the form's server-side paths; watched-dir can collect the
+  // frontier from the register itself — both tolerate an empty session.
+  if (!content && transport !== "local" && transport !== "watched-dir") {
     showStatus(`${sessionObject.name}: the register is empty — write a fragment in before syncing`, true);
     return;
   }

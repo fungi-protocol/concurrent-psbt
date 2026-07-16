@@ -75,7 +75,7 @@ export interface CreateForm {
     outputs: CreateFormOutput[];
 }
 export declare function buildCreateRequest(form: CreateForm): FormResult<CreatePsbtRequest>;
-export type SyncTransport = "local" | "iroh" | "str0m" | "webrtc-rs";
+export type SyncTransport = "local" | "watched-dir" | "iroh" | "str0m" | "webrtc-rs";
 export interface SyncForm {
     transport: SyncTransport;
     sources: string;

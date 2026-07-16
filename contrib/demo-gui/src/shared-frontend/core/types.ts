@@ -153,10 +153,11 @@ export interface ApplyEditsResponse {
 export interface SyncRequest {
   psbts?: string[];
   // Transport selection, mirroring the CLI's --transport ValueEnum ("local",
-  // "iroh", "arti", "nym", "emissary", "mdk", "str0m", "webrtc-rs",
-  // "payjoin-dir"). Absent, the webgui infers iroh from a pasted ticket and
-  // local otherwise (back-compat); the PWA path substitutes a browser-viable
-  // transport handle injected into the WasmBackend, still opaque to this seam.
+  // "watched-dir", "iroh", "arti", "nym", "emissary", "mdk", "str0m",
+  // "webrtc-rs", "payjoin-dir"). Absent, the webgui infers iroh from a
+  // pasted ticket and local otherwise (back-compat); the PWA path
+  // substitutes a browser-viable transport handle injected into the
+  // WasmBackend, still opaque to this seam.
   transport?: string;
   // Server-side local sources: PSBT files or directories of .psbt files (the
   // CLI's positional sources) plus the state PSBT file. Paths on the machine
