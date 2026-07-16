@@ -279,6 +279,37 @@ test("undefined pairs are refused with a reason", () => {
   assert.match(descriptorPeer.reason, /no join is defined/);
 });
 
+test("a register's content card wires to peers as its session", () => {
+  // Joining a fragment VALUE to a peer has no meaning, so a gesture on the
+  // content card unambiguously refers to the session holding it: the wire
+  // resolves to peer↔session authorization, in either direction.
+  let state = emptyObjects();
+  state = mintSession(state, "lunch").state;
+  state = mintPeer(state, "alice", "iroh", "doc-abc").state;
+  state = writeSessionContent(state, "session-1", "psbt-1");
+
+  const fromContent = wireVerdict(ref("fragment", "psbt-1"), ref("peer", "peer-1"), state);
+  assert.equal(fromContent.kind, "peer-into-session");
+  assert.equal(wireDisposition(fromContent), "compatible");
+  assert.match(fromContent.label, /Authorize peer .+ on session lunch/);
+  const ontoContent = wireVerdict(ref("peer", "peer-1"), ref("fragment", "psbt-1"), state);
+  assert.equal(ontoContent.kind, "peer-into-session");
+
+  // The queue stores the CANONICAL endpoints: the same wire queued through
+  // the content card and through the session card is one wire, and its
+  // stored refs execute as an authorization, not a fragment join.
+  const viaContent = queueWire([], ref("peer", "peer-1"), ref("fragment", "psbt-1"), state);
+  assert.equal(viaContent.queued, true);
+  assert.deepEqual(viaContent.wires[0].target, { kind: "session", key: "session-1" });
+  const viaSession = queueWire(viaContent.wires, ref("peer", "peer-1"), ref("session", "session-1"), state);
+  assert.equal(viaSession.duplicate, true);
+
+  // A MINE fragment (no session holds it) keeps the honest refusal.
+  const mine = wireVerdict(ref("fragment", "psbt-9"), ref("peer", "peer-1"), state);
+  assert.equal(mine.allowed, false);
+  assert.match(mine.reason, /through sessions/);
+});
+
 // --- action labels + target vocabulary ----------------------------------------
 
 test("wire verdicts carry concrete action labels built from display names", () => {

@@ -717,7 +717,27 @@ export function wireDisposition(v: WireVerdict): WireDisposition {
   return "unbacked";
 }
 
+// A fragment that IS a session's register content stands for its session
+// in peer wires: joining a fragment VALUE to a peer has no meaning, so a
+// gesture touching the content card unambiguously refers to the session
+// holding it (authorization). Mine fragments are never register contents,
+// so only in-session cards resolve.
+export function resolveWireEndpoint(
+  ref: NodeRef,
+  counterpart: NodeRef,
+  state: ObjectsState,
+): NodeRef {
+  if (ref.kind !== "fragment" || counterpart.kind !== "peer") return ref;
+  const holder = state.sessions.find((session) => session.contentKey === ref.key);
+  return holder ? { kind: "session", key: holder.key } : ref;
+}
+
 export function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsState): WireVerdict {
+  const resolvedSource = resolveWireEndpoint(source, target, state);
+  const resolvedTarget = resolveWireEndpoint(target, source, state);
+  if (resolvedSource !== source || resolvedTarget !== target) {
+    return wireVerdict(resolvedSource, resolvedTarget, state);
+  }
   const a = source.kind;
   const b = target.kind;
   const sourceName = nodeDisplayName(source, state);
@@ -897,15 +917,25 @@ export function queueWire(
   target: NodeRef,
   state: ObjectsState,
 ): QueueWireResult {
-  const v = wireVerdict(source, target, state);
+  // The queue stores CANONICAL endpoints (a content card resolves to its
+  // session) so execution, edges, and duplicate detection all see the wire
+  // the verdict was about.
+  const canonicalSource = resolveWireEndpoint(source, target, state);
+  const canonicalTarget = resolveWireEndpoint(target, source, state);
+  const v = wireVerdict(canonicalSource, canonicalTarget, state);
   if (wireDisposition(v) !== "compatible") {
     return { wires, queued: false, duplicate: false, verdict: v };
   }
-  const key = wireKey(source, target);
+  const key = wireKey(canonicalSource, canonicalTarget);
   if (wires.some((wire) => wireKey(wire.source, wire.target) === key)) {
     return { wires, queued: false, duplicate: true, verdict: v };
   }
-  return { wires: [...wires, { source, target }], queued: true, duplicate: false, verdict: v };
+  return {
+    wires: [...wires, { source: canonicalSource, target: canonicalTarget }],
+    queued: true,
+    duplicate: false,
+    verdict: v,
+  };
 }
 
 export function unqueueWire(wires: PendingWire[], key: string): PendingWire[] {
