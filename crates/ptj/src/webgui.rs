@@ -495,6 +495,11 @@ fn sync_response_result(body: &[u8]) -> Result<Vec<u8>> {
         // carries the ticket and no `psbt`. Every other empty fold keeps the
         // established join error.
         None if ticket_out.is_some() => sync_json(None, &messages, ticket_out.as_deref()),
+        // The watched-dir register legitimately starts empty; say so in the
+        // register's own vocabulary instead of the CLI join's.
+        None if config.transport == crate::cli::TransportKind::WatchedDir => Err(Error::new(
+            "the register directory is empty — nothing to converge yet",
+        )),
         None => Err(Error::new("join expects at least one PSBT file")),
     }
 }
@@ -3557,6 +3562,26 @@ mod tests {
             stored.trim(),
             value["psbt"].as_str().expect("response psbt"),
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A fresh register with nothing selected folds nothing — a normal state
+    /// of a session that has not started, so the error speaks about the
+    /// register instead of the CLI join's missing argument.
+    #[test]
+    fn sync_endpoint_watched_dir_empty_register_says_so() {
+        let nonce: u64 = rand::random();
+        let dir = std::env::temp_dir().join(format!("ptj-webgui-test-register-{nonce:016x}"));
+
+        let request = serde_json::json!({
+            "transport": "watched-dir",
+            "sources": [dir.to_string_lossy()],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/sync", request.as_bytes());
+        let body = String::from_utf8_lossy(&response.body).into_owned();
+        assert_eq!(response.status, 400, "{body}");
+        assert!(body.contains("the register directory is empty"), "{body}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
