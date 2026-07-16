@@ -455,14 +455,20 @@ fn sync_response_result(body: &[u8]) -> Result<Vec<u8>> {
         return sync_json(Some(&joined), &messages, None);
     }
 
-    // Network transport: build it through the shared selector, publish our
+    // Non-local transport: build it through the shared selector, publish our
     // local state, wait for peers, then fold the collected frontier — the same
     // shape as the CLI's `run_over_network`, but transport-agnostic. The
     // interactive server handler is sync, so this is the webgui's async→sync
     // edge, driven on the shared sync-driver runtime.
     let ticket_out_path = config.iroh_ticket_out.clone();
     let mut transport = crate::commands::sync::build_transport(&config)?;
-    let wait_ms = config.iroh_wait_ms;
+    // The settle sleep gives NETWORK peers time to answer the publish; a
+    // filesystem register (watched-dir) has nobody to wait for.
+    let wait_ms = if config.uses_network() {
+        config.iroh_wait_ms
+    } else {
+        0
+    };
     let (joined, messages) = crate::commands::sync::drive_async(async move {
         if let Some(local) = local {
             transport
@@ -512,8 +518,8 @@ fn sync_config_from_request(request: &serde_json::Value) -> Result<crate::cli::S
         Some(name) => crate::cli::TransportKind::from_str(name, /* ignore_case */ true)
             .map_err(|_| {
                 Error::new(format!(
-                    "unknown transport '{name}' (expected one of: local, iroh, arti, nym, \
-                     emissary, mdk, str0m, webrtc-rs, payjoin-dir)"
+                    "unknown transport '{name}' (expected one of: local, watched-dir, iroh, \
+                     arti, nym, emissary, mdk, str0m, webrtc-rs, payjoin-dir)"
                 ))
             })?,
         // Back-compat inference: a pasted iroh doc-ticket selects Iroh; no
@@ -3504,6 +3510,53 @@ mod tests {
         let state_psbt =
             crate::io::parse_psbt_bytes("state after sync", state_after.as_bytes()).unwrap();
         assert_eq!(state_psbt.global.input_count, 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The watched-dir register over /api/sync: in-band fragments and the
+    /// register's own files converge in one join, published back as ONE
+    /// content-addressed file; the folded fragments are pruned (replace-by-
+    /// LUB), and nothing waits on the network settle sleep.
+    #[test]
+    fn sync_endpoint_watched_dir_converges_and_prunes_the_register() {
+        let nonce: u64 = rand::random();
+        let dir = std::env::temp_dir().join(format!("ptj-webgui-test-register-{nonce:016x}"));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("a.psbt"), encoded_psbt_with(TXID, 7, 1, 50_000)).unwrap();
+
+        let request = serde_json::json!({
+            "transport": "watched-dir",
+            "psbts": [encoded_psbt_with(
+                "0000000000000000000000000000000000000000000000000000000000000002",
+                8,
+                2,
+                70_000,
+            )],
+            "sources": [dir.to_string_lossy()],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/sync", request.as_bytes());
+        assert_eq!(
+            response.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(value["inspect"]["input_count"], 2);
+
+        // The register converged to exactly one content-hash-named file
+        // holding the same join the response reports.
+        let files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(files.len(), 1, "{files:?}");
+        let stored = std::fs::read_to_string(&files[0]).unwrap();
+        assert_eq!(
+            stored.trim(),
+            value["psbt"].as_str().expect("response psbt"),
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
