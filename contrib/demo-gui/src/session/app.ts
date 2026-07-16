@@ -3551,16 +3551,19 @@ function settleSessionFork(fork: boolean): void {
   forkSessionResolve = null;
 }
 
-// The make-modifiable prompt (see makeUnorderedSelected): true = also set
-// TX_MODIFIABLE, false = just unordered, null = cancel the whole op.
+// The make-modifiable prompt (see makeUnorderedSelected): true = proceed
+// with TX_MODIFIABLE set in the same gesture, null = cancel the whole op.
+// There is no "just unordered" choice: unordered is the concurrent
+// constructor's identification scheme and the constructor refuses a
+// flag-less PSBT, so unordered-but-unmodifiable is not mintable.
 let makeModifiableResolve: ((choice: boolean | null) => void) | null = null;
 
 function promptMakeModifiable(fragmentKey: string): Promise<boolean | null> {
   const dialog = el<HTMLDialogElement>("makeModifiableDialog");
   el<HTMLElement>("makeModifiableDialogWhy").textContent =
-    `${fragmentKey} is not modifiable (TX_MODIFIABLE clear). Unordered alone only ` +
-    `changes how existing entries are identified — concurrent input/output adds also ` +
-    `need the modifiable flags. Set TX_MODIFIABLE (inputs + outputs) in the same go?`;
+    `${fragmentKey} is not modifiable (TX_MODIFIABLE clear). Unordered exists for ` +
+    `concurrent construction, and the constructor requires the modifiable flags — ` +
+    `unordered alone is not mintable. Set TX_MODIFIABLE (inputs + outputs) in the same go?`;
   return new Promise((resolve) => {
     // A re-prompt settles any dangling prompt AND closes its dialog —
     // showModal() on an already-open dialog throws inside this executor.
@@ -3608,31 +3611,38 @@ async function makeUnorderedSelected(): Promise<void> {
   if (!selected) return;
   try {
     const source = selected[0];
-    // Unordered is only half of the concurrent constructor: without
-    // TX_MODIFIABLE the result still admits no concurrent adds. When the
-    // flags are clear, offer to set them in the same gesture — the raw
-    // edit chains onto the make-unordered result BEFORE the mint, so one
-    // fragment lands either way.
+    // Unordered is the concurrent constructor's identification scheme, and
+    // the backend mints it by round-tripping the constructor — which
+    // refuses a PSBT it cannot construct into. The prerequisites therefore
+    // chain BEFORE the make-unordered call, not after: TX_MODIFIABLE when
+    // the flags are clear (prompted — the flags change what peers may do),
+    // and output unique ids when any are missing (unprompted — ids ARE how
+    // unordered entries are identified). One fragment lands either way.
     const summary = fragmentSummary(source.inspect);
     const modifiable = summary.modifiableInputs === true || summary.modifiableOutputs === true;
-    let alsoModifiable = false;
+    let psbt = source.psbt;
+    let note = `make-unordered of ${source.key}`;
     if (summary.format === "bip370" && !modifiable) {
       const choice = await promptMakeModifiable(source.key);
       if (choice === null) return; // cancelled: nothing minted
-      alsoModifiable = choice;
-    }
-    let response: PsbtResponse = await backend.makeUnordered(source.psbt);
-    let note = `make-unordered of ${source.key}`;
-    if (alsoModifiable) {
-      const edited = await backend.applyPsbtEdits(response.psbt, [
+      const edited = await backend.applyPsbtEdits(psbt, [
         { map: "global", key: TX_MODIFIABLE_KEY_HEX, value: TX_MODIFIABLE_BOTH_HEX },
       ]);
       if (edited.psbt === undefined) {
         throw new Error(edited.error ?? "the tx-modifiable raw edit failed save-time validation");
       }
-      response = { psbt: edited.psbt, inspect: edited.inspect };
+      psbt = edited.psbt;
       note += " + TX_MODIFIABLE set to both";
     }
+    const idsMissing =
+      summary.outputUidPresent !== null &&
+      summary.outputCount !== null &&
+      summary.outputUidPresent < summary.outputCount;
+    if (idsMissing) {
+      psbt = (await backend.assignIds(psbt)).psbt;
+      note += " + missing unique ids assigned";
+    }
+    const response: PsbtResponse = await backend.makeUnordered(psbt);
     const minted = await addResponse(response, "make-unordered", note);
     await settleMint("opsKeepOriginal", [source.key], [minted.key]);
     showStatus("", false);
@@ -4586,14 +4596,13 @@ function wireDom(): void {
     if (event.target === forkSessionDialog) settleSessionFork(false);
   });
   forkSessionDialog.addEventListener("cancel", () => settleSessionFork(false));
-  // The make-modifiable prompt is three-way: yes/no answer the question,
-  // ×/backdrop/Esc cancel the whole make-unordered op (nothing minted).
+  // The make-modifiable prompt is two-way: yes proceeds with the full
+  // gesture, ×/backdrop/Esc cancel the whole make-unordered op (nothing
+  // minted). There is no "just unordered" — the constructor refuses a
+  // flag-less PSBT, so that option was a guaranteed error.
   const makeModifiableDialog = el<HTMLDialogElement>("makeModifiableDialog");
   el<HTMLButtonElement>("makeModifiableYes").addEventListener("click", () =>
     settleMakeModifiable(true),
-  );
-  el<HTMLButtonElement>("makeModifiableNo").addEventListener("click", () =>
-    settleMakeModifiable(false),
   );
   el<HTMLButtonElement>("makeModifiableCancel").addEventListener("click", () =>
     settleMakeModifiable(null),

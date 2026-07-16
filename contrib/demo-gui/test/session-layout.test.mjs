@@ -502,13 +502,25 @@ test("make-unordered offers TX_MODIFIABLE in the same gesture when the flags are
     app.indexOf("// --- override fixes"),
   );
   assert.match(op, /summary\.format === "bip370" && !modifiable/);
-  // Three-way settle: cancel aborts the whole op (nothing minted)…
+  // Two-way settle: cancel aborts the whole op (nothing minted)…
   assert.match(op, /if \(choice === null\) return;/);
   assert.match(app, /makeModifiableDialog\.addEventListener\("cancel", \(\) => settleMakeModifiable\(null\)\)/);
-  // …and the raw edit chains onto the make-unordered result BEFORE the
-  // mint, so one fragment lands either way.
-  assert.match(op, /applyPsbtEdits\(response\.psbt, \[\s*\n\s*\{ map: "global", key: TX_MODIFIABLE_KEY_HEX, value: TX_MODIFIABLE_BOTH_HEX \}/);
+  // …and there is no "just unordered" choice: the backend mints unordered
+  // by round-tripping the constructor, which refuses a flag-less PSBT, so
+  // that option was a guaranteed 400.
+  assert.doesNotMatch(html, /makeModifiableNo|Just unordered/);
+  // The prerequisites chain BEFORE the make-unordered call (the constructor
+  // refuses flag-less, id-less PSBTs): TX_MODIFIABLE first…
+  const editAt = op.indexOf("applyPsbtEdits(psbt, [");
+  assert.match(op, /applyPsbtEdits\(psbt, \[\s*\n\s*\{ map: "global", key: TX_MODIFIABLE_KEY_HEX, value: TX_MODIFIABLE_BOTH_HEX \}/);
   assert.match(op, /note \+= " \+ TX_MODIFIABLE set to both"/);
+  // …then any missing output unique ids (ids ARE the unordered
+  // identification scheme, so this needs no prompt)…
+  const idsAt = op.indexOf("await backend.assignIds(psbt)");
+  assert.match(op, /note \+= " \+ missing unique ids assigned"/);
+  // …and make-unordered runs LAST, on the prepared PSBT.
+  const mintAt = op.indexOf("await backend.makeUnordered(psbt)");
+  assert.ok(editAt >= 0 && idsAt > editAt && mintAt > idsAt, "prerequisites precede the mint");
 });
 
 test("a bitcoin: URI mints a txout-intent fragment, prompting only for a missing amount", () => {
