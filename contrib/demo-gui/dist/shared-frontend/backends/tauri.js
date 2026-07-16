@@ -96,6 +96,26 @@ export class TauriBackend {
     classifyPaste(payload, network) {
         return this.call("ptj_classify", { payload, network });
     }
+    fakeDescriptor(network, kind) {
+        return this.call("ptj_fake_descriptor", { network, kind });
+    }
+    fakeUtxos(descriptor, network, count) {
+        return this.call("ptj_fake_utxos", { descriptor, network, count });
+    }
+    fakePsbt(descriptor, utxos, network, recipients) {
+        // Same wire mapping as HttpBackend: snake_case utxo refs, so the future
+        // native handler parses the identical request shape as /api/fake/psbt.
+        return this.call("ptj_fake_psbt", {
+            descriptor,
+            utxos: utxos.map((utxo) => ({
+                txid: utxo.txid,
+                vout: utxo.vout,
+                amount_sats: utxo.amountSats,
+            })),
+            network,
+            recipients,
+        });
+    }
     pay(psbt, payment, options) {
         // Same request-shape mapping as HttpBackend: the future native handler
         // shares the webgui route's builder (`ptj pay --to`).

@@ -28,6 +28,8 @@ function wrap(fn) {
         throw new PtjBackendError(0, msg);
     }
 }
+const WASM_NO_FAKER = "WasmBackend does not support the fake test-data generators yet; use a " +
+    "server backend (ptj webgui /api/fake/*)";
 export class WasmBackend {
     m;
     // `| undefined` (not `?`): the constructor assigns a possibly-undefined
@@ -101,6 +103,18 @@ export class WasmBackend {
         // rejecting degrades gracefully to the shallow card.
         throw new PtjBackendError(0, "WasmBackend does not support deep paste classification yet; use a " +
             "server backend (ptj webgui /api/classify)");
+    }
+    // The fake test-data generators lean on miniscript + bip32 key derivation
+    // server-side (ptj commands::faker); the wasm wrapper exports none of it.
+    // Reject clearly — the transport-skeleton "built without support" pattern.
+    async fakeDescriptor() {
+        throw new PtjBackendError(0, WASM_NO_FAKER);
+    }
+    async fakeUtxos() {
+        throw new PtjBackendError(0, WASM_NO_FAKER);
+    }
+    async fakePsbt() {
+        throw new PtjBackendError(0, WASM_NO_FAKER);
     }
     // --- negotiation band (opaque hex records; snake_case wire fields) ---
     async pay(psbt, payment, options) {

@@ -138,6 +138,24 @@ export class HttpBackend {
     classifyPaste(payload, network) {
         return this.postJson("/api/classify", { payload, network });
     }
+    fakeDescriptor(network, kind) {
+        return this.postJson("/api/fake/descriptor", { network, kind });
+    }
+    fakeUtxos(descriptor, network, count) {
+        return this.postJson("/api/fake/utxos", { descriptor, network, count });
+    }
+    fakePsbt(descriptor, utxos, network, recipients) {
+        return this.postJson("/api/fake/psbt", {
+            descriptor,
+            network,
+            recipients,
+            utxos: utxos.map((utxo) => ({
+                txid: utxo.txid,
+                vout: utxo.vout,
+                amount_sats: utxo.amountSats,
+            })),
+        });
+    }
     // Negotiation band: served by the webgui's /api/{pay,confirm,payments}
     // routes (crates/ptj/src/webgui.rs pay_response/confirm_response/
     // payments_response). Opaque records pass through unchanged (wasm parity);

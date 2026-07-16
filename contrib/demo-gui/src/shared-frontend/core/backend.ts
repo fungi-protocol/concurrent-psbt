@@ -21,6 +21,10 @@ import type {
   ConfirmationRecord,
   CreatePsbtRequest,
   ExportBip174Response,
+  FakeDescriptorKind,
+  FakeDescriptorResponse,
+  FakeUtxoRef,
+  FakeUtxosResponse,
   FieldEdit,
   InspectResponse,
   PayOptions,
@@ -84,6 +88,19 @@ export interface Backend {
   // mints nodes instantly and this seam enriches them asynchronously.
   // `network` is the /api/create selector (default bitcoin).
   classifyPaste(payload: string, network?: string): Promise<ClassifyResponse>;
+  // Test-data generators (psbt_faker spirit; /api/fake/* on HTTP): a fake
+  // descriptor, fake coins paying it, a fake PSBT spending those coins.
+  // Each result is an ordinary paste payload the UI feeds through the same
+  // classify/ingest path as real data. Server-side only today — wasm/tauri
+  // reject clearly, like field edits.
+  fakeDescriptor(network?: string, kind?: FakeDescriptorKind): Promise<FakeDescriptorResponse>;
+  fakeUtxos(descriptor: string, network?: string, count?: number): Promise<FakeUtxosResponse>;
+  fakePsbt(
+    descriptor: string,
+    utxos: FakeUtxoRef[],
+    network?: string,
+    recipients?: number,
+  ): Promise<PsbtResponse>;
 
   // Negotiation band (ptj pay / confirm / payments). Mechanism-only: the
   // record bytes are opaque hex, appended to / decoded from the grow-only
@@ -130,6 +147,10 @@ export type {
   DeriveConfirmation,
   EditViolation,
   ExportBip174Response,
+  FakeDescriptorKind,
+  FakeDescriptorResponse,
+  FakeUtxoRef,
+  FakeUtxosResponse,
   FieldEdit,
   IdAssignment,
   InspectResponse,

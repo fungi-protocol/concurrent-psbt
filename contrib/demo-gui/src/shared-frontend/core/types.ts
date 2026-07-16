@@ -135,6 +135,32 @@ export interface ClassifyResponse {
   [key: string]: unknown;
 }
 
+// The /api/fake/* test-data generators (psbt_faker spirit): a fake wallet
+// descriptor, a fake fully-signed coins transaction paying it, and a fake
+// PSBT spending those coins. Every response field is an ordinary paste
+// payload — the UI feeds it back through the same classify/ingest path as
+// real data. Server-side only today (miniscript + key derivation live in
+// ptj); wasm/tauri reject the ops clearly.
+export type FakeDescriptorKind = "wpkh" | "tr";
+
+export interface FakeDescriptorResponse {
+  descriptor: string;
+}
+
+export interface FakeUtxosResponse {
+  tx_hex: string;
+  txid: string;
+}
+
+// One spendable UTXO for fakePsbt — the caller learned these fields from
+// classifying the coins transaction. Maps to wire `{txid, vout,
+// amount_sats}`.
+export interface FakeUtxoRef {
+  txid: string;
+  vout: number;
+  amountSats: number;
+}
+
 // The /api/edit response. Success (HTTP 200) carries the NEW fragment
 // (`psbt` + `inspect`) with `violations: []`; a save-time validation failure
 // (HTTP 400) carries `error` + the remaining `violations` and NO psbt — it

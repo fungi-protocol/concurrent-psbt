@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Partial Transaction Joiner</title>
-    <link rel="stylesheet" href="styles.css?v=20260716-canvas3">
+    <link rel="stylesheet" href="styles.css?v=20260716-faker1">
   </head>
   <body>
     <header class="app-header">
@@ -30,6 +30,8 @@
           <div id="samplesPopover" class="session-samples-popover" role="menu" aria-label="Sample pastes" hidden>
             <p class="item-meta">Fills the paste box — nothing is added until you press Add.</p>
             <div id="samplesList" class="session-samples-list"></div>
+            <p class="item-meta">Generate — backend-minted fake test data: a descriptor, coins paying it, a PSBT spending them.</p>
+            <div id="generatorsList" class="session-samples-list"></div>
           </div>
         </div>
       </div>
@@ -575,6 +577,6 @@
       </div>
     </dialog>
 
-    <script type="module" src="dist/session/app.js?v=20260716-canvas3"></script>
+    <script type="module" src="dist/session/app.js?v=20260716-faker1"></script>
   </body>
 </html>

@@ -22,6 +22,10 @@ import {
   type ConfirmOptions,
   type CreatePsbtRequest,
   type ExportBip174Response,
+  type FakeDescriptorKind,
+  type FakeDescriptorResponse,
+  type FakeUtxoRef,
+  type FakeUtxosResponse,
   type FieldEdit,
   type InspectResponse,
   type PaymentRecord,
@@ -147,6 +151,34 @@ export class TauriBackend implements Backend {
 
   classifyPaste(payload: string, network?: string): Promise<ClassifyResponse> {
     return this.call("ptj_classify", { payload, network });
+  }
+
+  fakeDescriptor(network?: string, kind?: FakeDescriptorKind): Promise<FakeDescriptorResponse> {
+    return this.call("ptj_fake_descriptor", { network, kind });
+  }
+
+  fakeUtxos(descriptor: string, network?: string, count?: number): Promise<FakeUtxosResponse> {
+    return this.call("ptj_fake_utxos", { descriptor, network, count });
+  }
+
+  fakePsbt(
+    descriptor: string,
+    utxos: FakeUtxoRef[],
+    network?: string,
+    recipients?: number,
+  ): Promise<PsbtResponse> {
+    // Same wire mapping as HttpBackend: snake_case utxo refs, so the future
+    // native handler parses the identical request shape as /api/fake/psbt.
+    return this.call("ptj_fake_psbt", {
+      descriptor,
+      utxos: utxos.map((utxo) => ({
+        txid: utxo.txid,
+        vout: utxo.vout,
+        amount_sats: utxo.amountSats,
+      })),
+      network,
+      recipients,
+    });
   }
 
   pay(psbt: string, payment: PaymentRecord, options?: PayOptions): Promise<PsbtResponse> {

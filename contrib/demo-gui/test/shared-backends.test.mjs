@@ -9,6 +9,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { HttpBackend } from "../dist/shared-frontend/backends/http.js";
+import { TauriBackend } from "../dist/shared-frontend/backends/tauri.js";
 import { PtjBackendError } from "../dist/shared-frontend/core/types.js";
 
 function jsonResponse(status, body) {
@@ -159,6 +160,72 @@ test("classifyPaste posts {payload, network} to /api/classify", async () => {
     network: "regtest",
   });
   assert.deepEqual(response, classified);
+});
+
+test("fakeDescriptor posts {network, kind} to /api/fake/descriptor", async () => {
+  const { fetch, calls } = recordingFetch(
+    jsonResponse(200, { descriptor: "tr([00000000/86'/1'/0']tpub.../0/*)#chk" }),
+  );
+  const backend = new HttpBackend(fetch);
+
+  const response = await backend.fakeDescriptor("regtest", "tr");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, "/api/fake/descriptor");
+  assert.deepEqual(JSON.parse(calls[0].init.body), { network: "regtest", kind: "tr" });
+  assert.equal(response.descriptor, "tr([00000000/86'/1'/0']tpub.../0/*)#chk");
+});
+
+test("fakeUtxos posts {descriptor, network, count} to /api/fake/utxos", async () => {
+  const { fetch, calls } = recordingFetch(jsonResponse(200, { tx_hex: "02...", txid: "ab" }));
+  const backend = new HttpBackend(fetch);
+
+  const response = await backend.fakeUtxos("wpkh(tpub.../0/*)", "regtest", 2);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, "/api/fake/utxos");
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    descriptor: "wpkh(tpub.../0/*)",
+    network: "regtest",
+    count: 2,
+  });
+  assert.equal(response.tx_hex, "02...");
+});
+
+test("fakePsbt maps utxo refs to snake_case {txid, vout, amount_sats}", async () => {
+  const { fetch, calls } = recordingFetch(jsonResponse(200, { psbt: "cHNidP...", inspect: {} }));
+  const backend = new HttpBackend(fetch);
+
+  await backend.fakePsbt(
+    "wpkh(tpub.../0/*)",
+    [{ txid: "ab", vout: 1, amountSats: 50_000 }],
+    "regtest",
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, "/api/fake/psbt");
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    descriptor: "wpkh(tpub.../0/*)",
+    network: "regtest",
+    utxos: [{ txid: "ab", vout: 1, amount_sats: 50_000 }],
+  });
+});
+
+test("TauriBackend.fakePsbt sends the same snake_case utxo refs as HttpBackend", async () => {
+  const calls = [];
+  const invoke = async (cmd, args) => {
+    calls.push({ cmd, args });
+    return { psbt: "cHNidP...", inspect: {} };
+  };
+  const backend = new TauriBackend({ invoke });
+
+  await backend.fakePsbt(
+    "wpkh(tpub.../0/*)",
+    [{ txid: "ab", vout: 1, amountSats: 50_000 }],
+    "regtest",
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].cmd, "ptj_fake_psbt");
+  // The future native handler parses the identical request shape as
+  // /api/fake/psbt — camelCase must not leak past the adapter.
+  assert.deepEqual(calls[0].args.utxos, [{ txid: "ab", vout: 1, amount_sats: 50_000 }]);
 });
 
 test("classifyPaste surfaces the route's redirect/parse errors as PtjBackendError", async () => {

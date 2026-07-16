@@ -64,6 +64,19 @@ export interface ClassifyResponse {
     kind: string;
     [key: string]: unknown;
 }
+export type FakeDescriptorKind = "wpkh" | "tr";
+export interface FakeDescriptorResponse {
+    descriptor: string;
+}
+export interface FakeUtxosResponse {
+    tx_hex: string;
+    txid: string;
+}
+export interface FakeUtxoRef {
+    txid: string;
+    vout: number;
+    amountSats: number;
+}
 export interface ApplyEditsResponse {
     psbt?: string;
     inspect?: InspectResponse;

@@ -1,4 +1,4 @@
-import type { ApplyEditsOptions, ApplyEditsResponse, AssignIdsOptions, AtomizeResponse, ClassifyResponse, ConfirmOptions, ConfirmationRecord, CreatePsbtRequest, ExportBip174Response, FieldEdit, InspectResponse, PayOptions, PaymentRecord, PaymentsOptions, PaymentsResponse, PsbtResponse, SyncRequest, SyncResponse } from "./types.js";
+import type { ApplyEditsOptions, ApplyEditsResponse, AssignIdsOptions, AtomizeResponse, ClassifyResponse, ConfirmOptions, ConfirmationRecord, CreatePsbtRequest, ExportBip174Response, FakeDescriptorKind, FakeDescriptorResponse, FakeUtxoRef, FakeUtxosResponse, FieldEdit, InspectResponse, PayOptions, PaymentRecord, PaymentsOptions, PaymentsResponse, PsbtResponse, SyncRequest, SyncResponse } from "./types.js";
 export interface Backend {
     inspectPsbt(psbt: string): Promise<InspectResponse>;
     createPsbt(request: CreatePsbtRequest): Promise<PsbtResponse>;
@@ -12,10 +12,13 @@ export interface Backend {
     assignIds(psbt: string, options?: AssignIdsOptions): Promise<PsbtResponse>;
     applyPsbtEdits(psbt: string, edits: FieldEdit[], options?: ApplyEditsOptions): Promise<ApplyEditsResponse>;
     classifyPaste(payload: string, network?: string): Promise<ClassifyResponse>;
+    fakeDescriptor(network?: string, kind?: FakeDescriptorKind): Promise<FakeDescriptorResponse>;
+    fakeUtxos(descriptor: string, network?: string, count?: number): Promise<FakeUtxosResponse>;
+    fakePsbt(descriptor: string, utxos: FakeUtxoRef[], network?: string, recipients?: number): Promise<PsbtResponse>;
     pay(psbt: string, payment: PaymentRecord, options?: PayOptions): Promise<PsbtResponse>;
     confirm(psbt: string, confirmation: ConfirmationRecord, options?: ConfirmOptions): Promise<PsbtResponse>;
     payments(psbt: string, options?: PaymentsOptions): Promise<PaymentsResponse>;
     syncPsbts(request: SyncRequest): Promise<SyncResponse>;
 }
-export type { AppliedFix, ApplyEditsOptions, ApplyEditsResponse, AssignIdsOptions, AtomizeResponse, ClassifyResponse, ConfirmOptions, ConfirmationRecord, CreateInput, CreateOutput, CreatePsbtRequest, DeriveConfirmation, EditViolation, ExportBip174Response, FieldEdit, IdAssignment, InspectResponse, OrderingMode, PayByAddress, PaymentRecord, PayOptions, PaymentsOptions, PaymentsResponse, PsbtResponse, SyncRequest, SyncResponse, } from "./types.js";
+export type { AppliedFix, ApplyEditsOptions, ApplyEditsResponse, AssignIdsOptions, AtomizeResponse, ClassifyResponse, ConfirmOptions, ConfirmationRecord, CreateInput, CreateOutput, CreatePsbtRequest, DeriveConfirmation, EditViolation, ExportBip174Response, FakeDescriptorKind, FakeDescriptorResponse, FakeUtxoRef, FakeUtxosResponse, FieldEdit, IdAssignment, InspectResponse, OrderingMode, PayByAddress, PaymentRecord, PayOptions, PaymentsOptions, PaymentsResponse, PsbtResponse, SyncRequest, SyncResponse, } from "./types.js";
 export { PtjBackendError } from "./types.js";

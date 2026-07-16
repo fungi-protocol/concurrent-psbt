@@ -1,5 +1,5 @@
 import type { Backend } from "../core/backend.js";
-import { type ApplyEditsOptions, type ApplyEditsResponse, type AssignIdsOptions, type AtomizeResponse, type ClassifyResponse, type ConfirmationRecord, type ConfirmOptions, type CreatePsbtRequest, type ExportBip174Response, type FieldEdit, type InspectResponse, type PaymentRecord, type PayOptions, type PaymentsOptions, type PaymentsResponse, type PsbtResponse, type SyncRequest, type SyncResponse } from "../core/types.js";
+import { type ApplyEditsOptions, type ApplyEditsResponse, type AssignIdsOptions, type AtomizeResponse, type ClassifyResponse, type ConfirmationRecord, type ConfirmOptions, type CreatePsbtRequest, type ExportBip174Response, type FakeDescriptorResponse, type FakeUtxosResponse, type FieldEdit, type InspectResponse, type PaymentRecord, type PayOptions, type PaymentsOptions, type PaymentsResponse, type PsbtResponse, type SyncRequest, type SyncResponse } from "../core/types.js";
 export interface PtjWasmModule {
     inspect(psbt: string): InspectResponse;
     create(request: unknown): PsbtResponse;
@@ -41,6 +41,9 @@ export declare class WasmBackend implements Backend {
     assignIds(psbt: string, options?: AssignIdsOptions): Promise<PsbtResponse>;
     applyPsbtEdits(_psbt: string, _edits: FieldEdit[], _options?: ApplyEditsOptions): Promise<ApplyEditsResponse>;
     classifyPaste(_payload: string, _network?: string): Promise<ClassifyResponse>;
+    fakeDescriptor(): Promise<FakeDescriptorResponse>;
+    fakeUtxos(): Promise<FakeUtxosResponse>;
+    fakePsbt(): Promise<PsbtResponse>;
     pay(psbt: string, payment: PaymentRecord, options?: PayOptions): Promise<PsbtResponse>;
     confirm(psbt: string, confirmation: ConfirmationRecord, options?: ConfirmOptions): Promise<PsbtResponse>;
     payments(psbt: string, options?: PaymentsOptions): Promise<PaymentsResponse>;

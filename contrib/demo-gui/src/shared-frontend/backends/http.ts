@@ -21,6 +21,10 @@ import {
   type ConfirmOptions,
   type CreatePsbtRequest,
   type ExportBip174Response,
+  type FakeDescriptorKind,
+  type FakeDescriptorResponse,
+  type FakeUtxoRef,
+  type FakeUtxosResponse,
   type FieldEdit,
   type InspectResponse,
   type PaymentRecord,
@@ -202,6 +206,32 @@ export class HttpBackend implements Backend {
 
   classifyPaste(payload: string, network?: string): Promise<ClassifyResponse> {
     return this.postJson("/api/classify", { payload, network });
+  }
+
+  fakeDescriptor(network?: string, kind?: FakeDescriptorKind): Promise<FakeDescriptorResponse> {
+    return this.postJson("/api/fake/descriptor", { network, kind });
+  }
+
+  fakeUtxos(descriptor: string, network?: string, count?: number): Promise<FakeUtxosResponse> {
+    return this.postJson("/api/fake/utxos", { descriptor, network, count });
+  }
+
+  fakePsbt(
+    descriptor: string,
+    utxos: FakeUtxoRef[],
+    network?: string,
+    recipients?: number,
+  ): Promise<PsbtResponse> {
+    return this.postJson("/api/fake/psbt", {
+      descriptor,
+      network,
+      recipients,
+      utxos: utxos.map((utxo) => ({
+        txid: utxo.txid,
+        vout: utxo.vout,
+        amount_sats: utxo.amountSats,
+      })),
+    });
   }
 
   // Negotiation band: served by the webgui's /api/{pay,confirm,payments}

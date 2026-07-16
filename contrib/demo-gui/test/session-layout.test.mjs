@@ -611,3 +611,32 @@ test("the create form is a reachable drop target for utxo drags", () => {
   const paint = app.slice(app.indexOf("function paintWireTargets"), app.indexOf("function clearWirePaint"));
   assert.match(paint, /createWireTarget"\)\.hidden = wire\.source\.kind !== "utxo"/);
 });
+
+test("generator chips fill the paste box like samples — never ingest directly", () => {
+  // The Generate group lives in the samples popover, after the sample list.
+  assert.match(html, /id="generatorsList" class="session-samples-list"/);
+  const generators = app.slice(
+    app.indexOf("function initGeneratorChips"),
+    app.indexOf("function initSamplesPalette"),
+  );
+  // Every generator funnels through fillPaste (paste box + Add drawer);
+  // ingestion stays behind the operator's explicit Add.
+  assert.match(generators, /fillPaste\(await generator\.run\(\)\)/);
+  assert.doesNotMatch(generators, /addObject|ingest/);
+  // The pipeline is stateful: coins need the latest descriptor, the PSBT
+  // needs both the descriptor and classified (spendable) coins.
+  assert.match(generators, /backend\.fakeUtxos\(descriptor, displayNetwork\(\)\)/);
+  assert.match(generators, /backend\.fakePsbt\(descriptor, utxos, displayNetwork\(\)\)/);
+  const helpers = app.slice(
+    app.indexOf("function latestDescriptorText"),
+    app.indexOf("function initGeneratorChips"),
+  );
+  assert.match(helpers, /descriptor\.normalized \?\? descriptor\.descriptor/);
+  // Spendable coins = outputs of FULLY SIGNED transactions with a complete
+  // outpoint; unsigned (or still-classifying, fullySigned null) txs don't
+  // mint spendable coins.
+  assert.match(
+    helpers,
+    /utxo\.fullySigned === true && utxo\.txid !== null && utxo\.vout !== null && utxo\.amountSats !== null/,
+  );
+});

@@ -1,5 +1,5 @@
 import type { Backend } from "../core/backend.js";
-import { type ApplyEditsOptions, type ApplyEditsResponse, type AssignIdsOptions, type AtomizeResponse, type ClassifyResponse, type ConfirmationRecord, type ConfirmOptions, type CreatePsbtRequest, type ExportBip174Response, type FieldEdit, type InspectResponse, type PaymentRecord, type PayOptions, type PaymentsOptions, type PaymentsResponse, type PsbtResponse, type SyncRequest, type SyncResponse } from "../core/types.js";
+import { type ApplyEditsOptions, type ApplyEditsResponse, type AssignIdsOptions, type AtomizeResponse, type ClassifyResponse, type ConfirmationRecord, type ConfirmOptions, type CreatePsbtRequest, type ExportBip174Response, type FakeDescriptorKind, type FakeDescriptorResponse, type FakeUtxoRef, type FakeUtxosResponse, type FieldEdit, type InspectResponse, type PaymentRecord, type PayOptions, type PaymentsOptions, type PaymentsResponse, type PsbtResponse, type SyncRequest, type SyncResponse } from "../core/types.js";
 export type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 export interface TauriBackendOptions {
     invoke?: TauriInvoke;
@@ -20,6 +20,9 @@ export declare class TauriBackend implements Backend {
     assignIds(psbt: string, options?: AssignIdsOptions): Promise<PsbtResponse>;
     applyPsbtEdits(psbt: string, edits: FieldEdit[], options?: ApplyEditsOptions): Promise<ApplyEditsResponse>;
     classifyPaste(payload: string, network?: string): Promise<ClassifyResponse>;
+    fakeDescriptor(network?: string, kind?: FakeDescriptorKind): Promise<FakeDescriptorResponse>;
+    fakeUtxos(descriptor: string, network?: string, count?: number): Promise<FakeUtxosResponse>;
+    fakePsbt(descriptor: string, utxos: FakeUtxoRef[], network?: string, recipients?: number): Promise<PsbtResponse>;
     pay(psbt: string, payment: PaymentRecord, options?: PayOptions): Promise<PsbtResponse>;
     confirm(psbt: string, confirmation: ConfirmationRecord, options?: ConfirmOptions): Promise<PsbtResponse>;
     payments(psbt: string, options?: PaymentsOptions): Promise<PaymentsResponse>;

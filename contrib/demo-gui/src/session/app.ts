@@ -22,6 +22,7 @@ import { HttpBackend } from "../shared-frontend/backends/http.js";
 import { PtjBackendError } from "../shared-frontend/core/types.js";
 import type {
   Backend,
+  FakeUtxoRef,
   InspectResponse,
   PsbtResponse,
 } from "../shared-frontend/core/backend.js";
@@ -3019,18 +3020,96 @@ function setSamplesPopover(open: boolean): void {
   el<HTMLButtonElement>("samplesToggle").setAttribute("aria-expanded", String(open));
 }
 
-function initSamplesPalette(): void {
-  const list = el<HTMLElement>("samplesList");
-  for (const sample of SAMPLE_PASTES) {
-    const chip = button(sample.name, `${sample.kind}: fills the paste box`, () => {
-      setSamplesPopover(false);
-      setAddDrawer(true);
-      el<HTMLTextAreaElement>("pasteInput").value = sample.value;
-      el<HTMLTextAreaElement>("pasteInput").focus();
+function fillPaste(value: string): void {
+  setSamplesPopover(false);
+  setAddDrawer(true);
+  el<HTMLTextAreaElement>("pasteInput").value = value;
+  el<HTMLTextAreaElement>("pasteInput").focus();
+}
+
+// The Generate group (psbt_faker spirit): backend-minted fake test data.
+// Each generator fills the paste box exactly like a sample chip — the
+// descriptor feeds the coins generator, the coins feed the PSBT generator,
+// and every payload still goes through the explicit Add — so generated
+// data walks the real universal-paste path end to end.
+function latestDescriptorText(): string | null {
+  const descriptor = objects.descriptors.at(-1);
+  return descriptor ? (descriptor.normalized ?? descriptor.descriptor) : null;
+}
+
+function spendableUtxoRefs(): FakeUtxoRef[] {
+  // Spendable means the coins EXIST: only outputs of a fully signed
+  // transaction qualify (fullySigned is null while classification is
+  // pending, which also excludes it).
+  return objects.utxos.flatMap((utxo) =>
+    utxo.fullySigned === true && utxo.txid !== null && utxo.vout !== null && utxo.amountSats !== null
+      ? [{ txid: utxo.txid, vout: utxo.vout, amountSats: utxo.amountSats }]
+      : [],
+  );
+}
+
+function initGeneratorChips(): void {
+  const list = el<HTMLElement>("generatorsList");
+  const generators: { name: string; title: string; run: () => Promise<string> }[] = [
+    {
+      name: "🎲 descriptor (wpkh)",
+      title: "fake wallet descriptor (BIP 84): fills the paste box",
+      run: async () => (await backend.fakeDescriptor(displayNetwork(), "wpkh")).descriptor,
+    },
+    {
+      name: "🎲 descriptor (tr)",
+      title: "fake wallet descriptor (BIP 86 taproot): fills the paste box",
+      run: async () => (await backend.fakeDescriptor(displayNetwork(), "tr")).descriptor,
+    },
+    {
+      name: "🎲 coins",
+      title: "fake signed tx paying the latest descriptor: fills the paste box",
+      run: async () => {
+        const descriptor = latestDescriptorText();
+        if (!descriptor) throw new Error("generate and Add a descriptor first");
+        return (await backend.fakeUtxos(descriptor, displayNetwork())).tx_hex;
+      },
+    },
+    {
+      name: "🎲 PSBT",
+      title:
+        "fake PSBT spending your coins, change to the latest descriptor: fills the paste box",
+      run: async () => {
+        const descriptor = latestDescriptorText();
+        if (!descriptor) throw new Error("generate and Add a descriptor first");
+        const utxos = spendableUtxoRefs();
+        if (!utxos.length) throw new Error("generate and Add fake coins first");
+        return (await backend.fakePsbt(descriptor, utxos, displayNetwork())).psbt;
+      },
+    },
+  ];
+  for (const generator of generators) {
+    const chip = button(generator.name, generator.title, async () => {
+      chip.disabled = true;
+      try {
+        fillPaste(await generator.run());
+        showStatus("", false);
+      } catch (error) {
+        showStatus(error instanceof Error ? error.message : String(error), true);
+      } finally {
+        chip.disabled = false;
+      }
     });
     chip.classList.add("session-sample-chip");
     list.append(chip);
   }
+}
+
+function initSamplesPalette(): void {
+  const list = el<HTMLElement>("samplesList");
+  for (const sample of SAMPLE_PASTES) {
+    const chip = button(sample.name, `${sample.kind}: fills the paste box`, () => {
+      fillPaste(sample.value);
+    });
+    chip.classList.add("session-sample-chip");
+    list.append(chip);
+  }
+  initGeneratorChips();
   el<HTMLButtonElement>("samplesToggle").addEventListener("click", () => {
     setSamplesPopover(el<HTMLElement>("samplesPopover").hidden);
   });
