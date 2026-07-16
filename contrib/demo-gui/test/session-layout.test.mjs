@@ -362,6 +362,33 @@ test("clicking a row toggles ITS OWN expanded detail; the ladder resets all rows
   assert.match(app, /detailLevels\.delete\(fragment\.key\);\n\s*clearRowOverrides\(fragment\.key\);/);
 });
 
+test("a mid-drag scroll re-anchors the wire to the source card", () => {
+  // The line tail is computed from the source card's CURRENT rect (at the
+  // pointerdown's offset within it, clamped), never a stale client point;
+  // the card is re-queried by wire ref if a render replaced the node.
+  const tailStart = app.indexOf("function wireDragTail");
+  const tailSlice = app.slice(tailStart, app.indexOf("function paintWireHover", tailStart));
+  assert.ok(tailStart >= 0, "wireDragTail slice is bounded");
+  assert.match(tailSlice, /drag\.node\.isConnected/);
+  assert.match(tailSlice, /rect\.left \+ Math\.min\(drag\.anchorOffsetX, rect\.width\)/);
+  // …and the move handler paints from that tail, not the pointerdown point.
+  const moveStart = app.indexOf("function wireDragMove");
+  const moveSlice = app.slice(moveStart, app.indexOf("function wireDragScroll", moveStart));
+  assert.match(moveSlice, /updateWireDragLine\(tail\.x, tail\.y, event\.clientX, event\.clientY\)/);
+  assert.doesNotMatch(moveSlice, /updateWireDragLine\(wireDrag\.startX/);
+  // A scroll fires no pointermove: the capture-phase scroll listener
+  // (scroll events do not bubble; capture sees every scroller) repaints the
+  // line and re-runs the hover magnet at the pointer's last position.
+  const scrollStart = app.indexOf("function wireDragScroll");
+  const scrollSlice = app.slice(scrollStart, app.indexOf("\n}", scrollStart));
+  assert.match(scrollSlice, /if \(!wireDrag\?\.active\) return/);
+  assert.match(scrollSlice, /paintWireHover\(wireDrag\.lastX, wireDrag\.lastY, wireDrag\.ref\)/);
+  assert.match(
+    app,
+    /document\.addEventListener\("scroll", wireDragScroll, \{ capture: true, passive: true \}\)/,
+  );
+});
+
 test("expanded rows chip the address fact, not the row face; the value cycles", () => {
   // The row face hands its identity chip to the facts when expanded…
   const inputStart = app.indexOf("function inputRow");
@@ -678,9 +705,12 @@ test("wire drops magnet to the nearest compatible target", () => {
   );
   // Hidden nodes (closed drawers) never attract.
   assert.match(snap, /rect\.width === 0 \|\| rect\.height === 0/);
-  // Both the finish and the hover preview go through the magnet.
+  // Both the finish and the hover preview go through the magnet (the move
+  // handler delegates to paintWireHover, which runs the same snap).
+  const hover = app.slice(app.indexOf("function paintWireHover"), app.indexOf("function wireDragMove"));
+  assert.match(hover, /snapWireTarget\(x, y, source\)/);
   const move = app.slice(app.indexOf("function wireDragMove"), app.indexOf("function finishWireDrag"));
-  assert.match(move, /snapWireTarget\(event\.clientX, event\.clientY, wireDrag\.ref\)/);
+  assert.match(move, /paintWireHover\(event\.clientX, event\.clientY, wireDrag\.ref\)/);
   const finish = app.slice(app.indexOf("function finishWireDrag"), app.indexOf("// Completing a wire gesture"));
   assert.match(finish, /snapWireTarget\(event\.clientX, event\.clientY, ref\)/);
 });

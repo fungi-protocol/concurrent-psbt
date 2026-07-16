@@ -753,6 +753,15 @@ interface WireDrag {
   pointerId: number;
   startX: number;
   startY: number;
+  // The pointerdown's offset WITHIN the source card's rect: the line tail
+  // re-anchors to the card's current rect at this offset, so a mid-drag
+  // scroll moves the tail with the card (a wire), not the glass (a drawing).
+  anchorOffsetX: number;
+  anchorOffsetY: number;
+  // The pointer's latest client position — a scroll fires no pointermove,
+  // so the scroll handler repaints the line and hover from here.
+  lastX: number;
+  lastY: number;
   active: boolean;
   node: HTMLElement;
 }
@@ -912,16 +921,49 @@ function armWireDrag(node: HTMLElement, ref: NodeRef): void {
     if (event.button !== 0 || wireDrag) return;
     // Form controls and buttons keep their own press semantics.
     if ((event.target as HTMLElement).closest("button, a, input, textarea, select")) return;
+    const rect = node.getBoundingClientRect();
     wireDrag = {
       ref,
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
+      anchorOffsetX: event.clientX - rect.left,
+      anchorOffsetY: event.clientY - rect.top,
+      lastX: event.clientX,
+      lastY: event.clientY,
       active: false,
       node,
     };
     node.setPointerCapture(event.pointerId);
   });
+}
+
+// The line tail rides the SOURCE CARD, not the glass: the card's current
+// rect, at the pointerdown's offset within it (clamped — a re-rendered card
+// may have shrunk). The card is re-queried by its wire ref when a mid-drag
+// render replaced the captured node.
+function wireDragTail(drag: WireDrag): { x: number; y: number } {
+  const node = drag.node.isConnected
+    ? drag.node
+    : document.querySelector<HTMLElement>(
+        `[data-wire-kind="${drag.ref.kind}"][data-wire-key="${drag.ref.key}"]`,
+      );
+  if (!node) return { x: drag.startX, y: drag.startY };
+  const rect = node.getBoundingClientRect();
+  return {
+    x: rect.left + Math.min(drag.anchorOffsetX, rect.width),
+    y: rect.top + Math.min(drag.anchorOffsetY, rect.height),
+  };
+}
+
+// The hover preview uses the same magnet as the drop, so what lights up is
+// exactly what a release would hit.
+function paintWireHover(x: number, y: number, source: NodeRef): void {
+  const hover = snapWireTarget(x, y, source);
+  for (const painted of Array.from(document.querySelectorAll<HTMLElement>(".session-wire-hover"))) {
+    if (painted !== hover) painted.classList.remove("session-wire-hover");
+  }
+  if (hover && !sameRef(wireRefOf(hover), source)) hover.classList.add("session-wire-hover");
 }
 
 function wireDragMove(event: PointerEvent): void {
@@ -937,14 +979,22 @@ function wireDragMove(event: PointerEvent): void {
     wire = beginWire(wireDrag.ref.kind, wireDrag.ref.key);
     paintWireTargets();
   }
-  updateWireDragLine(wireDrag.startX, wireDrag.startY, event.clientX, event.clientY);
-  // The hover preview uses the same magnet as the drop, so what lights up
-  // is exactly what a release would hit.
-  const hover = snapWireTarget(event.clientX, event.clientY, wireDrag.ref);
-  for (const painted of Array.from(document.querySelectorAll<HTMLElement>(".session-wire-hover"))) {
-    if (painted !== hover) painted.classList.remove("session-wire-hover");
-  }
-  if (hover && !sameRef(wireRefOf(hover), wireDrag.ref)) hover.classList.add("session-wire-hover");
+  wireDrag.lastX = event.clientX;
+  wireDrag.lastY = event.clientY;
+  const tail = wireDragTail(wireDrag);
+  updateWireDragLine(tail.x, tail.y, event.clientX, event.clientY);
+  paintWireHover(event.clientX, event.clientY, wireDrag.ref);
+}
+
+// A mid-drag scroll moves the cards under a stationary pointer and fires no
+// pointermove: re-anchor the line tail to the source card's new rect and
+// re-run the hover magnet at the pointer's last position — the wire stays
+// attached to the card instead of hanging in viewport space.
+function wireDragScroll(): void {
+  if (!wireDrag?.active) return;
+  const tail = wireDragTail(wireDrag);
+  updateWireDragLine(tail.x, tail.y, wireDrag.lastX, wireDrag.lastY);
+  paintWireHover(wireDrag.lastX, wireDrag.lastY, wireDrag.ref);
 }
 
 function finishWireDrag(event: PointerEvent, completed: boolean): void {
@@ -4382,6 +4432,9 @@ function wireDom(): void {
   document.addEventListener("pointermove", wireDragMove);
   document.addEventListener("pointerup", (event) => finishWireDrag(event, true));
   document.addEventListener("pointercancel", (event) => finishWireDrag(event, false));
+  // Capture phase: the workbench (and any drawer) scrolls in its own
+  // element, and scroll events do not bubble — capture sees them all.
+  document.addEventListener("scroll", wireDragScroll, { capture: true, passive: true });
 
   el<HTMLButtonElement>("addObject").addEventListener("click", () => void addObject());
   el<HTMLInputElement>("uploadInput").addEventListener("change", () => void loadUpload());
