@@ -388,20 +388,22 @@ export function wireDisposition(v) {
         return "blocked";
     return "unbacked";
 }
-// A fragment that IS a session's register content stands for its session
-// in peer wires: joining a fragment VALUE to a peer has no meaning, so a
-// gesture touching the content card unambiguously refers to the session
-// holding it (authorization). Mine fragments are never register contents,
-// so only in-session cards resolve.
-export function resolveWireEndpoint(ref, counterpart, state) {
-    if (ref.kind !== "fragment" || counterpart.kind !== "peer")
+// A fragment that IS a session's register content stands for its session in
+// EVERY wire: the content card shows register state, not a Mine draft, so a
+// gesture touching it means the session holding it. Fragment→content writes
+// into the register (the session computes the LUB and absorbs the operand),
+// content→content merges the sessions, content→peer authorizes the peer —
+// and content→its-own-session collapses to a refused self-wire. Mine
+// fragments are never register contents, so only in-session cards resolve.
+export function resolveWireEndpoint(ref, state) {
+    if (ref.kind !== "fragment")
         return ref;
     const holder = state.sessions.find((session) => session.contentKey === ref.key);
     return holder ? { kind: "session", key: holder.key } : ref;
 }
 export function wireVerdict(source, target, state) {
-    const resolvedSource = resolveWireEndpoint(source, target, state);
-    const resolvedTarget = resolveWireEndpoint(target, source, state);
+    const resolvedSource = resolveWireEndpoint(source, state);
+    const resolvedTarget = resolveWireEndpoint(target, state);
     if (resolvedSource !== source || resolvedTarget !== target) {
         return wireVerdict(resolvedSource, resolvedTarget, state);
     }
@@ -487,8 +489,8 @@ export function queueWire(wires, source, target, state) {
     // The queue stores CANONICAL endpoints (a content card resolves to its
     // session) so execution, edges, and duplicate detection all see the wire
     // the verdict was about.
-    const canonicalSource = resolveWireEndpoint(source, target, state);
-    const canonicalTarget = resolveWireEndpoint(target, source, state);
+    const canonicalSource = resolveWireEndpoint(source, state);
+    const canonicalTarget = resolveWireEndpoint(target, state);
     const v = wireVerdict(canonicalSource, canonicalTarget, state);
     if (wireDisposition(v) !== "compatible") {
         return { wires, queued: false, duplicate: false, verdict: v };
@@ -526,11 +528,28 @@ export function nodeExists(ref, state, fragmentKeys) {
 // Re-validate the queue against current state (the demo's validJoinWires):
 // wires lose their place when an endpoint disappears or the pair's verdict
 // is no longer compatible (e.g. the fragment was published to the session
-// through another path).
+// through another path). Endpoints re-canonicalize first — a fragment that
+// became a register's content while its wire waited now stands for that
+// session, so the wire executes as the write it now means (and wires that
+// collapse onto an already-queued pair, or onto themselves, drop out).
 export function pruneWires(wires, state, fragmentKeys) {
-    return wires.filter((wire) => nodeExists(wire.source, state, fragmentKeys) &&
-        nodeExists(wire.target, state, fragmentKeys) &&
-        wireDisposition(wireVerdict(wire.source, wire.target, state)) === "compatible");
+    const seen = new Set();
+    const live = [];
+    for (const wire of wires) {
+        const source = resolveWireEndpoint(wire.source, state);
+        const target = resolveWireEndpoint(wire.target, state);
+        if (!nodeExists(source, state, fragmentKeys) || !nodeExists(target, state, fragmentKeys)) {
+            continue;
+        }
+        if (wireDisposition(wireVerdict(source, target, state)) !== "compatible")
+            continue;
+        const key = wireKey(source, target);
+        if (seen.has(key))
+            continue;
+        seen.add(key);
+        live.push({ source, target });
+    }
+    return live;
 }
 // Connected components of the pending-wire graph (the demo's
 // joinComponents): the toolbar Join applies each component as a unit.

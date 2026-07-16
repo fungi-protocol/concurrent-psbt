@@ -110,7 +110,7 @@ export interface WireVerdict {
 export declare function nodeDisplayName(ref: NodeRef, state: ObjectsState): string;
 export type WireDisposition = "compatible" | "blocked" | "unbacked";
 export declare function wireDisposition(v: WireVerdict): WireDisposition;
-export declare function resolveWireEndpoint(ref: NodeRef, counterpart: NodeRef, state: ObjectsState): NodeRef;
+export declare function resolveWireEndpoint(ref: NodeRef, state: ObjectsState): NodeRef;
 export declare function wireVerdict(source: NodeRef, target: NodeRef, state: ObjectsState): WireVerdict;
 export interface PendingWire {
     source: NodeRef;

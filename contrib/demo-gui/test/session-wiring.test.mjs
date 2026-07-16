@@ -173,13 +173,20 @@ test("fragment-session wiring is symmetric and ALWAYS legal (⊔ into the regist
   assert.equal(reversed.kind, "fragment-into-session");
   assert.equal(reversed.allowed, true);
 
-  // Writing the value the register already holds is an ABSORBED join the
-  // shell reports — never a refusal ("already in the session" is nonsense
-  // for a monotone register).
-  const absorbed = wireVerdict(ref("fragment", "psbt-1"), ref("session", "session-1"), state);
-  assert.equal(absorbed.allowed, true);
-  assert.equal(absorbed.backed, true);
-  assert.equal(absorbed.reason, null);
+  // The verdict never peeks at PSBT values, so a fragment the register
+  // already subsumes still wires in — the shell reports the ABSORBED join
+  // ("already in the session" is nonsense for a monotone register). Only
+  // the register's own content card refuses, as a self-wire (below).
+  const contained = wireVerdict(ref("fragment", "psbt-3"), ref("session", "session-1"), state);
+  assert.equal(contained.allowed, true);
+  assert.equal(contained.backed, true);
+  assert.equal(contained.reason, null);
+
+  // Dragging the content card onto its own session collapses to a
+  // self-wire: the card IS the register value, there is nothing to write.
+  const self = wireVerdict(ref("fragment", "psbt-1"), ref("session", "session-1"), state);
+  assert.equal(self.allowed, false);
+  assert.match(self.reason, /itself/);
 });
 
 test("peer-session wiring is authorization: allowed, backed, transport-agnostic", () => {
@@ -291,6 +298,74 @@ test("a register's content card wires to peers as its session", () => {
   const mine = wireVerdict(ref("fragment", "psbt-9"), ref("peer", "peer-1"), state);
   assert.equal(mine.allowed, false);
   assert.match(mine.reason, /through sessions/);
+});
+
+test("a register's content card stands for its session in every wire", () => {
+  // The content card shows register STATE, not a Mine draft — a gesture
+  // touching it means the session holding it. Wiring a Mine fragment onto
+  // the content card is therefore a register write (the session computes
+  // the LUB and absorbs the operand), NOT a fragment join minted into Mine.
+  let state = emptyObjects();
+  state = mintSession(state, "lunch").state;
+  state = mintSession(state, "rent").state;
+  state = writeSessionContent(state, "session-1", "psbt-1");
+  state = writeSessionContent(state, "session-2", "psbt-2");
+
+  const write = wireVerdict(ref("fragment", "psbt-9"), ref("fragment", "psbt-1"), state);
+  assert.equal(write.kind, "fragment-into-session");
+  assert.equal(wireDisposition(write), "compatible");
+  assert.match(write.label, /Write psbt-9 into session lunch/);
+
+  // Content card onto another session's content card = session merge.
+  const merge = wireVerdict(ref("fragment", "psbt-1"), ref("fragment", "psbt-2"), state);
+  assert.equal(merge.kind, "session-merge");
+  assert.equal(wireDisposition(merge), "compatible");
+
+  // The queue canonicalizes: through the content card and through the
+  // session card is the SAME wire.
+  const viaContent = queueWire([], ref("fragment", "psbt-9"), ref("fragment", "psbt-1"), state);
+  assert.equal(viaContent.queued, true);
+  assert.deepEqual(viaContent.wires[0].target, { kind: "session", key: "session-1" });
+  const viaSession = queueWire(
+    viaContent.wires,
+    ref("fragment", "psbt-9"),
+    ref("session", "session-1"),
+    state,
+  );
+  assert.equal(viaSession.duplicate, true);
+});
+
+test("pruneWires re-canonicalizes endpoints that became register contents", () => {
+  // A fragment⋈fragment wire is queued while both are Mine drafts; one of
+  // them is then written into a register while the wire waits. The queued
+  // wire follows it: it now means "write the other fragment into that
+  // session" and must execute as that write, not as a Mine-minting join.
+  let state = emptyObjects();
+  state = mintSession(state, "lunch").state;
+  const queued = queueWire([], ref("fragment", "psbt-1"), ref("fragment", "psbt-2"), state);
+  assert.equal(queued.queued, true);
+
+  state = writeSessionContent(state, "session-1", "psbt-2");
+  const live = pruneWires(queued.wires, state, ["psbt-1", "psbt-2"]);
+  assert.deepEqual(live, [
+    { source: { kind: "fragment", key: "psbt-1" }, target: { kind: "session", key: "session-1" } },
+  ]);
+
+  // Re-canonicalization that collapses a wire onto itself drops it: the
+  // queued write's fragment became the register's OWN content.
+  const selfWire = queueWire([], ref("fragment", "psbt-1"), ref("session", "session-1"), state);
+  assert.equal(selfWire.queued, true);
+  state = writeSessionContent(state, "session-1", "psbt-1");
+  assert.deepEqual(pruneWires(selfWire.wires, state, ["psbt-1", "psbt-2"]), []);
+
+  // ...and two wires that canonicalize to the same pair keep one copy.
+  state = writeSessionContent(state, "session-1", "psbt-2");
+  const viaSession = queueWire([], ref("fragment", "psbt-1"), ref("session", "session-1"), state);
+  const doubled = [
+    ...viaSession.wires,
+    { source: { kind: "fragment", key: "psbt-1" }, target: { kind: "fragment", key: "psbt-2" } },
+  ];
+  assert.equal(pruneWires(doubled, state, ["psbt-1", "psbt-2"]).length, 1);
 });
 
 // --- action labels + target vocabulary ----------------------------------------
@@ -460,12 +535,16 @@ test("nodeExists and pruneWires: vanished endpoints and stale verdicts drop", ()
   wires = queueWire(wires, ref("fragment", "psbt-1"), ref("session", "session-1"), state).wires;
   assert.equal(wires.length, 2);
 
-  // Everything still valid: prune keeps both. A register write stays
-  // compatible even when the fragment is already the session's content
-  // (⊔ is always legal), so membership never prunes a write wire.
+  // Everything still valid: prune keeps both. Once psbt-1 becomes the
+  // register's OWN content its write wire collapses to a self-wire and
+  // drops (nothing left to write), while the join wire follows the
+  // fragment into the session and lives on as a register write.
   assert.equal(pruneWires(wires, state, fragments).length, 2);
   const written = writeSessionContent(state, "session-1", "psbt-1");
-  assert.equal(pruneWires(wires, written, fragments).length, 2);
+  const rewritten = pruneWires(wires, written, fragments);
+  assert.equal(rewritten.length, 1);
+  assert.deepEqual(rewritten[0].source, { kind: "session", key: "session-1" });
+  assert.deepEqual(rewritten[0].target, { kind: "fragment", key: "psbt-2" });
 
   // A vanished session takes its wires with it (the join survives).
   const sessionGone = pruneWires(wires, emptyObjects(), fragments);
