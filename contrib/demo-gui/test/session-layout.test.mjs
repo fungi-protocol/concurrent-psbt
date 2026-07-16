@@ -464,19 +464,21 @@ test("a join absorbed by its operand reports itself instead of looking broken", 
   assert.match(styles, /\.session-wire-reason-absorbed\s*\{/);
 });
 
-test("settleJoin retires operands but never advances a register", () => {
-  const start = app.indexOf("function settleJoin");
+test("settlement retires sources but never advances a register", () => {
+  const start = app.indexOf("function settleDerivation");
   const end = app.indexOf("// --- contextual enablement", start);
-  assert.ok(start >= 0 && end > start, "settleJoin slice is bounded");
+  assert.ok(start >= 0 && end > start, "settlement slice is bounded");
   const settle = app.slice(start, end);
   // Registers change only through an explicit write gesture — the
   // fragment-into-session and session-merge paths call writeSessionContent
-  // themselves. A plain fragment join must not promote a bystander register
-  // that happens to hold an operand as its content…
+  // themselves. A derivation must not promote a bystander register that
+  // happens to hold a source as its content…
   assert.doesNotMatch(settle, /writeSessionContent/);
-  // …and the retire guard keeps such register-owned operands alive.
-  assert.match(settle, /sessionObject\.contentKey === key/);
-  assert.match(settle, /continue/);
+  // …and the retire rule (results and register contents survive) lives in
+  // the model, where session-wiring.test.mjs exercises it directly.
+  assert.match(settle, /retiredByDerivation\(sourceKeys, resultKeys, objects/);
+  // The minting ops' keep-the-original opt-out short-circuits settlement.
+  assert.match(settle, /keepBoxId\).checked\) return;/);
 });
 
 test("a lone side subtotal is elided — it would repeat the grand total", () => {

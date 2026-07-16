@@ -30,6 +30,7 @@ import {
   pruneWires,
   queueWire,
   remapWireRef,
+  retiredByDerivation,
   sessionByKey,
   sessionFocus,
   unionBridgedPeersIntoSessions,
@@ -677,6 +678,34 @@ test("mine membership is derived: fragments no register holds are local-only", (
   // When no register holds the value any more, it returns to Mine.
   state = dropFragmentKey(state, "psbt-2");
   assert.deepEqual(mineFragmentKeys(fragments, state), fragments);
+});
+
+test("retiredByDerivation: results and register contents survive, stale sources retire", () => {
+  let state = emptyObjects();
+  state = mintSession(state, "lunch").state; // session-1
+  state = writeSessionContent(state, "session-1", "psbt-3");
+  const fragments = ["psbt-1", "psbt-2", "psbt-3", "psbt-4"];
+
+  // A derivation's result replaces its source.
+  assert.deepEqual(retiredByDerivation(["psbt-1"], ["psbt-4"], state, fragments), ["psbt-1"]);
+
+  // An op that dedupes onto its own operand retires nothing.
+  assert.deepEqual(retiredByDerivation(["psbt-1"], ["psbt-1"], state, fragments), []);
+
+  // A register's content never retires: registers change only through
+  // explicit write gestures, so the session's copy of the value survives
+  // even when a local derivation supersedes it.
+  assert.deepEqual(retiredByDerivation(["psbt-3", "psbt-2"], ["psbt-4"], state, fragments), [
+    "psbt-2",
+  ]);
+
+  // Keys that no longer exist were settled elsewhere — skipped.
+  assert.deepEqual(retiredByDerivation(["psbt-9"], ["psbt-4"], state, fragments), []);
+
+  // One source, many results (atomize): the source retires in favor of the set.
+  assert.deepEqual(retiredByDerivation(["psbt-1"], ["psbt-2", "psbt-4"], state, fragments), [
+    "psbt-1",
+  ]);
 });
 
 test("mine tracks session merges: the provisional content rides the merged register", () => {

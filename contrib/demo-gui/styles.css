@@ -1797,6 +1797,13 @@ h2 {
   margin-right: 4px;
 }
 
+/* The minting ops' replace-by-default opt-out sits at the end of the row. */
+.session-ops .session-ops-keep {
+  align-self: center;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
 /* The disabled-op explainer under the toolbar (filled on press). */
 .session-ops-hint {
   margin: 6px 0 0;

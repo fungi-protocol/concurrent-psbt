@@ -24,7 +24,7 @@ import { addFragment, asArray, asObject, asString, buildConfirmArgs, buildCreate
 import { amountBits, amountSpanParts, DETAIL_LEVELS, elisionLabel, fragmentBadges, fragmentCardModel, groupAggregate, rawKeymapSections, rowDetailPairs, rowFacePairs, signedAmountSpanParts, } from "./display.js";
 import { addressFromScript } from "./encoding.js";
 import { classifyPaste, mintFromPaste, SAMPLE_PASTES, } from "./ingest.js";
-import { actionState, addBridge, authorizePeerOnSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, idleWire, mergeSessions, mineFragmentKeys, writeSessionContent, mintPeer, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, sessionByKey, sessionFocus, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
+import { actionState, addBridge, authorizePeerOnSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, idleWire, mergeSessions, mineFragmentKeys, writeSessionContent, mintPeer, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, retiredByDerivation, sessionByKey, sessionFocus, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
 import { curveBetween, curveMidpoint, laneLayout, } from "./layout.js";
 import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, toggledBitfieldValue, TX_MODIFIABLE_BITS, validateEditor, violationsFromServer, } from "./editor.js";
 import { descriptorColorKey, groupColorKey, paletteColor, paletteRegistry, peerColorKey, } from "./palette.js";
@@ -319,25 +319,33 @@ function reportJoinOutcome(joined, sources) {
     logEvent(text);
     flashWireNotice({ kind: "fragment", key: joined.key }, "join absorbed — nothing new", "absorbed");
 }
-// Post-join settlement. Fragments are VALUE TYPES: once a join has produced
-// the LUB, stale sessionless operand copies are retired — local joins
-// REPLACE their operands instead of piling grow-only clutter into Mine. A
-// key some register still references is never dropped, and that register's
-// content never advances here: registers change only through an explicit
-// write gesture (the fragment-into-session and session-merge paths call
-// writeSessionContent themselves).
-function settleJoin(operandKeys, resultKey) {
-    for (const key of operandKeys) {
-        if (key === resultKey || !fragmentByKey(key))
-            continue;
-        if (objects.sessions.some((sessionObject) => sessionObject.contentKey === key))
-            continue;
+// Post-derivation settlement. Fragments are VALUE TYPES: once an op has
+// produced its result, stale sessionless source copies are retired — local
+// derivations REPLACE their sources instead of piling grow-only clutter
+// into Mine (retiredByDerivation carries the full rule: results and
+// register contents survive; registers change only through an explicit
+// write gesture, never here).
+function settleDerivation(sourceKeys, resultKeys, livesOn) {
+    const fragmentKeys = session.fragments.map((fragment) => fragment.key);
+    for (const key of retiredByDerivation(sourceKeys, resultKeys, objects, fragmentKeys)) {
         session = removeFragment(session, key);
         objects = dropFragmentKey(objects, key);
         detailLevels.delete(key);
         lineage.delete(key);
-        logEvent(`retired ${key} — its value lives on in ${resultKey}`);
+        logEvent(`retired ${key} — its value lives on in ${livesOn}`);
     }
+}
+function settleJoin(operandKeys, resultKey) {
+    settleDerivation(operandKeys, [resultKey], resultKey);
+}
+// A minting op replaces its source by default; the surface's "keep the
+// original" checkbox opts the gesture out. The toolbar box governs the
+// one-click ops, each saving drawer carries its own.
+function settleMint(keepBoxId, sourceKeys, resultKeys) {
+    if (el(keepBoxId).checked)
+        return;
+    settleDerivation(sourceKeys, resultKeys, resultKeys.join(", "));
+    render();
 }
 // --- contextual enablement -----------------------------------------------------
 const ACTION_BUTTONS = [
@@ -1408,10 +1416,11 @@ function renderFragmentCard(fragment) {
     foot.className = "session-card-actions";
     foot.append(button("Raw", "The BIP 174/370 key-value maps in actual serialization order (the computed inspect JSON is tucked behind a fold)", () => {
         openRawModal(fragment, "card");
-    }), button("Edit", "Field-by-field editor (liberal parsing; saving mints a new fragment)", () => {
+    }), button("Edit", "Field-by-field editor (liberal parsing; saving replaces this fragment unless 'keep' is checked)", () => {
         editor = editorModel(fragment.key, fragment.inspect, displayNetwork());
         pendingEditorFixes.clear();
         editorOverrides.clear();
+        el("editorKeep").checked = false;
         renderEditor([]);
         revealPanel("editorPanel");
     }), button("Remove", "Drop the fragment from the set", () => {
@@ -2298,6 +2307,7 @@ async function saveEditor() {
         const added = await addResponse({ psbt: response.psbt, inspect: response.inspect }, "edit", `edit of ${fragment.key}` +
             (edits.length ? ` (${edits.length} raw edit(s))` : " (validation/fixes only)"));
         logEvent(`editor save minted ${added.key} from ${fragment.key}`);
+        settleMint("editorKeep", [fragment.key], [added.key]);
         pendingEditorFixes.clear();
         editorOverrides.clear();
         editor = null;
@@ -2557,7 +2567,7 @@ async function joinSelected() {
     try {
         const joined = await addResponse(await backend.joinPsbts(selected.map((f) => f.psbt)), "join", `⊔ join of ${selected.map((f) => f.key).join(", ")}`);
         reportJoinOutcome(joined, selected);
-        settleJoin(selected.map((f) => f.key), joined.key);
+        settleMint("opsKeepOriginal", selected.map((f) => f.key), [joined.key]);
         render();
     }
     catch (error) {
@@ -2569,7 +2579,8 @@ async function concatenateSelected() {
     if (!selected)
         return;
     try {
-        await addResponse(await backend.concatenatePsbts(selected.map((f) => f.psbt)), "concatenate", `concatenation of ${selected.map((f) => f.key).join(", ")}`);
+        const minted = await addResponse(await backend.concatenatePsbts(selected.map((f) => f.psbt)), "concatenate", `concatenation of ${selected.map((f) => f.key).join(", ")}`);
+        settleMint("opsKeepOriginal", selected.map((f) => f.key), [minted.key]);
         showStatus("", false);
     }
     catch (error) {
@@ -2624,7 +2635,8 @@ async function sortSelected() {
     if (seed === null)
         return; // prompt cancelled
     try {
-        await addResponse(await backend.sortPsbt(selected[0].psbt, seed), "sort", `sort of ${selected[0].key}`);
+        const sorted = await addResponse(await backend.sortPsbt(selected[0].psbt, seed), "sort", `sort of ${selected[0].key}`);
+        settleMint("opsKeepOriginal", [selected[0].key], [sorted.key]);
         showStatus("", false);
     }
     catch (error) {
@@ -2636,7 +2648,8 @@ async function makeUnorderedSelected() {
     if (!selected)
         return;
     try {
-        await addResponse(await backend.makeUnordered(selected[0].psbt), "make-unordered", `make-unordered of ${selected[0].key}`);
+        const minted = await addResponse(await backend.makeUnordered(selected[0].psbt), "make-unordered", `make-unordered of ${selected[0].key}`);
+        settleMint("opsKeepOriginal", [selected[0].key], [minted.key]);
         showStatus("", false);
     }
     catch (error) {
@@ -2693,12 +2706,17 @@ async function atomizeSelected() {
             target = await applySetTxModifiableFix(target);
         }
         const response = await backend.atomizePsbt(target.psbt);
+        const atomKeys = [];
         let index = 0;
         for (const piece of response.fragments) {
             index += 1;
-            await addResponse(piece, "atomize", `atom ${index}/${response.fragments.length} of ${target.key}`);
+            const atom = await addResponse(piece, "atomize", `atom ${index}/${response.fragments.length} of ${target.key}`);
+            atomKeys.push(atom.key);
         }
         logEvent(`atomize produced ${response.fragments.length} fragments`);
+        // The fix intermediate (selected → modifiable target) retires with the
+        // original: both values live on in the atoms.
+        settleMint("opsKeepOriginal", [selected[0].key, target.key], atomKeys);
         showStatus("", false);
     }
     catch (error) {
@@ -2746,6 +2764,7 @@ function renderAssignIds(fragment) {
     });
     el("assignIdsAuto").checked = true;
     el("assignIdsOverwrite").checked = false;
+    el("assignIdsKeep").checked = false;
 }
 async function runAssignIds() {
     const fragment = assignIdsTarget ? fragmentByKey(assignIdsTarget) : null;
@@ -2771,6 +2790,7 @@ async function runAssignIds() {
         }), "assign-ids", `assign-ids of ${fragment.key}`);
         logEvent(`assign-ids minted ${added.key} from ${fragment.key}` +
             ` (${ids.length} manual id(s), auto=${auto}, overwrite=${overwrite})`);
+        settleMint("assignIdsKeep", [fragment.key], [added.key]);
         assignIdsTarget = null;
         closeDrawer("assignIdsDrawer");
         showStatus("", false);

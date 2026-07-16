@@ -416,6 +416,27 @@ export function mineFragmentKeys(
   );
 }
 
+// A derivation's result REPLACES its sources: fragments are value types, so
+// once a join/sort/edit/assign-ids has minted the new value the stale source
+// copies retire instead of piling grow-only clutter into Mine. These are the
+// keys such a settlement drops: sources that still exist, are not themselves
+// among the results (the op deduped onto an operand), and are not any
+// register's content — registers change only through explicit write
+// gestures, so a session's copy of the value always survives.
+export function retiredByDerivation(
+  sourceKeys: readonly string[],
+  resultKeys: readonly string[],
+  state: ObjectsState,
+  fragmentKeys: readonly string[],
+): string[] {
+  return sourceKeys.filter(
+    (key) =>
+      !resultKeys.includes(key) &&
+      fragmentKeys.includes(key) &&
+      !state.sessions.some((session) => session.contentKey === key),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Session merge (session ⋈ session, per Q3): merging two registers JOINS
 // their contents and takes the UNION of their peer sets as the merged

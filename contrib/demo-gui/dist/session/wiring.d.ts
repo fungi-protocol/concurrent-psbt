@@ -83,6 +83,7 @@ export declare function authorizePeerOnSession(state: ObjectsState, sessionKey: 
 export declare function dropFragmentKey(state: ObjectsState, fragmentKey: string): ObjectsState;
 export declare function fragmentSessionKeys(state: ObjectsState, fragmentKey: string): string[];
 export declare function mineFragmentKeys(fragmentKeys: readonly string[], state: ObjectsState): string[];
+export declare function retiredByDerivation(sourceKeys: readonly string[], resultKeys: readonly string[], state: ObjectsState, fragmentKeys: readonly string[]): string[];
 export interface SessionMergeResult {
     state: ObjectsState;
     merged: SessionObject | null;
