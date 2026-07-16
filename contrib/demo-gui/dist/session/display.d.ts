@@ -29,6 +29,7 @@ export declare function scriptTemplate(scriptHex: string | null): {
     kind: ScriptKind;
     label: string;
 };
+export declare function decodeScript(scriptHex: string): string | null;
 export declare const LIFEHASH_ROUTE = "/api/lifehash/";
 export declare function lifehashSrc(digestHex: string): string;
 export declare function addressChipDigestHex(address: string | null): string | null;
@@ -109,7 +110,13 @@ export interface RowDetailPair {
     label: string;
     value: string;
     chipHex?: string | null;
+    cycle?: FactRepresentation[];
 }
+export interface FactRepresentation {
+    label: string;
+    value: string;
+}
+export declare function scriptCycle(scriptHex: string, network: Network, prefix: string): FactRepresentation[];
 export declare function rowDetailPairs(inspect: InspectResponse | null, side: "input" | "output", index: number, network: Network): RowDetailPair[];
 export interface RawKeymapEntry {
     keyHex: string;

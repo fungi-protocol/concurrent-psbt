@@ -362,6 +362,26 @@ test("clicking a row toggles ITS OWN expanded detail; the ladder resets all rows
   assert.match(app, /detailLevels\.delete\(fragment\.key\);\n\s*clearRowOverrides\(fragment\.key\);/);
 });
 
+test("expanded rows chip the address fact, not the row face; the value cycles", () => {
+  // The row face hands its identity chip to the facts when expanded…
+  const inputStart = app.indexOf("function inputRow");
+  const inputSlice = app.slice(inputStart, app.indexOf("\n}", inputStart));
+  assert.match(inputSlice, /input\.prevoutScriptHex && expanded/);
+  const outputStart = app.indexOf("function outputRow");
+  const outputSlice = app.slice(outputStart, app.indexOf("\n}", outputStart));
+  assert.match(outputSlice, /output\.scriptHex && expanded/);
+  // …where the chip rides NEXT TO the address (the scriptCycle fact carries
+  // chipHex) and clicking the value cycles the representations in place —
+  // dt and dd together — without selecting the card behind it.
+  const rowStart = app.indexOf("function coinRow");
+  const rowSlice = app.slice(rowStart, app.indexOf("function signatureMark", rowStart));
+  assert.match(rowSlice, /session-fact-cycle/);
+  assert.match(rowSlice, /shown = \(shown \+ 1\) % cycle\.length/);
+  assert.match(rowSlice, /term\.textContent = cycle\[shown\]\.label/);
+  assert.match(rowSlice, /event\.stopPropagation\(\); \/\/ the card behind selects on click/);
+  assert.match(styles, /\.session-fact-cycle\s*\{/);
+});
+
 test("disabled ops explain themselves on press, not only on hover", () => {
   const hint = html.indexOf('id="opsHint"');
   assert.ok(hint >= 0, "the ops hint line is present");

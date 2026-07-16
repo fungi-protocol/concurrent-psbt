@@ -2132,6 +2132,20 @@ h2 {
   min-width: 0;
 }
 
+/* A fact value with several representations (address | script hex | decoded
+   opcodes), cycled in place by clicking it. The dotted underline is the
+   only standing affordance — the title spells out the cycle. */
+.session-fact-cycle {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.session-fact-cycle:hover,
+.session-fact-cycle:focus-visible {
+  background: var(--surface-2);
+}
+
 /* The per-row Raw button under the expanded facts (the level-4 dialog's
    entry point, since the row click now toggles the expansion). */
 .session-row-raw {

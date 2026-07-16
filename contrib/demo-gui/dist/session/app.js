@@ -1749,7 +1749,36 @@ function coinRow(fragment, side, index, row, expanded) {
             // NEXT TO the bitvomit it identifies, one visual unit.
             if (pair.chipHex)
                 value.append(lifehashBadge(pair.chipHex, `${pair.label} fingerprint`));
-            value.append(pair.value);
+            const cycle = pair.cycle ?? [];
+            if (cycle.length > 1) {
+                // ONE fact, several representations (address | script hex | decoded
+                // opcodes): clicking the value cycles them in place, dt and dd
+                // together, so the label always names what is currently shown.
+                const text = span("session-fact-cycle", pair.value);
+                text.setAttribute("role", "button");
+                text.tabIndex = 0;
+                text.title = `click to cycle: ${cycle.map((entry) => entry.label).join(" → ")}`;
+                let shown = 0;
+                const advance = () => {
+                    shown = (shown + 1) % cycle.length;
+                    term.textContent = cycle[shown].label;
+                    text.textContent = cycle[shown].value;
+                };
+                text.addEventListener("click", (event) => {
+                    event.stopPropagation(); // the card behind selects on click
+                    advance();
+                });
+                text.addEventListener("keydown", (event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        advance();
+                    }
+                });
+                value.append(text);
+            }
+            else {
+                value.append(pair.value);
+            }
             facts.append(term, value);
         }
         if (facts.childElementCount > 0)
@@ -1783,8 +1812,13 @@ function inputRow(input, expanded) {
     row.append(span("session-coin-side", "in"));
     // The chip is the prevout's scriptPubKey — who is paying — matching the
     // output rows. The outpoint stays textual (chip title); only when no
-    // prevout script is known does the txid chip return, saying so.
-    if (input.prevoutScriptHex) {
+    // prevout script is known does the txid chip return, saying so. An
+    // EXPANDED row hands the identity to its facts: the chip rides NEXT TO
+    // the prevout address there, not the row as a whole.
+    if (input.prevoutScriptHex && expanded) {
+        // identity lives in the facts below
+    }
+    else if (input.prevoutScriptHex) {
         const address = addressFromScript(input.prevoutScriptHex, displayNetwork());
         row.append(lifehashBadge(input.prevoutScriptHex, `${address ?? "prevout scriptPubKey"} (input ${input.index})` +
             (input.outpointText ? `\noutpoint ${input.outpointText}` : "")));
@@ -1823,7 +1857,11 @@ function outputRow(output, expanded) {
     if (!output.uniqueIdHex && expanded) {
         row.append(span("session-badge session-badge-warn", "no id"));
     }
-    if (output.scriptHex && output.address) {
+    if (output.scriptHex && expanded) {
+        // An EXPANDED row hands the identity to its facts: the chip rides NEXT
+        // TO the address (or script) there, not the row as a whole.
+    }
+    else if (output.scriptHex && output.address) {
         // Address as LifeHash chip of the script_pubkey hex — the textual
         // address rides the chip title/aria-label and stays available in the
         // dialog's raw view and the field editor.

@@ -30,7 +30,7 @@
 
 import type { InspectResponse } from "../shared-frontend/core/backend.js";
 import { amountParts, formatSatAmount } from "../model.js";
-import { addressFromScript, type Network } from "./encoding.js";
+import { addressFromScript, bytesToHex, hexToBytes, normalizeHexInput, type Network } from "./encoding.js";
 import {
   asArray,
   asBoolean,
@@ -114,6 +114,76 @@ function classifyScript(scriptHex: string | null): ScriptKind {
     }
   }
   return "unknown";
+}
+
+// Opcode names for the standard-script vocabulary; anything else renders as
+// OP_0x<byte> — honest about the gap without pretending to be a complete
+// disassembler. Pushes render as bare hex (bitcoind's "asm" convention).
+const OPCODE_NAMES: Record<number, string> = {
+  0x00: "OP_0",
+  0x4f: "OP_1NEGATE",
+  0x61: "OP_NOP",
+  0x63: "OP_IF",
+  0x64: "OP_NOTIF",
+  0x67: "OP_ELSE",
+  0x68: "OP_ENDIF",
+  0x69: "OP_VERIFY",
+  0x6a: "OP_RETURN",
+  0x75: "OP_DROP",
+  0x76: "OP_DUP",
+  0x7c: "OP_SWAP",
+  0x82: "OP_SIZE",
+  0x87: "OP_EQUAL",
+  0x88: "OP_EQUALVERIFY",
+  0xa8: "OP_SHA256",
+  0xa9: "OP_HASH160",
+  0xaa: "OP_HASH256",
+  0xac: "OP_CHECKSIG",
+  0xad: "OP_CHECKSIGVERIFY",
+  0xae: "OP_CHECKMULTISIG",
+  0xaf: "OP_CHECKMULTISIGVERIFY",
+  0xb1: "OP_CHECKLOCKTIMEVERIFY",
+  0xb2: "OP_CHECKSEQUENCEVERIFY",
+  0xba: "OP_CHECKSIGADD",
+};
+for (let n = 1; n <= 16; n++) OPCODE_NAMES[0x50 + n] = `OP_${n}`;
+
+// Disassemble a scriptPubKey: opcode names and bare-hex pushes. A truncated
+// push means the bytes are not a script — null, never a guess.
+export function decodeScript(scriptHex: string): string | null {
+  const bytes = hexToBytes(normalizeHexInput(scriptHex));
+  if (bytes === null || bytes.length === 0) return null;
+  const parts: string[] = [];
+  let at = 0;
+  const take = (count: number): string | null => {
+    if (at + count > bytes.length) return null;
+    const chunk = bytesToHex(bytes.slice(at, at + count));
+    at += count;
+    return chunk;
+  };
+  while (at < bytes.length) {
+    const opcode = bytes[at++];
+    if (opcode >= 0x01 && opcode <= 0x4b) {
+      const chunk = take(opcode);
+      if (chunk === null) return null;
+      parts.push(chunk);
+      continue;
+    }
+    if (opcode >= 0x4c && opcode <= 0x4e) {
+      // OP_PUSHDATA1/2/4: little-endian length, then the payload.
+      const width = opcode === 0x4c ? 1 : opcode === 0x4d ? 2 : 4;
+      if (at + width > bytes.length) return null;
+      let length = 0;
+      for (let i = width - 1; i >= 0; i--) length = length * 256 + bytes[at + i];
+      at += width;
+      const chunk = take(length);
+      if (chunk === null) return null;
+      parts.push(chunk);
+      continue;
+    }
+    parts.push(OPCODE_NAMES[opcode] ?? `OP_0x${opcode.toString(16).padStart(2, "0")}`);
+  }
+  return parts.join(" ");
 }
 
 // ---------------------------------------------------------------------------
@@ -699,6 +769,28 @@ export interface RowDetailPair {
   // LifeHash chip should ride NEXT TO the value — the chip and the hex it
   // identifies read as one fact (outpoint txids, output unique ids).
   chipHex?: string | null;
+  // Alternate representations of the SAME fact (the renderer cycles through
+  // them in place on click, dt and dd together); entry 0 mirrors label/value.
+  cycle?: FactRepresentation[];
+}
+
+export interface FactRepresentation {
+  label: string;
+  value: string;
+}
+
+// An address-bearing fact is ONE fact with up to three representations:
+// the address (base58/bech32, when the script encodes one), the raw script
+// hex, and the decoded opcodes. First entry = what the fact shows by
+// default; the chip fingerprints the script hex in every representation.
+export function scriptCycle(scriptHex: string, network: Network, prefix: string): FactRepresentation[] {
+  const entries: FactRepresentation[] = [];
+  const address = addressFromScript(scriptHex, network);
+  if (address) entries.push({ label: `${prefix}address`, value: address });
+  entries.push({ label: `${prefix}script hex`, value: scriptHex });
+  const asm = decodeScript(scriptHex);
+  if (asm) entries.push({ label: `${prefix}script asm`, value: asm });
+  return entries;
 }
 
 function detailValue(value: unknown): string {
@@ -954,10 +1046,13 @@ export function rowFacePairs(
     }
     // The prevout the input spends, when the PSBT carries it (witness utxo
     // today): who is paying, in the same address/type vocabulary as the
-    // output facts. The amount stays on the row face — no duplicate here.
+    // output facts. The chip rides NEXT TO the address here — the row face
+    // hands the identity over when expanded — and clicking the value cycles
+    // address | script hex | decoded opcodes. The amount stays on the row
+    // face — no duplicate here.
     if (input.prevoutScriptHex) {
-      const prevoutAddress = addressFromScript(input.prevoutScriptHex, network);
-      if (prevoutAddress) pairs.push({ label: "prevout address", value: prevoutAddress });
+      const cycle = scriptCycle(input.prevoutScriptHex, network, "prevout ");
+      pairs.push({ ...cycle[0], chipHex: input.prevoutScriptHex, cycle });
       pairs.push({ label: "prevout type", value: scriptTemplate(input.prevoutScriptHex).label });
     }
     if (input.sequence) {
@@ -980,7 +1075,12 @@ export function rowFacePairs(
   }
   const [output] = outputViews(inspect, network).slice(index, index + 1);
   if (!output) return pairs;
-  if (output.address) pairs.push({ label: "address", value: output.address });
+  // Where the money goes, chip beside it, cycling address | script hex |
+  // decoded opcodes — a non-encodable script simply starts at the hex.
+  if (output.scriptHex) {
+    const cycle = scriptCycle(output.scriptHex, network, "");
+    pairs.push({ ...cycle[0], chipHex: output.scriptHex, cycle });
+  }
   // scriptLabel is the TEMPLATE KIND (taproot, segwit v0…), not the script
   // bytes — "type" says what the value is; the bytes live in the modal.
   if (output.scriptKind !== "absent") pairs.push({ label: "type", value: output.scriptLabel });

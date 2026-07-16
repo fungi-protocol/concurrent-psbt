@@ -8,6 +8,7 @@ import {
   balanceSheet,
   cardGroups,
   declaredFeeSatsFromInspect,
+  decodeScript,
   elisionLabel,
   feeLine,
   formatFeeRate,
@@ -20,6 +21,7 @@ import {
   rawKeymapSections,
   rowDetailPairs,
   rowFacePairs,
+  scriptCycle,
   scriptTemplate,
   sequenceReading,
   signaturePresence,
@@ -563,6 +565,14 @@ test("rowFacePairs is the curated level-3 subset, not the raw dump", () => {
     ["outpoint", "prevout address", "prevout type", "sequence", "utxo data", "signatures"],
   );
   assert.equal(prevout[1].value, "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080");
+  // The prevout-address fact carries the script chip (the row face hands
+  // the identity over when expanded) and cycles through the script's
+  // representations, prefix threaded into every label.
+  assert.equal(prevout[1].chipHex, P2WPKH);
+  assert.deepEqual(
+    prevout[1].cycle.map((entry) => entry.label),
+    ["prevout address", "prevout script hex", "prevout script asm"],
+  );
   assert.match(prevout[2].value, /P2WPKH/);
 
   // Sparse input: no sequence pair, honest "none" for utxo data.
@@ -579,20 +589,74 @@ test("rowFacePairs is the curated level-3 subset, not the raw dump", () => {
     ["address", "type", "unique id"],
   );
   assert.equal(output[0].value, "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080");
+  // The address fact carries the script chip and cycles address | script
+  // hex | decoded opcodes.
+  assert.equal(output[0].chipHex, P2WPKH);
+  assert.deepEqual(
+    output[0].cycle.map((entry) => entry.label),
+    ["address", "script hex", "script asm"],
+  );
   // The unique id is its own fingerprint: chip and hex read as one fact.
   assert.equal(output.find((pair) => pair.label === "unique id").chipHex, "11".repeat(32));
 
-  // OP_RETURN output: no address, script label still present, uid present.
+  // OP_RETURN output: no address form, so the script fact STARTS at the
+  // hex representation; script label still present, uid present.
   const nonstandard = rowFacePairs(INSPECT, "output", 2, "regtest");
   assert.deepEqual(
     nonstandard.map((pair) => pair.label),
-    ["type", "unique id"],
+    ["script hex", "type", "unique id"],
+  );
+  assert.deepEqual(
+    nonstandard[0].cycle.map((entry) => entry.label),
+    ["script hex", "script asm"],
   );
 
   // Never the raw keymap: face pairs stay curated even when raw data exists.
   assert.ok(rowFacePairs(INSPECT, "output", 0, "regtest").every((pair) => !pair.label.startsWith("raw ")));
   assert.deepEqual(rowFacePairs(null, "input", 0, "regtest"), []);
   assert.deepEqual(rowFacePairs(INSPECT, "output", 9, "regtest"), []);
+});
+
+test("decodeScript disassembles standard scripts; truncation is null, never a guess", () => {
+  // P2PKH: the canonical five-opcode template, pushes as bare hex.
+  assert.equal(
+    decodeScript("76a914751e76e8199196d454941c45d1b3a323f1433bd688ac"),
+    "OP_DUP OP_HASH160 751e76e8199196d454941c45d1b3a323f1433bd6 OP_EQUALVERIFY OP_CHECKSIG",
+  );
+  // Witness programs: version opcode then the program push.
+  assert.equal(decodeScript(P2WPKH), "OP_0 751e76e8199196d454941c45d1b3a323f1433bd6");
+  assert.equal(
+    decodeScript(P2TR),
+    "OP_1 79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+  );
+  assert.equal(decodeScript("6a0b68656c6c6f20776f726c64"), "OP_RETURN 68656c6c6f20776f726c64");
+  // OP_PUSHDATA1: explicit little-endian length prefix.
+  assert.equal(decodeScript("4c020102"), "0102");
+  // An unnamed opcode renders as its byte — honest about the gap.
+  assert.equal(decodeScript("50"), "OP_0x50");
+  // A truncated push is not a script; neither is non-hex or empty input.
+  assert.equal(decodeScript("0014ab"), null);
+  assert.equal(decodeScript("4c02ff"), null);
+  assert.equal(decodeScript(""), null);
+  assert.equal(decodeScript("zz"), null);
+});
+
+test("scriptCycle: address first when encodable, hex otherwise, asm last", () => {
+  const encodable = scriptCycle(P2WPKH, "regtest", "");
+  assert.deepEqual(
+    encodable.map((entry) => entry.label),
+    ["address", "script hex", "script asm"],
+  );
+  assert.equal(encodable[0].value, "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080");
+  assert.equal(encodable[1].value, P2WPKH);
+  assert.equal(encodable[2].value, decodeScript(P2WPKH));
+  // A non-encodable script starts at the hex; the prefix threads into
+  // every label (the input facts say "prevout …").
+  const opReturn = scriptCycle("6a0b68656c6c6f20776f726c64", "regtest", "prevout ");
+  assert.deepEqual(
+    opReturn.map((entry) => entry.label),
+    ["prevout script hex", "prevout script asm"],
+  );
 });
 
 test("sequenceReading decodes nSequence per BIP 68 (+finality, +BIP 125)", () => {
