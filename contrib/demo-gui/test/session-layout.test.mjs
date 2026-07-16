@@ -301,6 +301,11 @@ test("mockup parity: peer reach, breathing selection, identity hover", () => {
   assert.match(app, /\.session-descriptor-card\[data-identity-key\]/);
   assert.match(app, /"session-identity-dim",\n\s*key !== null && node\.dataset\.identityKey !== key/);
   assert.match(styles, /\.session-identity-dim\s*\{/);
+  // The dim also LIFTS when pointerover can't do it: the pointer leaving
+  // the window (pointerout with a null relatedTarget) and a touch tap
+  // landing anywhere that is not a descriptor card.
+  assert.match(app, /if \(event\.relatedTarget === null\) applyIdentityDim\(null\)/);
+  assert.match(app, /if \(identityKeyAt\(event\.target\) === null\) applyIdentityDim\(null\)/);
 });
 
 test("row chips are scriptPubKeys only — secondary lifehashes chip their hex in the facts", () => {

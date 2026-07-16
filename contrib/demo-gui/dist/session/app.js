@@ -3479,14 +3479,28 @@ function wireDom() {
     // every colorized node of a DIFFERENT identity, so everything the
     // descriptor touches (provenance groups, coins, peers) pops. Delegated,
     // so it survives every render; leaving the card lifts the dim.
-    document.addEventListener("pointerover", (event) => {
-        const hovered = event.target instanceof Element
-            ? event.target.closest(".session-descriptor-card[data-identity-key]")
-            : null;
-        const key = hovered?.dataset.identityKey ?? null;
+    const applyIdentityDim = (key) => {
         document.querySelectorAll("[data-identity-key]").forEach((node) => {
             node.classList.toggle("session-identity-dim", key !== null && node.dataset.identityKey !== key);
         });
+    };
+    const identityKeyAt = (target) => target instanceof Element
+        ? (target.closest(".session-descriptor-card[data-identity-key]")?.dataset
+            .identityKey ?? null)
+        : null;
+    document.addEventListener("pointerover", (event) => {
+        applyIdentityDim(identityKeyAt(event.target));
+    });
+    // pointerover cannot lift the dim when the pointer exits the WINDOW
+    // (nothing new is entered — relatedTarget null marks that), and a touch
+    // tap elsewhere fires no pointerover at all — both clear explicitly.
+    document.addEventListener("pointerout", (event) => {
+        if (event.relatedTarget === null)
+            applyIdentityDim(null);
+    });
+    document.addEventListener("pointerdown", (event) => {
+        if (identityKeyAt(event.target) === null)
+            applyIdentityDim(null);
     });
     el("wireJoinAll").addEventListener("click", () => void joinAllWires());
     el("wireClearAll").addEventListener("click", clearPendingWires);
