@@ -641,15 +641,18 @@ test("sequenceReading decodes nSequence per BIP 68 (+finality, +BIP 125)", () =>
 // --- amount emphasis (BIP 177 sat-first; the ead6ca05 convention) ----------
 
 const flatten = (parts) => parts.map((part) => `${part.part}:${part.text}`);
+// The thin space (U+2009) that splits the eight fraction digits 4+4; it
+// lands inside whichever part holds the fourth fraction digit.
+const SEAM = "\u2009";
 
 test("amountSpanParts: zero is all scaffold", () => {
   const parts = amountSpanParts(0);
-  assert.deepEqual(flatten(parts), ["symbol:₿", "scale:0.00000000"]);
+  assert.deepEqual(flatten(parts), ["symbol:₿", `scale:0.0000${SEAM}0000`]);
 });
 
 test("amountSpanParts: sub-BTC keeps the leading zeros as scale scaffold", () => {
   const parts = amountSpanParts(12_345);
-  assert.deepEqual(flatten(parts), ["symbol:₿", "scale:0.000", "digits:12345"]);
+  assert.deepEqual(flatten(parts), ["symbol:₿", "scale:0.000", `digits:1${SEAM}2345`]);
 });
 
 test("amountSpanParts: whole BTC digits are significant, separators kept", () => {
@@ -661,7 +664,7 @@ test("amountSpanParts: whole BTC digits are significant, separators kept", () =>
     "symbol:₿",
     "digits:2,500",
     "scale:.",
-    "digits:00012345",
+    `digits:0001${SEAM}2345`,
   ]);
 });
 
@@ -670,14 +673,16 @@ test("amountSpanParts: trailing zeros are significant (8.00000000 IS 800,000,000
     "symbol:₿",
     "digits:8",
     "scale:.",
-    "digits:00000000",
+    `digits:0000${SEAM}0000`,
   ]);
 });
 
 test("amountSpanParts: 0.00000141 keeps its leading-zero scaffold", () => {
+  // The seam falls inside the scaffold here — the fourth fraction digit is
+  // a leading zero.
   assert.deepEqual(flatten(amountSpanParts(141)), [
     "symbol:₿",
-    "scale:0.00000",
+    `scale:0.0000${SEAM}0`,
     "digits:141",
   ]);
 });
@@ -687,16 +692,17 @@ test("amountSpanParts: zeros after a mid significant digit are significant (1.05
     "symbol:₿",
     "digits:1",
     "scale:.",
-    "digits:05000000",
+    `digits:0500${SEAM}0000`,
   ]);
 });
 
-test("amountSpanParts: concatenation is the flat string with all 8 fraction digits", () => {
+test("amountSpanParts: concatenation is the flat string plus the 4+4 fraction seam", () => {
   for (const sats of [0, 1, 141, 549, 12_345, 99_999_999, 100_000_000, 105_000_000, 800_000_000, 250_000_012_345]) {
     const joined = amountSpanParts(sats).map((part) => part.text).join("");
-    assert.equal(joined, formatSatAmount(sats));
+    assert.equal(joined.replaceAll(SEAM, ""), formatSatAmount(sats));
     const fraction = joined.split(".")[1];
-    assert.equal(fraction.length, 8, `8th-sat-digit position must hold for ${sats}`);
+    assert.equal(fraction.length, 9, `8 sat digits + the seam must hold for ${sats}`);
+    assert.equal(fraction[4], SEAM, `the seam splits 4+4 for ${sats}`);
   }
 });
 
@@ -708,7 +714,7 @@ test("amountSpanParts: classes are the part names", () => {
 
 test("signedAmountSpanParts: the sign is a significant digit", () => {
   const negative = signedAmountSpanParts(-600);
-  assert.deepEqual(flatten(negative), ["digits:−", "symbol:₿", "scale:0.00000", "digits:600"]);
+  assert.deepEqual(flatten(negative), ["digits:−", "symbol:₿", `scale:0.0000${SEAM}0`, "digits:600"]);
   assert.deepEqual(signedAmountSpanParts(600), amountSpanParts(600));
   assert.deepEqual(signedAmountSpanParts(0), amountSpanParts(0));
 });

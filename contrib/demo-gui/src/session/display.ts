@@ -307,6 +307,28 @@ function pushAmountText(parts: AmountSpanPart[], text: string, part: AmountSpanP
   if (text) parts.push(amountSpanPart(part, text));
 }
 
+// A thin space (U+2009) splits the eight fraction digits 4+4 — 1.2345 6789
+// — enough of a seam to count by, too narrow to read as a separator
+// character. Inserted AFTER the emphasis split, so the scaffold/significant
+// classification never sees it; it lands inside whichever part holds the
+// fourth fraction digit.
+const FRACTION_SEAM = "\u2009";
+
+function withFractionSeam(parts: AmountSpanPart[]): AmountSpanPart[] {
+  let fraction = -1; // fraction digits seen; -1 = still before the decimal point
+  return parts.map((part) => {
+    let text = "";
+    for (const ch of part.text) {
+      text += ch;
+      if (ch === ".") fraction = 0;
+      else if (fraction >= 0 && ch >= "0" && ch <= "9" && ++fraction === 4) {
+        text += FRACTION_SEAM;
+      }
+    }
+    return text === part.text ? part : { ...part, text };
+  });
+}
+
 export function amountSpanParts(valueSats: number): AmountSpanPart[] {
   const raw = amountParts(valueSats);
   const parts: AmountSpanPart[] = [];
@@ -325,7 +347,7 @@ export function amountSpanParts(valueSats: number): AmountSpanPart[] {
     pushAmountText(parts, raw.muted, "scale");
     pushAmountText(parts, raw.sats, "digits");
   }
-  return parts;
+  return withFractionSeam(parts);
 }
 
 // Signed variant for balance deltas: the sign is a significant digit (it
