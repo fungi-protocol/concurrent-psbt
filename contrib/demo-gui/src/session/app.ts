@@ -1274,6 +1274,30 @@ function openConflictModal(title: string, conflicts: { label: string; detail: st
   dialog.showModal();
 }
 
+// --- in-flight state --------------------------------------------------------------
+// Honest busy feedback: a token is set exactly while its real backend call
+// is pending — no timers, no fake counters. Cards wear session-busy (and
+// aria-busy) while their token is set; a joining wire's edge marches.
+// Tokens are node ids ("fragment:psbt-1", "session:s-1", "peer:p-1") plus
+// "edge:<wireKey>" for the wire being joined.
+
+const inflight = new Set<string>();
+
+function busyToken(ref: NodeRef): string {
+  return `${ref.kind}:${ref.key}`;
+}
+
+async function withBusy<T>(tokens: string[], run: () => Promise<T>): Promise<T> {
+  for (const token of tokens) inflight.add(token);
+  render();
+  try {
+    return await run();
+  } finally {
+    for (const token of tokens) inflight.delete(token);
+    render();
+  }
+}
+
 async function joinPendingWire(key: string): Promise<void> {
   const entry = livePendingWires().find(
     (candidate) => wireKey(candidate.source, candidate.target) === key,
@@ -1283,7 +1307,10 @@ async function joinPendingWire(key: string): Promise<void> {
     render();
     return;
   }
-  const applied = await executeWire(entry.source, entry.target);
+  const applied = await withBusy(
+    [busyToken(entry.source), busyToken(entry.target), `edge:${key}`],
+    () => executeWire(entry.source, entry.target),
+  );
   if (applied) {
     pendingWires = unqueueWire(pendingWires, key);
   }
@@ -1317,7 +1344,13 @@ async function joinAllWires(): Promise<void> {
     const plan = componentPlan(component);
     const remap = new Map<string, string>();
     for (const group of plan.joinGroups) {
-      const resultKey = await executeJoinGroup(group);
+      const resultKey = await withBusy(
+        [
+          ...group.fragments.map((memberKey) => `fragment:${memberKey}`),
+          ...group.wires.map((wireEntry) => `edge:${wireKey(wireEntry.source, wireEntry.target)}`),
+        ],
+        () => executeJoinGroup(group),
+      );
       if (resultKey !== null) {
         applied += group.wires.length;
         for (const wireEntry of group.wires) {
@@ -1333,10 +1366,15 @@ async function joinAllWires(): Promise<void> {
     for (const wireEntry of plan.rest) {
       // Session merges in this component record their result into the
       // remap, so later wires follow the merged session.
-      const ok = await executeWire(
-        remapWireRef(wireEntry.source, remap),
-        remapWireRef(wireEntry.target, remap),
-        remap,
+      const source = remapWireRef(wireEntry.source, remap);
+      const target = remapWireRef(wireEntry.target, remap);
+      const ok = await withBusy(
+        [
+          busyToken(source),
+          busyToken(target),
+          `edge:${wireKey(wireEntry.source, wireEntry.target)}`,
+        ],
+        () => executeWire(source, target, remap),
       );
       if (ok) {
         applied += 1;
@@ -2137,6 +2175,12 @@ function decorateWireTarget(node: HTMLElement, ref: NodeRef): void {
   if (wireFlash && sameRef(wireFlash.ref, ref)) {
     node.classList.add(`session-wire-${wireFlash.tone}`);
     node.append(span(`session-wire-reason session-wire-reason-${wireFlash.tone}`, wireFlash.text));
+  }
+  // A backend call is in flight against this node: pulse, announce, and
+  // hold interaction until the promise settles (withBusy re-renders then).
+  if (inflight.has(busyToken(ref))) {
+    node.classList.add("session-busy");
+    node.setAttribute("aria-busy", "true");
   }
 }
 
@@ -3535,8 +3579,15 @@ async function runSync(event: Event): Promise<void> {
     showStatus(`sync: ${state.reason ?? "not available"}`, true);
     return;
   }
-  const psbts = selectedFragments(session).map((fragment) => fragment.psbt);
-  await runSyncRequest(psbts, `sync of ${psbts.length} selected fragment(s)`);
+  const selected = selectedFragments(session);
+  await withBusy(
+    selected.map((fragment) => `fragment:${fragment.key}`),
+    () =>
+      runSyncRequest(
+        selected.map((fragment) => fragment.psbt),
+        `sync of ${selected.length} selected fragment(s)`,
+      ),
+  );
 }
 
 // Peer→session wiring: sync the session's register value over the peer's
@@ -3573,9 +3624,13 @@ async function syncSessionOverPeer(sessionKey: string, peerKey: string | null): 
   // The state chip and results land in the sync drawer — open it, or the
   // container's Sync now reads as a dead button.
   revealPanel("syncResults");
-  await runSyncRequest(
-    content ? [content.psbt] : [],
-    `session ${sessionObject.name} (register ${content?.key ?? "empty"})`,
+  await withBusy(
+    [`session:${sessionKey}`, ...(carrier ? [`peer:${carrier.key}`] : [])],
+    () =>
+      runSyncRequest(
+        content ? [content.psbt] : [],
+        `session ${sessionObject.name} (register ${content?.key ?? "empty"})`,
+      ),
   );
 }
 
@@ -3619,10 +3674,12 @@ async function runPay(event: Event): Promise<void> {
     return;
   }
   try {
-    await addResponse(
-      await backend.pay(target.psbt, built.value.payment, built.value.options),
-      "pay",
-      `payment record attached to ${target.key}`,
+    await withBusy([`fragment:${target.key}`], async () =>
+      addResponse(
+        await backend.pay(target.psbt, built.value.payment, built.value.options),
+        "pay",
+        `payment record attached to ${target.key}`,
+      ),
     );
     logEvent(`payment record attached to ${target.key} (result added)`);
     showStatus("", false);
@@ -3647,10 +3704,12 @@ async function runConfirm(event: Event): Promise<void> {
     return;
   }
   try {
-    await addResponse(
-      await backend.confirm(target.psbt, built.value.confirmation, built.value.options),
-      "confirm",
-      `confirmation attached to ${target.key}`,
+    await withBusy([`fragment:${target.key}`], async () =>
+      addResponse(
+        await backend.confirm(target.psbt, built.value.confirmation, built.value.options),
+        "confirm",
+        `confirmation attached to ${target.key}`,
+      ),
     );
     logEvent(`confirmation attached to ${target.key} (result added)`);
     showStatus("", false);
@@ -3760,7 +3819,16 @@ function drawWireOverlay(): void {
     const key = wireKey(entry.source, entry.target);
     const probe = wireProbes.get(key)?.probe;
     const conflicted = probe?.state === "conflict";
-    addEdge(from, to, conflicted ? "session-edge-pending session-edge-conflict" : "session-edge-pending");
+    const joining = inflight.has(`edge:${key}`);
+    addEdge(
+      from,
+      to,
+      conflicted
+        ? "session-edge-pending session-edge-conflict"
+        : joining
+          ? "session-edge-pending session-edge-busy"
+          : "session-edge-pending",
+    );
     const pill = conflicted
       ? button("⚠ why?", "This join was computed and it conflicts — see why", () => {
           const detail = wireConflict(entry);
@@ -3769,10 +3837,10 @@ function drawWireOverlay(): void {
           ]);
         })
       : button("Join", `Apply this wire alone: ${wireLabel(entry)}`, () => void joinPendingWire(key));
-    if (probe?.state === "pending") {
+    if (probe?.state === "pending" || joining) {
       pill.disabled = true;
       pill.textContent = "⋯";
-      pill.title = "computing the join…";
+      pill.title = joining ? "joining…" : "computing the join…";
     }
     pill.className = conflicted ? "session-wire-pill session-wire-pill-conflict" : "session-wire-pill";
     const mid = curveMidpoint(from, to);

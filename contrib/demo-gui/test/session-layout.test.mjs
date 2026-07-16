@@ -253,6 +253,30 @@ test("a conflicted component blocks the toolbar Join with an explanation", () =>
   assert.match(styles, /\.session-join-blocked\s*\{/);
 });
 
+test("real backend calls wear honest in-flight state", () => {
+  // withBusy is promise-scoped: tokens set before the call, cleared in
+  // finally, a render on both edges — no timers, no fake counters.
+  const busyStart = app.indexOf("--- in-flight state ---");
+  const busyEnd = app.indexOf("async function joinPendingWire", busyStart);
+  assert.ok(busyStart >= 0 && busyEnd > busyStart, "busy section is bounded");
+  const busy = app.slice(busyStart, busyEnd);
+  assert.match(busy, /for \(const token of tokens\) inflight\.add\(token\);/);
+  assert.match(busy, /\} finally \{\n    for \(const token of tokens\) inflight\.delete\(token\);\n    render\(\);/);
+  assert.doesNotMatch(busy, /setTimeout|setInterval/);
+  // Cards wear the costume through the one decoration seam; the joining
+  // wire's edge marches and its pill waits.
+  assert.match(app, /inflight\.has\(busyToken\(ref\)\)/);
+  assert.match(app, /node\.setAttribute\("aria-busy", "true"\)/);
+  assert.match(app, /inflight\.has\(`edge:\$\{key\}`\)/);
+  assert.match(app, /"session-edge-pending session-edge-busy"/);
+  // Every real backend mutation is instrumented: per-wire join, component
+  // joins and remapped wires, both sync paths, pay, and confirm.
+  const wrapped = app.match(/withBusy(<[^>]+>)?\(/g) ?? [];
+  assert.ok(wrapped.length >= 8, `all backend call sites wrapped (saw ${wrapped.length})`);
+  assert.match(styles, /\.session-busy\s*\{[\s\S]*?pointer-events:\s*none;/);
+  assert.match(styles, /\.session-edge-busy\s*\{/);
+});
+
 test("disabled ops explain themselves on press, not only on hover", () => {
   const hint = html.indexOf('id="opsHint"');
   assert.ok(hint >= 0, "the ops hint line is present");

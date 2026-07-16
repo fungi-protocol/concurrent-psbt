@@ -2996,9 +2996,38 @@ img.session-lifehash {
   }
 }
 
+/* The join is RUNNING: the marching ants speed up and turn ink-dark for
+   exactly as long as the real backend call is pending. */
+.session-edge-busy {
+  stroke: var(--ink);
+  animation-duration: 0.4s;
+}
+
+/* A card whose backend call is in flight: pulse, and hold interaction
+   until the promise settles (withBusy re-renders on both edges). */
+.session-busy {
+  pointer-events: none;
+  animation: session-busy-pulse 1s ease-in-out infinite;
+}
+
+@keyframes session-busy-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .session-edge-pending {
+  .session-edge-pending,
+  .session-busy {
     animation: none;
+  }
+
+  .session-busy {
+    opacity: 0.55;
   }
 }
 
