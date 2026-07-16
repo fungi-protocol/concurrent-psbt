@@ -41,6 +41,7 @@ import {
 
 export type FragmentOrigin =
   | "paste"
+  | "payment-uri"
   | "upload"
   | "import-bip174"
   | "create"

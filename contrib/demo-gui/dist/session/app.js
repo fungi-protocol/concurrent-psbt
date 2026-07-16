@@ -19,12 +19,12 @@
 import { addressChipDigestHex, groupChipDigestHex, lifehashSrc } from "./display.js";
 import { HttpBackend } from "../shared-frontend/backends/http.js";
 import { PtjBackendError } from "../shared-frontend/core/types.js";
-import { seedFromRandomBytes } from "../model.js";
+import { formatSatAmount, parseBitcoinUri, seedFromRandomBytes } from "../model.js";
 import { addFragment, asArray, asObject, asString, buildConfirmArgs, buildCreateRequest, buildPayArgs, buildSyncRequest, bytesToBase64, emptySession, fragmentSummary, negotiationView, pastedPsbt, removeFragment, selectedFragments, setSelected, } from "./state.js";
 import { amountBits, amountSpanParts, DETAIL_LEVELS, elisionLabel, fragmentBadges, fragmentCardModel, groupAggregate, rawKeymapSections, rowDetailPairs, rowFacePairs, signedAmountSpanParts, } from "./display.js";
 import { addressFromScript } from "./encoding.js";
 import { classifyPaste, mintFromPaste, SAMPLE_PASTES, } from "./ingest.js";
-import { actionState, addBridge, authorizePeerOnSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, enrichPayment, idleWire, mergeSessions, mineFragmentKeys, writeSessionContent, mintPeer, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, sessionByKey, sessionFocus, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
+import { actionState, addBridge, authorizePeerOnSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, idleWire, mergeSessions, mineFragmentKeys, writeSessionContent, mintPeer, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, sessionByKey, sessionFocus, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
 import { curveBetween, curveMidpoint, laneLayout, } from "./layout.js";
 import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, toggledBitfieldValue, TX_MODIFIABLE_BITS, validateEditor, violationsFromServer, } from "./editor.js";
 import { descriptorColorKey, groupColorKey, paletteColor, paletteRegistry, peerColorKey, } from "./palette.js";
@@ -2356,6 +2356,64 @@ function classifyPasteToPsbt(raw) {
     const pasted = classifyPaste(raw);
     return pasted.kind === "psbt" ? pasted.payload : null;
 }
+// A bitcoin: URI (BIP 21/321) is a txout CREATION INTENT — one output the
+// payee wants to exist. It mints a real one-output fragment via /api/create
+// (the creator role assigns the output a random PSBT_OUT_UNIQUE_ID), so the
+// intent joins, wires, and publishes like any other fragment — no separate
+// payment node kind. PSBT_OUT_AMOUNT is not optional in PSBTv2, so a URI
+// that names no amount prompts for one (mirrors the sort-seed prompt).
+async function addPaymentUri(text) {
+    const uri = parseBitcoinUri(text);
+    if (!uri) {
+        showStatus("bitcoin: URI unexpectedly unparsable", true);
+        return false;
+    }
+    const amountSats = uri.valueSats > 0 ? uri.valueSats : await promptPaymentAmount(uri.address);
+    if (amountSats === null)
+        return false; // prompt cancelled — keep the paste
+    try {
+        const fragment = await addResponse(await backend.createPsbt({
+            network: displayNetwork(),
+            ordering: "unset",
+            inputs: [],
+            outputs: [
+                { address: uri.address, amountBtc: (amountSats / 100_000_000).toFixed(8) },
+            ],
+        }), "payment-uri", uri.label);
+        logEvent(`minted ${fragment.key} from a bitcoin: URI — a txout intent paying ` +
+            `${uri.address} ${formatSatAmount(amountSats)}${uri.label ? ` (${uri.label})` : ""}`);
+        showStatus("", false);
+        return true;
+    }
+    catch (error) {
+        reportError("payment URI", error);
+        return true; // it WAS a payment URI; the error is already reported
+    }
+}
+let payAmountResolve = null;
+function promptPaymentAmount(address) {
+    const dialog = el("payAmountDialog");
+    el("payAmountDialogWhy").textContent =
+        `The payment request for ${address} names no amount, and a PSBTv2 output ` +
+            `cannot be serialized without one (PSBT_OUT_AMOUNT is required).`;
+    const input = el("payAmountInput");
+    input.value = "";
+    return new Promise((resolve) => {
+        // A re-prompt cancels any dangling prompt AND closes its dialog —
+        // showModal() on an already-open dialog throws inside this executor.
+        settlePayAmount(null);
+        payAmountResolve = resolve;
+        dialog.showModal();
+        input.focus();
+    });
+}
+function settlePayAmount(sats) {
+    const dialog = el("payAmountDialog");
+    if (dialog.open)
+        dialog.close();
+    payAmountResolve?.(sats);
+    payAmountResolve = null;
+}
 function setAddDrawer(open, focusPeer = false) {
     if (open)
         setDrawer("addDrawer");
@@ -2426,6 +2484,12 @@ async function addObject() {
         }
         return;
     }
+    if (pasted.kind === "payment-uri") {
+        if (await addPaymentUri(pasted.payload)) {
+            el("pasteInput").value = "";
+        }
+        return;
+    }
     const minted = mintFromPaste(objects, pasted);
     objects = minted.state;
     logEvent(minted.log);
@@ -2450,9 +2514,7 @@ async function addObject() {
 // degrades to the shallow card with an event-log note (an adapter without
 // the seam, e.g. wasm today, rejects with a clear error).
 async function enrichFromClassify(node, pasted) {
-    if (pasted.kind !== "descriptor" &&
-        pasted.kind !== "payment-uri" &&
-        pasted.kind !== "transaction-hex") {
+    if (pasted.kind !== "descriptor" && pasted.kind !== "transaction-hex") {
         return;
     }
     try {
@@ -2460,10 +2522,6 @@ async function enrichFromClassify(node, pasted) {
         switch (node.kind) {
             case "descriptor":
                 objects = enrichDescriptor(objects, node.key, classified);
-                logEvent(`${node.key}: deep classification folded in (${classified.kind})`);
-                break;
-            case "payment":
-                objects = enrichPayment(objects, node.key, classified);
                 logEvent(`${node.key}: deep classification folded in (${classified.kind})`);
                 break;
             case "utxo": {
@@ -3329,6 +3387,27 @@ function wireDom() {
             settleSortSeed(null);
     });
     sortSeedDialog.addEventListener("cancel", () => settleSortSeed(null));
+    // The payment-amount prompt settles the same way: confirm resolves sats,
+    // cancel/backdrop/Esc resolve null (the txout intent is abandoned). A
+    // non-positive or non-numeric confirm keeps the dialog open and says why.
+    const payAmountDialog = el("payAmountDialog");
+    const payAmountInput = el("payAmountInput");
+    el("payAmountConfirm").addEventListener("click", () => {
+        const sats = Math.round(Number(payAmountInput.value.trim()) * 100_000_000);
+        if (!Number.isFinite(sats) || sats <= 0) {
+            payAmountInput.setCustomValidity("enter a positive BTC amount (e.g. 0.0005)");
+            payAmountInput.reportValidity();
+            return;
+        }
+        settlePayAmount(sats);
+    });
+    payAmountInput.addEventListener("input", () => payAmountInput.setCustomValidity(""));
+    el("payAmountCancel").addEventListener("click", () => settlePayAmount(null));
+    payAmountDialog.addEventListener("click", (event) => {
+        if (event.target === payAmountDialog)
+            settlePayAmount(null);
+    });
+    payAmountDialog.addEventListener("cancel", () => settlePayAmount(null));
     // The drawer bar: each button toggles its drawer (one at a time). A bar
     // button that is ALSO a declared wire node (Create fragment ⋄ utxo) lands
     // an armed wire gesture instead of toggling.

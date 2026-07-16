@@ -12,10 +12,16 @@ test("classifyPaste: payment URIs win and carry parsed fields", () => {
   const paste = classifyPaste(" bitcoin:bcrt1qexample?amount=0.001&label=lunch ");
   assert.equal(paste.kind, "payment-uri");
   assert.equal(paste.payload, "bitcoin:bcrt1qexample?amount=0.001&label=lunch");
+  assert.match(paste.detail, /txout intent/);
   assert.match(paste.detail, /bcrt1qexample/);
   assert.match(paste.detail, /100000 sats/);
-  // Deep BIP 321 validation now folds in via Backend.classifyPaste.
   assert.equal(paste.needsBackend, null);
+
+  // No amount named: the detail says so (PSBTv2 outputs need one, so the
+  // shell prompts before minting the fragment).
+  const bare = classifyPaste("bitcoin:bcrt1qexample");
+  assert.equal(bare.kind, "payment-uri");
+  assert.match(bare.detail, /no amount/);
 });
 
 test("classifyPaste: descriptors, private and public", () => {
@@ -106,20 +112,20 @@ test("every sample paste classifies as its declared kind", () => {
 test("mintFromPaste routes classifications into the object graph", () => {
   let state = emptyObjects();
 
+  // Fragment-producing kinds are the shell's: a payment URI mints no graph
+  // node here — the shell creates a one-output PSBT through the backend.
   const payment = mintFromPaste(state, classifyPaste("bitcoin:bcrt1qdest?sats=42000"));
-  state = payment.state;
-  assert.deepEqual(payment.minted, { kind: "payment", key: "payment-1" });
-  assert.equal(state.payments[0].amountSats, 42000);
-  assert.equal(state.payments[0].address, "bcrt1qdest");
+  assert.equal(payment.minted, null);
+  assert.deepEqual(payment.state, state);
 
   const descriptor = mintFromPaste(state, classifyPaste("wpkh(xpub6Bos/0/*)"));
   state = descriptor.state;
-  assert.deepEqual(descriptor.minted, { kind: "descriptor", key: "descriptor-2" });
+  assert.deepEqual(descriptor.minted, { kind: "descriptor", key: "descriptor-1" });
   assert.equal(state.descriptors[0].isPrivate, false);
 
   const peer = mintFromPaste(state, classifyPaste("npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"));
   state = peer.state;
-  assert.deepEqual(peer.minted, { kind: "peer", key: "peer-3" });
+  assert.deepEqual(peer.minted, { kind: "peer", key: "peer-2" });
   assert.equal(state.peers[0].transport, "nostr");
 
   const iroh = mintFromPaste(state, classifyPaste(`doc${"b".repeat(60)}`));
@@ -128,7 +134,7 @@ test("mintFromPaste routes classifications into the object graph", () => {
 
   const tx = mintFromPaste(state, classifyPaste("01000000" + "11".repeat(80)));
   state = tx.state;
-  assert.deepEqual(tx.minted, { kind: "utxo", key: "utxo-5" });
+  assert.deepEqual(tx.minted, { kind: "utxo", key: "utxo-4" });
   assert.match(tx.log, /outputs decode via classifyPaste/);
 
   // PSBTs and unknowns mint nothing (the fragment set owns PSBTs).

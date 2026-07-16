@@ -367,6 +367,30 @@ test("the sort seed is PSBT state: no ops-bar field, a prompt only when absent",
   assert.match(app, /reportValidity\(\)/);
 });
 
+test("a bitcoin: URI mints a txout-intent fragment, prompting only for a missing amount", () => {
+  // The paste path hands payment URIs to the shell (backend round-trip),
+  // never to the node-graph mint.
+  assert.match(app, /if \(pasted\.kind === "payment-uri"\) \{\s*\n\s*if \(await addPaymentUri\(pasted\.payload\)\)/);
+  const start = app.indexOf("async function addPaymentUri");
+  const end = app.indexOf("function settlePayAmount", start);
+  assert.ok(start >= 0 && end > start, "addPaymentUri slice is bounded");
+  const slice = app.slice(start, end);
+  // The URI becomes a one-output PSBT via /api/create — the Creator role
+  // assigns the output its random unique id; ordering stays unset.
+  assert.match(slice, /backend\.createPsbt\(/);
+  assert.match(slice, /ordering: "unset"/);
+  assert.match(slice, /inputs: \[\]/);
+  assert.match(slice, /"payment-uri"/);
+  // PSBTv2 requires PSBT_OUT_AMOUNT, so an amountless URI prompts…
+  assert.match(slice, /uri\.valueSats > 0 \? uri\.valueSats : await promptPaymentAmount\(uri\.address\)/);
+  assert.match(html, /<dialog id="payAmountDialog"/);
+  assert.match(html, /PSBT_OUT_AMOUNT|id="payAmountDialogWhy"/);
+  // …and the cancel paths settle null, never half-armed (dialog cousin of
+  // the sort-seed prompt).
+  assert.match(app, /payAmountDialog\.addEventListener\("cancel", \(\) => settlePayAmount\(null\)\)/);
+  assert.match(app, /setCustomValidity\("enter a positive BTC amount/);
+});
+
 test("a local 'peer' presents as a disk location, not an identity", () => {
   // Same card shape and wire gestures, but honestly badged: no peer
   // identity stands behind a local transport, only storage on disk.

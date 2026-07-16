@@ -25,7 +25,7 @@ import type {
   InspectResponse,
   PsbtResponse,
 } from "../shared-frontend/core/backend.js";
-import { seedFromRandomBytes } from "../model.js";
+import { formatSatAmount, parseBitcoinUri, seedFromRandomBytes } from "../model.js";
 import {
   addFragment,
   asArray,
@@ -88,7 +88,6 @@ import {
   dropFragmentKey,
   emptyObjects,
   enrichDescriptor,
-  enrichPayment,
   idleWire,
   mergeSessions,
   mineFragmentKeys,
@@ -2891,6 +2890,71 @@ function classifyPasteToPsbt(raw: string): string | null {
   return pasted.kind === "psbt" ? pasted.payload : null;
 }
 
+// A bitcoin: URI (BIP 21/321) is a txout CREATION INTENT — one output the
+// payee wants to exist. It mints a real one-output fragment via /api/create
+// (the creator role assigns the output a random PSBT_OUT_UNIQUE_ID), so the
+// intent joins, wires, and publishes like any other fragment — no separate
+// payment node kind. PSBT_OUT_AMOUNT is not optional in PSBTv2, so a URI
+// that names no amount prompts for one (mirrors the sort-seed prompt).
+async function addPaymentUri(text: string): Promise<boolean> {
+  const uri = parseBitcoinUri(text);
+  if (!uri) {
+    showStatus("bitcoin: URI unexpectedly unparsable", true);
+    return false;
+  }
+  const amountSats = uri.valueSats > 0 ? uri.valueSats : await promptPaymentAmount(uri.address);
+  if (amountSats === null) return false; // prompt cancelled — keep the paste
+  try {
+    const fragment = await addResponse(
+      await backend.createPsbt({
+        network: displayNetwork(),
+        ordering: "unset",
+        inputs: [],
+        outputs: [
+          { address: uri.address, amountBtc: (amountSats / 100_000_000).toFixed(8) },
+        ],
+      }),
+      "payment-uri",
+      uri.label,
+    );
+    logEvent(
+      `minted ${fragment.key} from a bitcoin: URI — a txout intent paying ` +
+        `${uri.address} ${formatSatAmount(amountSats)}${uri.label ? ` (${uri.label})` : ""}`,
+    );
+    showStatus("", false);
+    return true;
+  } catch (error) {
+    reportError("payment URI", error);
+    return true; // it WAS a payment URI; the error is already reported
+  }
+}
+
+let payAmountResolve: ((sats: number | null) => void) | null = null;
+
+function promptPaymentAmount(address: string): Promise<number | null> {
+  const dialog = el<HTMLDialogElement>("payAmountDialog");
+  el<HTMLElement>("payAmountDialogWhy").textContent =
+    `The payment request for ${address} names no amount, and a PSBTv2 output ` +
+    `cannot be serialized without one (PSBT_OUT_AMOUNT is required).`;
+  const input = el<HTMLInputElement>("payAmountInput");
+  input.value = "";
+  return new Promise((resolve) => {
+    // A re-prompt cancels any dangling prompt AND closes its dialog —
+    // showModal() on an already-open dialog throws inside this executor.
+    settlePayAmount(null);
+    payAmountResolve = resolve;
+    dialog.showModal();
+    input.focus();
+  });
+}
+
+function settlePayAmount(sats: number | null): void {
+  const dialog = el<HTMLDialogElement>("payAmountDialog");
+  if (dialog.open) dialog.close();
+  payAmountResolve?.(sats);
+  payAmountResolve = null;
+}
+
 function setAddDrawer(open: boolean, focusPeer = false): void {
   if (open) setDrawer("addDrawer");
   else closeDrawer("addDrawer");
@@ -2966,6 +3030,12 @@ async function addObject(): Promise<void> {
     }
     return;
   }
+  if (pasted.kind === "payment-uri") {
+    if (await addPaymentUri(pasted.payload)) {
+      el<HTMLTextAreaElement>("pasteInput").value = "";
+    }
+    return;
+  }
   const minted = mintFromPaste(objects, pasted);
   objects = minted.state;
   logEvent(minted.log);
@@ -2990,11 +3060,7 @@ async function addObject(): Promise<void> {
 // degrades to the shallow card with an event-log note (an adapter without
 // the seam, e.g. wasm today, rejects with a clear error).
 async function enrichFromClassify(node: NodeRef, pasted: PasteClassification): Promise<void> {
-  if (
-    pasted.kind !== "descriptor" &&
-    pasted.kind !== "payment-uri" &&
-    pasted.kind !== "transaction-hex"
-  ) {
+  if (pasted.kind !== "descriptor" && pasted.kind !== "transaction-hex") {
     return;
   }
   try {
@@ -3002,10 +3068,6 @@ async function enrichFromClassify(node: NodeRef, pasted: PasteClassification): P
     switch (node.kind) {
       case "descriptor":
         objects = enrichDescriptor(objects, node.key, classified);
-        logEvent(`${node.key}: deep classification folded in (${classified.kind})`);
-        break;
-      case "payment":
-        objects = enrichPayment(objects, node.key, classified);
         logEvent(`${node.key}: deep classification folded in (${classified.kind})`);
         break;
       case "utxo": {
@@ -3977,6 +4039,26 @@ function wireDom(): void {
     if (event.target === sortSeedDialog) settleSortSeed(null);
   });
   sortSeedDialog.addEventListener("cancel", () => settleSortSeed(null));
+  // The payment-amount prompt settles the same way: confirm resolves sats,
+  // cancel/backdrop/Esc resolve null (the txout intent is abandoned). A
+  // non-positive or non-numeric confirm keeps the dialog open and says why.
+  const payAmountDialog = el<HTMLDialogElement>("payAmountDialog");
+  const payAmountInput = el<HTMLInputElement>("payAmountInput");
+  el<HTMLButtonElement>("payAmountConfirm").addEventListener("click", () => {
+    const sats = Math.round(Number(payAmountInput.value.trim()) * 100_000_000);
+    if (!Number.isFinite(sats) || sats <= 0) {
+      payAmountInput.setCustomValidity("enter a positive BTC amount (e.g. 0.0005)");
+      payAmountInput.reportValidity();
+      return;
+    }
+    settlePayAmount(sats);
+  });
+  payAmountInput.addEventListener("input", () => payAmountInput.setCustomValidity(""));
+  el<HTMLButtonElement>("payAmountCancel").addEventListener("click", () => settlePayAmount(null));
+  payAmountDialog.addEventListener("click", (event) => {
+    if (event.target === payAmountDialog) settlePayAmount(null);
+  });
+  payAmountDialog.addEventListener("cancel", () => settlePayAmount(null));
   // The drawer bar: each button toggles its drawer (one at a time). A bar
   // button that is ALSO a declared wire node (Create fragment ⋄ utxo) lands
   // an armed wire gesture instead of toggling.

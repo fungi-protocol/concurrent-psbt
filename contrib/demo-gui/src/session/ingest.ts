@@ -7,18 +7,17 @@
 // objects.
 //
 // Shallow means: enough syntax to pick a node kind and a card label. DEEP
-// parsing (descriptor validation and script derivation via miniscript, BIP
-// 321 validation via bitcoin-payment-instructions, transaction decode into
-// spendable outputs) is the Backend.classifyPaste seam (/api/classify): the
-// shell mints the shallow node instantly, requests the deep classification
-// asynchronously, and folds the details back into the node
-// (enrichDescriptor / enrichPayment / applyTxOutputs in ./wiring.ts).
-// Consensus data is still never half-parsed in the frontend; a remaining
-// deep-parse gap, if a kind has one, is named in `needsBackend` so the UI
-// stays honest.
+// parsing (descriptor validation and script derivation via miniscript,
+// transaction decode into spendable outputs) is the Backend.classifyPaste
+// seam (/api/classify): the shell mints the shallow node instantly, requests
+// the deep classification asynchronously, and folds the details back into
+// the node (enrichDescriptor / applyTxOutputs in ./wiring.ts). Consensus
+// data is still never half-parsed in the frontend; a remaining deep-parse
+// gap, if a kind has one, is named in `needsBackend` so the UI stays honest.
 //
 // Recognized today:
-//   bitcoin: URI            -> payment instruction (BIP 21 / BIP 321)
+//   bitcoin: URI            -> fragment (BIP 21/321 txout intent — the shell
+//                              mints a one-output PSBT via /api/create)
 //   output descriptor       -> descriptor object (own/other attribution)
 //   npub1...                -> peer (nostr identity)
 //   iroh document ticket    -> peer (iroh transport)
@@ -38,7 +37,6 @@ import {
 } from "../model.js";
 import {
   mintDescriptor,
-  mintPayment,
   mintPeer,
   mintUtxo,
   type NodeRef,
@@ -98,7 +96,9 @@ export function classifyPaste(text: string): PasteClassification {
     return {
       kind: "payment-uri",
       payload: uri.uri,
-      detail: `payment instruction: ${uri.address} (${uri.valueSats} sats)`,
+      detail:
+        `txout intent: ${uri.address} ` +
+        (uri.valueSats > 0 ? `(${uri.valueSats} sats)` : "(no amount — the shell prompts)"),
       needsBackend: null,
     };
   }
@@ -239,9 +239,11 @@ export const SAMPLE_PASTES: readonly SamplePaste[] = [
   },
 ];
 
-// Route a classification into the object graph. PSBTs are NOT minted here:
-// fragments are owned by the fragment set (the shell inspects them through
-// the backend first). Returns the minted node so the shell can focus/log it.
+// Route a classification into the object graph. Fragment-producing kinds are
+// NOT minted here — PSBTs and payment URIs are owned by the fragment set
+// (the shell runs them through the backend first: inspect for PSBTs,
+// /api/create for txout intents). Returns the minted node so the shell can
+// focus/log it.
 export interface MintResult {
   state: ObjectsState;
   minted: NodeRef | null;
@@ -250,16 +252,6 @@ export interface MintResult {
 
 export function mintFromPaste(state: ObjectsState, pasted: PasteClassification): MintResult {
   switch (pasted.kind) {
-    case "payment-uri": {
-      const uri = parseBitcoinUri(pasted.payload);
-      if (!uri) return { state, minted: null, log: "payment URI unexpectedly unparsable" };
-      const minted = mintPayment(state, uri.uri, uri.address, uri.valueSats, uri.label);
-      return {
-        state: minted.state,
-        minted: { kind: "payment", key: minted.payment.key },
-        log: `minted ${minted.payment.key} from a payment URI (${uri.address})`,
-      };
-    }
     case "descriptor": {
       const isPrivate = descriptorIsPrivate(pasted.payload);
       const minted = mintDescriptor(state, pasted.payload, isPrivate);

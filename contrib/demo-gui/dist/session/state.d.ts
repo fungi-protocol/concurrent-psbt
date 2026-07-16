@@ -1,6 +1,6 @@
 import type { ConfirmationRecord, ConfirmOptions, CreatePsbtRequest, InspectResponse, PaymentRecord, PaymentsResponse, PayOptions, SyncRequest } from "../shared-frontend/core/backend.js";
 import { type SessionOrderingMode } from "../model.js";
-export type FragmentOrigin = "paste" | "upload" | "import-bip174" | "create" | "join" | "sort" | "make-unordered" | "atomize" | "concatenate" | "assign-ids" | "edit" | "pay" | "confirm" | "sync";
+export type FragmentOrigin = "paste" | "payment-uri" | "upload" | "import-bip174" | "create" | "join" | "sort" | "make-unordered" | "atomize" | "concatenate" | "assign-ids" | "edit" | "pay" | "confirm" | "sync";
 export interface SessionFragment {
     key: string;
     psbt: string;

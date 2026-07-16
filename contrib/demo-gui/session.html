@@ -530,6 +530,26 @@
       </div>
     </dialog>
 
+    <!-- Payment-amount prompt: opens ONLY when a pasted bitcoin: URI names
+         no amount. A txout intent becomes a PSBTv2 output, and PSBT_OUT_AMOUNT
+         is not optional — the fragment cannot exist without one. -->
+    <dialog id="payAmountDialog" class="session-modal" aria-labelledby="payAmountDialogTitle">
+      <div class="session-output-heading">
+        <h2 id="payAmountDialogTitle">Payment amount needed</h2>
+        <button id="payAmountCancel" type="button" aria-label="Cancel adding the payment">×</button>
+      </div>
+      <div class="session-modal-body">
+        <p id="payAmountDialogWhy" class="item-meta"></p>
+        <label class="field-label" for="payAmountInput">
+          amount (BTC)
+          <input id="payAmountInput" autocomplete="off" inputmode="decimal" spellcheck="false" placeholder="0.00050000">
+        </label>
+        <div class="session-card-actions">
+          <button id="payAmountConfirm" type="button" class="primary">Mint the txout intent</button>
+        </div>
+      </div>
+    </dialog>
+
     <script type="module" src="dist/session/app.js?v=20260716-canvas1"></script>
   </body>
 </html>
