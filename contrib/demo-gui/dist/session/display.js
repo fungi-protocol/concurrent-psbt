@@ -139,7 +139,9 @@ export function decodeScript(scriptHex) {
             const chunk = take(length);
             if (chunk === null)
                 return null;
-            parts.push(chunk);
+            // A zero-length push has no hex to show; an empty token would just
+            // read as a stray double space in the joined asm.
+            parts.push(chunk === "" ? "<empty>" : chunk);
             continue;
         }
         parts.push(OPCODE_NAMES[opcode] ?? `OP_0x${opcode.toString(16).padStart(2, "0")}`);

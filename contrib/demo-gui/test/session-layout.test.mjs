@@ -457,6 +457,12 @@ test("expanded rows chip the address fact, not the row face; the value cycles", 
   assert.match(rowSlice, /shown = \(shown \+ 1\) % cycle\.length/);
   assert.match(rowSlice, /term\.textContent = cycle\[shown\]\.label/);
   assert.match(rowSlice, /event\.stopPropagation\(\); \/\/ the card behind selects on click/);
+  // Mid-wire-drag the cycle span yields to the card like the row does: the
+  // guard must come BEFORE stopPropagation, or the drag's tap is swallowed.
+  assert.match(
+    rowSlice,
+    /if \(wire\.source\) return; \/\/ wiring in progress: the card handles the tap\n\s*event\.stopPropagation\(\); \/\/ the card behind selects on click/,
+  );
   assert.match(styles, /\.session-fact-cycle\s*\{/);
 });
 

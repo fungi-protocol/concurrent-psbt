@@ -632,6 +632,8 @@ test("decodeScript disassembles standard scripts; truncation is null, never a gu
   assert.equal(decodeScript("6a0b68656c6c6f20776f726c64"), "OP_RETURN 68656c6c6f20776f726c64");
   // OP_PUSHDATA1: explicit little-endian length prefix.
   assert.equal(decodeScript("4c020102"), "0102");
+  // A zero-length push gets a visible token, not a stray double space.
+  assert.equal(decodeScript("4c00ac"), "<empty> OP_CHECKSIG");
   // An unnamed opcode renders as its byte — honest about the gap.
   assert.equal(decodeScript("50"), "OP_0x50");
   // A truncated push is not a script; neither is non-hex or empty input.

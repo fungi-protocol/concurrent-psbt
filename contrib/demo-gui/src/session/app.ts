@@ -2249,6 +2249,7 @@ function coinRow(
           text.textContent = cycle[shown].value;
         };
         text.addEventListener("click", (event) => {
+          if (wire.source) return; // wiring in progress: the card handles the tap
           event.stopPropagation(); // the card behind selects on click
           advance();
         });
