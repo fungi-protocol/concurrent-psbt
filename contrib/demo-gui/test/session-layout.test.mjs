@@ -73,6 +73,14 @@ test("the lanes stack peers over sessions over Mine", () => {
   for (const lane of ["session-node-peer", "session-node-session", "session-node-fragment"]) {
     assert.match(styles, new RegExp(`\\.${lane}\\s*\\{[^}]*width:`), `${lane} has a fixed width`);
   }
+  // Two-column coin reading is the desktop default: fragment and session
+  // nodes leave the card's container inline-size clear of the 340px
+  // column-collapse query (single column is the last resort, not the norm).
+  const collapseAt = 340;
+  for (const lane of ["session-node-session", "session-node-fragment"]) {
+    const width = Number(styles.match(new RegExp(`\\.${lane}\\s*\\{[^}]*width:\\s*(\\d+)px`))?.[1]);
+    assert.ok(width >= collapseAt + 60, `${lane} width ${width} clears the ${collapseAt}px collapse query`);
+  }
 });
 
 test("single-session focus swaps the canvas for the flat register list", () => {

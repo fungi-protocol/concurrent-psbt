@@ -3111,12 +3111,16 @@ img.session-lifehash {
   width: 220px;
 }
 
+/* Node widths leave the cards' container inline-size comfortably above
+   the 340px column-collapse query: inputs-left/outputs-right is the
+   default reading and the single column is the last resort, not the
+   canvas norm. */
 .session-node-session {
-  width: 400px;
+  width: 540px;
 }
 
 .session-node-fragment {
-  width: 340px;
+  width: 460px;
 }
 
 /* Peers are small nodes above the sessions: compact cards, tight type. */
