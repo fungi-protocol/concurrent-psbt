@@ -1859,7 +1859,33 @@ h2 {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
   background: color-mix(in srgb, var(--accent) 12%, var(--surface));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  /* The mockup's breathing selection halo (its .node.selected glow). */
+  animation: session-selection-glow 1.45s ease-in-out infinite;
+}
+
+@keyframes session-selection-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 4px 2px rgba(25, 103, 210, 0.35);
+  }
+
+  50% {
+    box-shadow: 0 0 10px 4px rgba(25, 103, 210, 0.6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-card-selected {
+    animation: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  }
+}
+
+/* Descriptor-hover cross-referencing: nodes of every OTHER identity step
+   back while a descriptor card is hovered. */
+.session-identity-dim {
+  opacity: 0.35;
+  transition: opacity 140ms ease;
 }
 
 

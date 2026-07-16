@@ -76,10 +76,14 @@ const lineage = new Map();
 const identityColors = paletteRegistry();
 // Paint a node with its identity color: the CSS custom property drives the
 // group/card delineation (border, stripe, chip) in the descriptor's color.
+// The shared key also lands as a data attribute, so hovering a descriptor
+// card cross-references everything of the same identity (the delegated
+// hover in wireDom dims the rest).
 function colorizeIdentity(node, colorKey) {
     if (!colorKey)
         return;
     node.classList.add("session-colorized");
+    node.dataset.identityKey = colorKey;
     node.style.setProperty("--identity-color", paletteColor(identityColors, colorKey));
 }
 // --- tiny DOM helpers -------------------------------------------------------
@@ -1867,7 +1871,7 @@ function renderObjects() {
     }
     for (const descriptor of objects.descriptors) {
         const item = document.createElement("li");
-        item.className = "list-item session-card";
+        item.className = "list-item session-card session-descriptor-card";
         // Unique palette color per descriptor, keyed by textual identity.
         colorizeIdentity(item, descriptorColorKey(descriptor));
         decorateWireTarget(item, { kind: "descriptor", key: descriptor.key });
@@ -1909,6 +1913,13 @@ function peerKindBadge(peer) {
         ? badge("disk location", "session-badge")
         : badge(`peer · ${peer.transport}`, "session-badge");
 }
+// The peer card's reach, the mockup's "sees N session(s)": how many
+// registers this peer (or any member of its bridge group) can read/write.
+function sessionCountMeta(peerKey) {
+    const group = bridgeGroupContaining(objects, peerKey);
+    const count = objects.sessions.filter((sessionObject) => sessionObject.peerKeys.some((key) => group.includes(key))).length;
+    return span("item-meta", `sees ${count} session(s)`);
+}
 function renderPeerCard(peer) {
     const item = document.createElement("li");
     item.className = "list-item session-card session-peer-card";
@@ -1921,7 +1932,7 @@ function renderPeerCard(peer) {
     head.append(span("session-color-chip", ""), span("item-title", peer.name), peerKindBadge(peer));
     const identity = span("item-meta session-identity", peer.identity.slice(0, 24) + (peer.identity.length > 24 ? "…" : ""));
     identity.title = peer.identity;
-    head.append(identity);
+    head.append(identity, sessionCountMeta(peer.key));
     item.append(head);
     if (peer.transport === "local") {
         item.append(span("item-meta", "storage on this machine — no peer identity is associated with this location"));
@@ -1943,7 +1954,7 @@ function renderBridgeGroupCard(members) {
     decorateWireTarget(item, { kind: "peer", key: members[0].key });
     const head = document.createElement("div");
     head.className = "session-fragment-row";
-    head.append(span("item-title", members.map((member) => member.name).join(" + ")), badge(`bridge · ${members.length} peers`, "session-badge session-badge-good"), span("item-meta", "one peer to the session: every member receives every broadcast"));
+    head.append(span("item-title", members.map((member) => member.name).join(" + ")), badge(`bridge · ${members.length} peers`, "session-badge session-badge-good"), span("item-meta", "one peer to the session: every member receives every broadcast"), sessionCountMeta(members[0].key));
     item.append(head);
     for (const member of members) {
         const row = document.createElement("div");
@@ -3356,6 +3367,19 @@ function wireDom() {
     // Edges live in world coordinates, so scrolling needs nothing; a resize
     // changes the layout's minWidth (the viewport), so the canvas re-lays out.
     window.addEventListener("resize", () => render());
+    // Descriptor-hover cross-referencing: hovering a descriptor card dims
+    // every colorized node of a DIFFERENT identity, so everything the
+    // descriptor touches (provenance groups, coins, peers) pops. Delegated,
+    // so it survives every render; leaving the card lifts the dim.
+    document.addEventListener("pointerover", (event) => {
+        const hovered = event.target instanceof Element
+            ? event.target.closest(".session-descriptor-card[data-identity-key]")
+            : null;
+        const key = hovered?.dataset.identityKey ?? null;
+        document.querySelectorAll("[data-identity-key]").forEach((node) => {
+            node.classList.toggle("session-identity-dim", key !== null && node.dataset.identityKey !== key);
+        });
+    });
     el("wireJoinAll").addEventListener("click", () => void joinAllWires());
     el("wireClearAll").addEventListener("click", clearPendingWires);
     el("focusBack").addEventListener("click", () => {

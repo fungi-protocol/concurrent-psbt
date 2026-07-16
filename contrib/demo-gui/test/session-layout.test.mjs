@@ -277,6 +277,24 @@ test("real backend calls wear honest in-flight state", () => {
   assert.match(styles, /\.session-edge-busy\s*\{/);
 });
 
+test("mockup parity: peer reach, breathing selection, identity hover", () => {
+  // Every peer card states its reach — sessions its bridge group can
+  // read/write — like the mockup's "sees N session(s)" meta.
+  assert.match(app, /`sees \$\{count\} session\(s\)`/);
+  assert.match(app, /sessionCountMeta\(peer\.key\)/);
+  assert.match(app, /sessionCountMeta\(members\[0\]\.key\)/);
+  // Selection breathes like the mockup's .node.selected halo (and holds a
+  // static halo under prefers-reduced-motion).
+  assert.match(styles, /\.session-card-selected\s*\{[\s\S]*?session-selection-glow/);
+  assert.match(styles, /@keyframes session-selection-glow/);
+  // Hovering a descriptor card dims every colorized node of a different
+  // identity; the key rides colorizeIdentity so the wiring is delegated.
+  assert.match(app, /node\.dataset\.identityKey = colorKey;/);
+  assert.match(app, /\.session-descriptor-card\[data-identity-key\]/);
+  assert.match(app, /"session-identity-dim",\n\s*key !== null && node\.dataset\.identityKey !== key/);
+  assert.match(styles, /\.session-identity-dim\s*\{/);
+});
+
 test("disabled ops explain themselves on press, not only on hover", () => {
   const hint = html.indexOf('id="opsHint"');
   assert.ok(hint >= 0, "the ops hint line is present");
