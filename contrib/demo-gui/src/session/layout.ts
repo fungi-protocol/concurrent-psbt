@@ -53,7 +53,10 @@ export const LANE_GAP = 64;
 export const NODE_GAP = 24;
 // Bridge-group members sit nearly flush, reading as one block.
 export const GROUP_INNER_GAP = 6;
-// Me-frame interior: padding plus a label strip across the top.
+// Me-frame interior: padding plus a label strip across the top. Fragment
+// cards inside the frame sit wider apart than lane nodes — the gap is where
+// their pending-wire curves and Join pills live.
+export const MINE_GAP = 48;
 export const FRAME_PAD = 14;
 export const FRAME_LABEL = 30;
 
@@ -136,11 +139,11 @@ export function laneLayout(input: LaneLayoutInput): LaneLayout {
   for (const node of input.mine) {
     if (rowX > rowLeft && rowX + node.width > rowRight) {
       rowX = rowLeft;
-      rowY += rowHeight + NODE_GAP;
+      rowY += rowHeight + MINE_GAP;
       rowHeight = 0;
     }
     positions.set(node.key, { x: rowX, y: rowY, width: node.width, height: node.height });
-    rowX += node.width + NODE_GAP;
+    rowX += node.width + MINE_GAP;
     rowHeight = Math.max(rowHeight, node.height);
   }
   const contentBottom = input.mine.length ? rowY + rowHeight : rowY;
@@ -159,11 +162,27 @@ export function laneLayout(input: LaneLayoutInput): LaneLayout {
   };
 }
 
-// Edge geometry: a vertical-S cubic between two rects, leaving the lower
-// edge of the upper rect and entering the upper edge of the lower one (the
-// mockup's curvePath). Pure functions of two rects so the edge layer draws
-// entirely from layout output — no DOM measurement.
+// Edge geometry: an S-shaped cubic between two rects (the mockup's
+// curvePath). Rects in different lanes connect vertically — leaving the
+// lower edge of the upper rect, entering the upper edge of the lower one.
+// Rects whose vertical spans overlap are row-mates (fragments side by side
+// in the Me frame): they connect horizontally between their facing edges.
+// Pure functions of two rects so the edge layer draws entirely from layout
+// output — no DOM measurement.
+function rowMates(a: LayoutRect, b: LayoutRect): boolean {
+  return Math.min(a.y + a.height, b.y + b.height) > Math.max(a.y, b.y);
+}
+
 export function curveBetween(from: LayoutRect, to: LayoutRect): string {
+  if (rowMates(from, to)) {
+    const [left, right] = from.x <= to.x ? [from, to] : [to, from];
+    const startX = left.x + left.width;
+    const startY = left.y + left.height / 2;
+    const endX = right.x;
+    const endY = right.y + right.height / 2;
+    const midX = (startX + endX) / 2;
+    return `M ${startX} ${startY} C ${midX} ${startY}, ${midX} ${endY}, ${endX} ${endY}`;
+  }
   const [upper, lower] = from.y <= to.y ? [from, to] : [to, from];
   const startX = upper.x + upper.width / 2;
   const startY = upper.y + upper.height;
@@ -174,6 +193,13 @@ export function curveBetween(from: LayoutRect, to: LayoutRect): string {
 }
 
 export function curveMidpoint(from: LayoutRect, to: LayoutRect): { x: number; y: number } {
+  if (rowMates(from, to)) {
+    const [left, right] = from.x <= to.x ? [from, to] : [to, from];
+    return {
+      x: (left.x + left.width + right.x) / 2,
+      y: (left.y + left.height / 2 + right.y + right.height / 2) / 2,
+    };
+  }
   const [upper, lower] = from.y <= to.y ? [from, to] : [to, from];
   return {
     x: (upper.x + upper.width / 2 + lower.x + lower.width / 2) / 2,

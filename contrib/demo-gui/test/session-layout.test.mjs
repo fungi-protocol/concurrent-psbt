@@ -89,13 +89,12 @@ test("single-session focus swaps the canvas for the flat register list", () => {
 
 test("peer cards preserve bridging while Pair stays visibly unavailable", () => {
   // Bridging rides the always-on drag gesture: decorateWireTarget arms the
-  // drag on single peers AND bridge-group cards, and the queue chip keeps
-  // their pending-wire participation visible.
+  // drag on single peers AND bridge-group cards. Queue participation lives
+  // on the pending EDGE (and its pill), not in a card chip.
   assert.match(app, /decorateWireTarget\(item, \{ kind: "peer", key: peer\.key \}\)/);
-  assert.match(app, /wireQueueChip\(\{ kind: "peer", key: peer\.key \}\)/);
   assert.match(app, /decorateWireTarget\(item, \{ kind: "peer", key: members\[0\]\.key \}\)/);
-  assert.match(app, /wireQueueChip\(\{ kind: "peer", key: members\[0\]\.key \}\)/);
   assert.match(app, /armWireDrag\(node, ref\)/);
+  assert.doesNotMatch(app, /wireQueueChip/);
   assert.match(app, /Pair unavailable until the ptj adapter exposes session pairing/);
 });
 
@@ -195,6 +194,63 @@ test("standing wire edges: Mine sees every session, peers their authorized ones"
   assert.doesNotMatch(app, /addEventListener\("scroll", drawWireOverlay/);
   assert.match(styles, /\.session-edge-mine\s*\{/);
   assert.match(styles, /\.session-edge-auth\s*\{/);
+});
+
+test("pending wires are canvas edges with midpoint Join pills", () => {
+  // The pill layer is HTML above the cards; the SVG stays pointer-blind.
+  const main = html.slice(html.indexOf("<main"), html.indexOf("</main>"));
+  assert.match(main, /<div id="pillLayer" class="session-pill-layer"><\/div>/);
+  assert.match(styles, /\.session-pill-layer\s*\{[\s\S]*?pointer-events:\s*none;[\s\S]*?z-index:\s*2;/);
+  assert.match(styles, /\.session-wire-pill\s*\{[\s\S]*?pointer-events:\s*auto;/);
+  // Each live pending wire draws an animated edge and one pill at the
+  // curve's midpoint whose Join collapses exactly that edge.
+  const overlayStart = app.indexOf("function drawWireOverlay");
+  const overlayEnd = app.indexOf("function render(", overlayStart);
+  const overlay = app.slice(overlayStart, overlayEnd);
+  assert.match(overlay, /livePendingWires\(\)/);
+  assert.match(overlay, /"session-edge-pending"/);
+  assert.match(overlay, /curveMidpoint\(from, to\)/);
+  assert.match(overlay, /joinPendingWire\(key\)/);
+  assert.match(styles, /\.session-edge-pending\s*\{[\s\S]*?stroke-dasharray/);
+  // The card costume and the "N queued" chip are gone — the edge IS the
+  // queue participation (the panel keeps the textual list).
+  assert.doesNotMatch(app, /session-wire-pending/);
+  assert.doesNotMatch(styles, /session-wire-queued-chip/);
+  assert.doesNotMatch(styles, /\.session-wire-pending/);
+});
+
+test("queued joins are computed before they can be committed", () => {
+  // The probe runs the ACTUAL backend join (it is pure) the moment a wire
+  // is queued, and re-runs when the PSBTs under the endpoints change.
+  const probeStart = app.indexOf("--- join probes ---");
+  const probeEnd = app.indexOf("async function joinPendingWire", probeStart);
+  assert.ok(probeStart >= 0 && probeEnd > probeStart, "probe section is bounded");
+  const probes = app.slice(probeStart, probeEnd);
+  assert.match(probes, /backend\s*\.joinPsbts\(fragments\.map\(\(fragment\) => fragment\.psbt\)\)/);
+  assert.match(probes, /signature/);
+  // Probes for vanished wires and components are pruned.
+  assert.match(probes, /wireProbes\.delete\(key\)/);
+  assert.match(probes, /componentProbes\.delete\(key\)/);
+  // A conflicted wire trades its Join for an explanation (pill and panel row).
+  const conflictButtons = app.match(/button\("⚠ why\?"/g) ?? [];
+  assert.equal(conflictButtons.length, 2, "pill and queue row both explain conflicts");
+  assert.match(app, /openConflictModal/);
+});
+
+test("a conflicted component blocks the toolbar Join with an explanation", () => {
+  // Even when every adjacent pair joins cleanly, the component's LUB can
+  // conflict — the whole component is probed as one n-ary join.
+  const probes = app.slice(app.indexOf("--- join probes ---"), app.indexOf("async function joinPendingWire"));
+  assert.match(probes, /component\.wires\.length > 1/);
+  assert.match(probes, /component\.nodes\.flatMap\(\(ref\) => probeFragments\(ref\)\)/);
+  // The toolbar Join opens the conflict modal instead of running joins
+  // already computed to fail; the button wears the blocked styling.
+  const joinAllStart = app.indexOf("async function joinAllWires");
+  const joinAll = app.slice(joinAllStart, app.indexOf("function clearPendingWires", joinAllStart));
+  assert.match(joinAll, /queueConflicts\(wires\)/);
+  assert.match(joinAll, /openConflictModal\("the queue cannot join — conflicts", conflicts\)/);
+  assert.match(app, /classList\.toggle\("session-join-blocked", conflicts\.length > 0\)/);
+  assert.match(styles, /\.session-join-blocked\s*\{/);
 });
 
 test("disabled ops explain themselves on press, not only on hover", () => {

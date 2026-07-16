@@ -32,6 +32,7 @@ export declare const CANVAS_EDGE = 24;
 export declare const LANE_GAP = 64;
 export declare const NODE_GAP = 24;
 export declare const GROUP_INNER_GAP = 6;
+export declare const MINE_GAP = 48;
 export declare const FRAME_PAD = 14;
 export declare const FRAME_LABEL = 30;
 export declare function laneLayout(input: LaneLayoutInput): LaneLayout;

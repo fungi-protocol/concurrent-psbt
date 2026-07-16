@@ -7,6 +7,7 @@ import {
   FRAME_PAD,
   GROUP_INNER_GAP,
   LANE_GAP,
+  MINE_GAP,
   NODE_GAP,
   curveBetween,
   curveMidpoint,
@@ -87,11 +88,15 @@ test("the Me frame spans the world and wraps its cards into rows", () => {
   assert.equal(frame.x, CANVAS_EDGE);
   assert.equal(frame.width, layout.world.width - 2 * CANVAS_EDGE);
   const [f1, f2, f3] = ["f-1", "f-2", "f-3"].map((key) => layout.positions.get(key));
-  // Two fit on the first row of a 1000-wide world; the third wraps.
+  // Two fit on the first row of a 1000-wide world; the third wraps. The
+  // in-frame gap is WIDER than the lane gap — pending-wire curves and their
+  // Join pills render between adjacent fragments.
+  assert.ok(MINE_GAP > NODE_GAP, "mine cards sit wider apart than lane nodes");
+  assert.equal(f2.x, f1.x + 400 + MINE_GAP);
   assert.equal(f1.y, f2.y);
   assert.equal(f1.y, frame.y + FRAME_LABEL + FRAME_PAD);
   assert.equal(f3.x, f1.x, "the wrapped row restarts at the left");
-  assert.equal(f3.y, f1.y + 260 + NODE_GAP, "the next row clears the tallest card");
+  assert.equal(f3.y, f1.y + 260 + MINE_GAP, "the next row clears the tallest card");
   // The frame contains its last row plus padding; the world contains the frame.
   assert.equal(frame.height, f3.y + 200 + FRAME_PAD - frame.y);
   assert.equal(layout.world.height, frame.y + frame.height + CANVAS_EDGE);
@@ -114,4 +119,16 @@ test("edges leave the upper rect's bottom and enter the lower rect's top", () =>
   assert.equal(curveBetween(session, peer), path);
   const mid = curveMidpoint(peer, session);
   assert.deepEqual(mid, { x: 380, y: 142 });
+});
+
+test("row-mates connect horizontally between their facing edges", () => {
+  // Two fragments side by side in the Me frame: their vertical spans
+  // overlap, so the wire leaves the left card's right edge and enters the
+  // right card's left edge — not a degenerate vertical S.
+  const left = { x: 38, y: 284, width: 340, height: 335 };
+  const right = { x: 426, y: 284, width: 340, height: 120 };
+  const path = curveBetween(left, right);
+  assert.equal(path, "M 378 451.5 C 402 451.5, 402 344, 426 344");
+  assert.equal(curveBetween(right, left), path);
+  assert.deepEqual(curveMidpoint(left, right), { x: 402, y: 397.75 });
 });

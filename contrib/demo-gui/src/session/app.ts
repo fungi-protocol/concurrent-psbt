@@ -120,10 +120,12 @@ import {
   type PendingWire,
   type SessionAction,
   type SessionObject,
+  type WireComponent,
   type WireGesture,
 } from "./wiring.js";
 import {
   curveBetween,
+  curveMidpoint,
   laneLayout,
   type LaneLayout,
   type LayoutNode,
@@ -1104,6 +1106,174 @@ function livePendingWires(): PendingWire[] {
   return pendingWires;
 }
 
+// --- join probes ------------------------------------------------------------------
+// A queued wire is a PROMISE of a join, and joins are partial: the ⊔ can
+// fail (conflicting fields). Rather than let the user discover that at
+// commit time, every queued PSBT join is COMPUTED as soon as it is queued
+// (the backend join is pure — committing just re-runs it and keeps the
+// result). A conflicted wire trades its Join pill for an explanation, and
+// a conflicted component blocks the toolbar Join the same way — including
+// the case where every adjacent pair joins cleanly but the component's
+// least upper bound does not.
+
+type JoinProbe =
+  | { state: "pending" }
+  | { state: "ok" }
+  | { state: "conflict"; detail: string };
+
+// Probes are keyed by wire/component and re-run when the PSBTs under the
+// endpoints change (a register can advance while its wire sits queued).
+interface ProbeEntry {
+  signature: string;
+  probe: JoinProbe;
+}
+
+const wireProbes = new Map<string, ProbeEntry>();
+const componentProbes = new Map<string, ProbeEntry>();
+
+function wireLabel(entry: PendingWire): string {
+  return (
+    wireVerdict(entry.source, entry.target, objects).label ??
+    `${nodeName(entry.source)} ⋈ ${nodeName(entry.target)}`
+  );
+}
+
+// The fragments a wire endpoint contributes to its join: the fragment
+// itself, or the register's current content. Peers and the other
+// non-PSBT endpoints contribute nothing — their wires have effects, not
+// joins, and never conflict.
+function probeFragments(ref: NodeRef): SessionFragment[] {
+  if (ref.kind === "fragment") {
+    const fragment = fragmentByKey(ref.key);
+    return fragment ? [fragment] : [];
+  }
+  if (ref.kind === "session") {
+    const contentKey = sessionByKey(objects, ref.key)?.contentKey;
+    const content = contentKey ? fragmentByKey(contentKey) : null;
+    return content ? [content] : [];
+  }
+  return [];
+}
+
+function dedupeFragments(fragments: SessionFragment[]): SessionFragment[] {
+  const byKey = new Map(fragments.map((fragment) => [fragment.key, fragment]));
+  return [...byKey.values()];
+}
+
+function componentKey(component: WireComponent): string {
+  return component.wires
+    .map((entry) => wireKey(entry.source, entry.target))
+    .sort()
+    .join(" | ");
+}
+
+function probeInto(map: Map<string, ProbeEntry>, key: string, fragments: SessionFragment[]): void {
+  const signature = fragments.map((fragment) => fragment.key).join("+");
+  if (map.get(key)?.signature === signature) return;
+  // Fewer than two PSBTs (or none at all): there is no join to compute.
+  if (fragments.length < 2) {
+    map.set(key, { signature, probe: { state: "ok" } });
+    return;
+  }
+  map.set(key, { signature, probe: { state: "pending" } });
+  const settle = (probe: JoinProbe): void => {
+    const current = map.get(key);
+    // A newer probe (changed signature) supersedes this one; stand down.
+    if (!current || current.signature !== signature) return;
+    map.set(key, { signature, probe });
+    render();
+  };
+  backend
+    .joinPsbts(fragments.map((fragment) => fragment.psbt))
+    .then(() => settle({ state: "ok" }))
+    .catch((error: unknown) =>
+      settle({
+        state: "conflict",
+        detail: error instanceof Error ? error.message : String(error),
+      }),
+    );
+}
+
+// Keep the probe maps in step with the live queue: probe what is new or
+// changed, drop what is gone. Called on every queue render; completed
+// probes re-render, which arrives back here as a no-op (same signatures).
+function refreshJoinProbes(wires: PendingWire[]): void {
+  const liveWires = new Set<string>();
+  for (const entry of wires) {
+    const key = wireKey(entry.source, entry.target);
+    liveWires.add(key);
+    probeInto(
+      wireProbes,
+      key,
+      dedupeFragments([...probeFragments(entry.source), ...probeFragments(entry.target)]),
+    );
+  }
+  for (const key of [...wireProbes.keys()]) {
+    if (!liveWires.has(key)) wireProbes.delete(key);
+  }
+  const liveComponents = new Set<string>();
+  for (const component of wireComponents(wires)) {
+    const key = componentKey(component);
+    liveComponents.add(key);
+    // A single-wire component IS its wire; only multi-wire components can
+    // hide a LUB conflict behind clean pairwise joins.
+    probeInto(
+      componentProbes,
+      key,
+      component.wires.length > 1
+        ? dedupeFragments(component.nodes.flatMap((ref) => probeFragments(ref)))
+        : [],
+    );
+  }
+  for (const key of [...componentProbes.keys()]) {
+    if (!liveComponents.has(key)) componentProbes.delete(key);
+  }
+}
+
+function wireConflict(entry: PendingWire): string | null {
+  const probe = wireProbes.get(wireKey(entry.source, entry.target))?.probe;
+  return probe?.state === "conflict" ? probe.detail : null;
+}
+
+// Everything conflicted in the queue right now: conflicted wires, plus
+// components whose LUB fails even though their wires look fine.
+function queueConflicts(wires: PendingWire[]): { label: string; detail: string }[] {
+  const conflicts: { label: string; detail: string }[] = [];
+  for (const entry of wires) {
+    const detail = wireConflict(entry);
+    if (detail !== null) conflicts.push({ label: wireLabel(entry), detail });
+  }
+  for (const component of wireComponents(wires)) {
+    const probe = componentProbes.get(componentKey(component))?.probe;
+    if (probe?.state !== "conflict") continue;
+    const names = component.nodes.map((ref) => nodeName(ref)).join(", ");
+    conflicts.push({
+      label: `⊔ of the whole component (${names}) — its wires may join pairwise, but the least upper bound conflicts`,
+      detail: probe.detail,
+    });
+  }
+  return conflicts;
+}
+
+function openConflictModal(title: string, conflicts: { label: string; detail: string }[]): void {
+  const dialog = el<HTMLDialogElement>("rawDialog");
+  el<HTMLElement>("rawDialogTitle").textContent = title;
+  const body = el<HTMLElement>("rawDialogBody");
+  body.textContent = "";
+  for (const conflict of conflicts) {
+    const block = document.createElement("section");
+    block.className = "session-conflict-block";
+    const heading = document.createElement("h4");
+    heading.textContent = conflict.label;
+    const detail = document.createElement("pre");
+    detail.className = "session-fragment-detail";
+    detail.textContent = conflict.detail;
+    block.append(heading, detail);
+    body.append(block);
+  }
+  dialog.showModal();
+}
+
 async function joinPendingWire(key: string): Promise<void> {
   const entry = livePendingWires().find(
     (candidate) => wireKey(candidate.source, candidate.target) === key,
@@ -1126,10 +1296,18 @@ async function joinPendingWire(key: string): Promise<void> {
 // cluster's result. Applied wires leave the queue; failed ones stay queued
 // (their cards pulse) so the user can retry or cancel.
 async function joinAllWires(): Promise<void> {
-  const components = wireComponents(livePendingWires());
+  const wires = livePendingWires();
+  const components = wireComponents(wires);
   if (!components.length) {
     showStatus("queue one or more wires before joining", true);
     render();
+    return;
+  }
+  // Blocked, not failed: a known-conflicted queue explains itself instead
+  // of running joins that were already computed to fail.
+  const conflicts = queueConflicts(wires);
+  if (conflicts.length) {
+    openConflictModal("the queue cannot join — conflicts", conflicts);
     return;
   }
   const consumed = new Set<string>();
@@ -1521,7 +1699,6 @@ function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
       renderEditor([]);
       revealPanel("editorPanel");
     }),
-    ...wireQueueChip(ref),
     button("Remove", "Drop the fragment from the set", () => {
       session = removeFragment(session, fragment.key);
       objects = dropFragmentKey(objects, fragment.key);
@@ -1948,29 +2125,11 @@ function openRawModal(
   dialog.showModal();
 }
 
-// The card's pending-wire participation: a "N queued" chip (tooltip: the
-// queued action labels). The Wire button is gone — wiring is the always-on
-// drag gesture (armWireDrag), the demo's semantics.
-function wireQueueChip(ref: NodeRef): HTMLElement[] {
-  const queued = pendingWires.filter(
-    (wireEntry) => sameRef(wireEntry.source, ref) || sameRef(wireEntry.target, ref),
-  );
-  if (!queued.length) return [];
-  const chip = span("session-badge session-wire-queued-chip", `${queued.length} queued`);
-  chip.title = queued
-    .map(
-      (wireEntry) =>
-        wireVerdict(wireEntry.source, wireEntry.target, objects).label ??
-        `${nodeName(wireEntry.source)} ⋈ ${nodeName(wireEntry.target)}`,
-    )
-    .join("\n");
-  return [chip];
-}
-
 // Mark a card as a wire endpoint and arm the always-on drag gesture. The
 // verdict vocabulary (compatible green / blocked red / unbacked dim) is
 // painted imperatively DURING a drag (paintWireTargets); at render time the
-// card only wears its queue participation and any recent rejection pulse.
+// card only wears any recent rejection pulse — queue participation is the
+// pending EDGE (and its Join pill) on the canvas, not a card costume.
 function decorateWireTarget(node: HTMLElement, ref: NodeRef): void {
   node.dataset.wireKind = ref.kind;
   node.dataset.wireKey = ref.key;
@@ -1978,15 +2137,6 @@ function decorateWireTarget(node: HTMLElement, ref: NodeRef): void {
   if (wireFlash && sameRef(wireFlash.ref, ref)) {
     node.classList.add(`session-wire-${wireFlash.tone}`);
     node.append(span(`session-wire-reason session-wire-reason-${wireFlash.tone}`, wireFlash.text));
-  }
-  // Cards with at least one queued wire wear the pending-edge vocabulary
-  // (the demo's animated orange dashes, card-shaped).
-  if (
-    pendingWires.some(
-      (wireEntry) => sameRef(wireEntry.source, ref) || sameRef(wireEntry.target, ref),
-    )
-  ) {
-    node.classList.add("session-wire-pending");
   }
 }
 
@@ -2032,7 +2182,6 @@ function renderSessionContainer(sessionObject: SessionObject): HTMLLIElement {
       focus = sessionFocus(sessionObject.key);
       render();
     }),
-    ...wireQueueChip(ref),
     button("Sync now", "Sync this session's register value over its peers' transports", () => {
       void syncSessionOverPeer(sessionObject.key, null);
     }),
@@ -2087,7 +2236,6 @@ function renderObjects(): void {
         el<HTMLInputElement>("payLabel").value = payment.label;
         logEvent(`prefilled the Pay form from ${payment.key}`);
       }),
-      ...wireQueueChip({ kind: "payment", key: payment.key }),
     );
     item.append(actions);
     list.append(item);
@@ -2118,7 +2266,6 @@ function renderObjects(): void {
     const actions = document.createElement("div");
     actions.className = "session-card-actions";
     actions.append(
-      ...wireQueueChip({ kind: "utxo", key: utxo.key }),
       button("Copy hex", "Copy the raw transaction hex", () => copyText(utxo.rawTxHex, `${utxo.key} hex`)),
     );
     item.append(actions);
@@ -2228,7 +2375,6 @@ function renderPeerCard(peer: PeerObject): HTMLLIElement {
         : "Copy the full transport identity",
       () => copyText(peer.identity, `${peer.key} identity`),
     ),
-    ...wireQueueChip({ kind: "peer", key: peer.key }),
     unavailablePairButton(),
   );
   item.append(actions);
@@ -2285,7 +2431,7 @@ function renderBridgeGroupCard(members: PeerObject[]): HTMLLIElement {
   }
   const actions = document.createElement("div");
   actions.className = "session-card-actions";
-  actions.append(...wireQueueChip({ kind: "peer", key: members[0].key }), unavailablePairButton());
+  actions.append(unavailablePairButton());
   item.append(actions);
   return item;
 }
@@ -2317,6 +2463,7 @@ function renderWireStatus(): void {
 // wire/component summary next to the toolbar Join and Cancel wires.
 function renderWireQueue(): void {
   const wires = livePendingWires();
+  refreshJoinProbes(wires);
   const host = el<HTMLElement>("wireQueue");
   const list = el<HTMLUListElement>("wireQueueList");
   list.textContent = "";
@@ -2326,17 +2473,28 @@ function renderWireQueue(): void {
   }
   host.hidden = false;
   el<HTMLElement>("wireQueueSummary").textContent = wireQueueSummary(wires).text;
+  // A conflicted queue blocks the toolbar Join — the button stays pressable
+  // but opens the conflict explanation instead of running known failures.
+  const conflicts = queueConflicts(wires);
+  const joinAll = el<HTMLButtonElement>("wireJoinAll");
+  joinAll.classList.toggle("session-join-blocked", conflicts.length > 0);
+  joinAll.title = conflicts.length
+    ? "The queue has computed conflicts — press to see why it cannot join"
+    : "Apply every pending wire, whole connected components at a time (fragment clusters join in one n-ary call)";
   for (const wireEntry of wires) {
     const key = wireKey(wireEntry.source, wireEntry.target);
-    const v = wireVerdict(wireEntry.source, wireEntry.target, objects);
+    const detail = wireConflict(wireEntry);
     const item = document.createElement("li");
     item.className = "session-wire-queue-row";
     item.append(
-      span(
-        "session-wire-queue-label",
-        v.label ?? `${nodeName(wireEntry.source)} ⋈ ${nodeName(wireEntry.target)}`,
-      ),
-      button("Join", "Apply this wire alone", () => void joinPendingWire(key)),
+      span("session-wire-queue-label", wireLabel(wireEntry)),
+      detail !== null
+        ? button("⚠ why?", "This join was computed and it conflicts — see why", () =>
+            openConflictModal(`${wireLabel(wireEntry)} — conflict`, [
+              { label: wireLabel(wireEntry), detail },
+            ]),
+          )
+        : button("Join", "Apply this wire alone", () => void joinPendingWire(key)),
       button("✕", "Discard this wire without applying it", () => {
         pendingWires = unqueueWire(pendingWires, key);
         logEvent(`discarded pending wire ${nodeName(wireEntry.source)} ⋈ ${nodeName(wireEntry.target)}`);
@@ -3559,7 +3717,9 @@ function canvasRectFor(ref: NodeRef): LayoutRect | null {
 function drawWireOverlay(): void {
   const overlay = document.getElementById("wireOverlay");
   if (!overlay) return;
+  const pillLayer = el<HTMLElement>("pillLayer");
   overlay.textContent = "";
+  pillLayer.textContent = "";
   // Focus mode swaps the canvas out; the standing edges stand down with it.
   if (focus.mode === "session" || !canvasLayout) return;
   overlay.setAttribute(
@@ -3586,6 +3746,39 @@ function drawWireOverlay(): void {
       seen.add(edgeKey);
       addEdge(canvasRectFor({ kind: "peer", key: groupKey }), container, "session-edge-auth");
     }
+  }
+  // Pending wires are visible promises: an animated edge between the two
+  // cards with a pill at its midpoint. The pill is the wire's own commit —
+  // Join collapses exactly that edge — unless the probe already computed
+  // the join to fail, in which case the pill explains the conflict
+  // instead. Wires whose endpoints live off-canvas (payments, utxos in the
+  // objects panel) stay queue-panel-only.
+  for (const entry of livePendingWires()) {
+    const from = canvasRectFor(entry.source);
+    const to = canvasRectFor(entry.target);
+    if (!from || !to) continue;
+    const key = wireKey(entry.source, entry.target);
+    const probe = wireProbes.get(key)?.probe;
+    const conflicted = probe?.state === "conflict";
+    addEdge(from, to, conflicted ? "session-edge-pending session-edge-conflict" : "session-edge-pending");
+    const pill = conflicted
+      ? button("⚠ why?", "This join was computed and it conflicts — see why", () => {
+          const detail = wireConflict(entry);
+          openConflictModal(`${wireLabel(entry)} — conflict`, [
+            { label: wireLabel(entry), detail: detail ?? "conflict details unavailable" },
+          ]);
+        })
+      : button("Join", `Apply this wire alone: ${wireLabel(entry)}`, () => void joinPendingWire(key));
+    if (probe?.state === "pending") {
+      pill.disabled = true;
+      pill.textContent = "⋯";
+      pill.title = "computing the join…";
+    }
+    pill.className = conflicted ? "session-wire-pill session-wire-pill-conflict" : "session-wire-pill";
+    const mid = curveMidpoint(from, to);
+    pill.style.left = `${mid.x}px`;
+    pill.style.top = `${mid.y}px`;
+    pillLayer.append(pill);
   }
 }
 

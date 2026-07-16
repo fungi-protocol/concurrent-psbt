@@ -2857,33 +2857,17 @@ img.session-lifehash {
   font-weight: 600;
 }
 
-.session-wire-pending {
-  outline: 2px dashed var(--orange);
-  outline-offset: 2px;
-  animation: session-wire-pending-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes session-wire-pending-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(182, 92, 0, 0);
-  }
-  50% {
-    box-shadow: 0 0 0 4px rgba(182, 92, 0, 0.28);
-  }
-}
-
 .session-wire-queue[hidden] {
   display: none;
 }
 
-/* The per-card queue-participation chip in the card header: pending-edge
-   orange, tooltip lists the queued action labels. */
-.session-wire-queued-chip {
-  border-color: var(--orange);
-  color: var(--orange);
-  cursor: help;
-  align-self: center;
+/* A conflicted queue: the toolbar Join stays pressable but explains the
+   conflicts instead of running joins already computed to fail. (Doubled
+   class outweighs the button.primary background.) */
+.session-join-blocked.session-join-blocked {
+  border-color: var(--red);
+  color: var(--red);
+  background: rgba(179, 38, 30, 0.08);
 }
 
 /* Peer bridge groups (wiring lane): a bridged group renders as ONE peer —
@@ -2990,6 +2974,66 @@ img.session-lifehash {
   stroke: var(--green);
   stroke-width: 1.5;
   opacity: 0.45;
+}
+
+/* A pending wire: the queued join drawn as a marching-dash edge between
+   its two cards, with the Join pill at the curve's midpoint. */
+.session-edge-pending {
+  fill: none;
+  stroke: var(--orange);
+  stroke-width: 2;
+  stroke-dasharray: 8 6;
+  animation: session-edge-march 1.2s linear infinite;
+}
+
+.session-edge-conflict {
+  stroke: var(--red);
+}
+
+@keyframes session-edge-march {
+  to {
+    stroke-dashoffset: -14;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-edge-pending {
+    animation: none;
+  }
+}
+
+/* Join pills: ordinary HTML buttons in their own layer above the cards —
+   the SVG stays pointer-transparent, so no SVG hit-testing anywhere. */
+.session-pill-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.session-wire-pill {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  padding: 3px 12px;
+  border: 1.5px solid var(--orange);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--orange);
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: var(--shadow);
+}
+
+.session-wire-pill-conflict {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* The conflict explanation blocks inside the modal. */
+.session-conflict-block h4 {
+  margin: 10px 0 4px;
+  color: var(--red);
 }
 
 /* Canvas nodes: keyed wrappers positioned by the pure lane layout. The

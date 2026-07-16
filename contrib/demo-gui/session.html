@@ -84,9 +84,12 @@
       <div id="canvasWorld" class="session-canvas-world">
         <!-- Standing wire edges: Mine → every session (the local peer sees
              all local registers) and peer → each session it is authorized
-             on. Redrawn after every render; pointer-transparent. -->
+             on, plus one animated edge per pending wire. Redrawn after
+             every render; pointer-transparent — the interactive Join pills
+             live in their own layer above the cards. -->
         <svg id="wireOverlay" class="session-wire-overlay" aria-hidden="true"></svg>
         <div id="nodeLayer" class="session-node-layer"></div>
+        <div id="pillLayer" class="session-pill-layer"></div>
       </div>
     </div>
 
