@@ -45,7 +45,9 @@ export type FieldContext =
   | "sort-mode" // unset | deterministic | explicit
   | "hex" // free-length hex bytes (base64 accepted and converted)
   | "hex32" // exactly 32 bytes
-  | "uid" // a unique id: free-length hex, empty allowed (not yet assigned)
+  | "uid" // a unique id: free-length hex, empty allowed (not yet assigned).
+  // 32 bytes is a recommendation (collision resistance for blindly minted
+  // ids), not a rule — e.g. 8-byte interactive-tx serial_ids are fine verbatim
   | "integer" // non-negative decimal (0x hex accepted)
   | "u32" // sequence numbers
   | "script"; // scriptPubKey hex, or an address (converted)

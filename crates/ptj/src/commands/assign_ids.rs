@@ -17,6 +17,10 @@
 //!   repeatable): sets a caller-chosen id on one entry. An existing equal id
 //!   is accepted idempotently; a differing one errors unless `--overwrite`.
 //!   `--auto` combines both: manual directives first, then auto-fill.
+//!
+//! Ids may be ANY length — 32 bytes is a recommendation (collision
+//! resistance for blindly minted ids), not a validity rule. Protocol-native
+//! ids like the 8-byte interactive-tx `serial_id` are usable verbatim.
 
 use concurrent_psbt::output::{OutputUniqueIdExt, UniqueId};
 use concurrent_psbt::removal::InputUniqueIdExt;

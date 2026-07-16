@@ -2605,6 +2605,38 @@ mod tests {
         );
     }
 
+    // Unique ids are NOT required to be 32 bytes — that figure is a
+    // recommendation (collision resistance for blindly minted ids), not a
+    // validity rule. Interoperating protocols bring their own ids: an
+    // interactive-tx serial_id is 8 bytes and is usable VERBATIM; padding
+    // it to 32 bytes would add no entropy and no meaning. This test pins
+    // that freedom so a length gate never creeps in.
+    #[test]
+    fn assign_ids_endpoint_accepts_short_serial_id_style_ids() {
+        use concurrent_psbt::output::OutputUniqueIdExt as _;
+
+        let request = serde_json::json!({
+            "psbt": encoded_psbt_without_uids(),
+            "ids": [ { "target": "out", "index": 0, "id": "0011223344556677" } ],
+        })
+        .to_string();
+        let response = response_for("POST", "/api/assign-ids", request.as_bytes());
+
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let assigned = crate::io::parse_psbt_bytes(
+            "assigned response psbt",
+            body["psbt"].as_str().unwrap().as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            assigned.outputs[0].unique_id().unwrap().into_bytes(),
+            vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77],
+        );
+        // The inspect payload surfaces the 8-byte id verbatim.
+        assert_eq!(body["inspect"]["outputs"][0]["unique_id_hex"], "0011223344556677");
+    }
+
     #[test]
     fn assign_ids_endpoint_reports_json_errors() {
         let missing = response_for("POST", "/api/assign-ids", b"{}");
