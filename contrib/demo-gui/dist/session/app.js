@@ -1187,9 +1187,14 @@ function renderCanvas() {
     };
     const peersLabel = label("label:peers", peerKeys.length ? "peers" : "peers — none yet", "Ephemeral transport addresses for this page load. Adding does not pair, connect, or publish.");
     const sessionsLabel = label("label:sessions", sessionKeys.length ? "sessions" : "sessions — none yet", "Monotone shared registers for PSBT fragments. Wire a fragment in to write it (⊔); wire a peer in to authorize it.");
+    // Three-way: unpublished drafts, everything published, or nothing loaded
+    // at all — "every loaded fragment is published" would be a lie on an
+    // empty page.
     const mineLabel = label("label:mine", mineKeys.length
         ? "mine — not published to any session; wiring a card to a session publishes it"
-        : "mine — every loaded fragment is published", "Local-only drafts. Wiring a card to a session writes it into that register (a visible move).");
+        : session.fragments.length
+            ? "mine — every loaded fragment is published"
+            : "mine — nothing loaded yet; paste or create a fragment to begin", "Local-only drafts. Wiring a card to a session writes it into that register (a visible move).");
     const frame = canvasWrapper("frame:mine", "session-mine-frame");
     live.add("frame:mine");
     for (const [key, wrapper] of canvasNodes) {
@@ -1245,7 +1250,9 @@ function renderFocusFragments() {
         return;
     const visible = session.fragments.filter((fragment) => focused.contentKey === fragment.key);
     for (const fragment of visible) {
-        list.append(renderFragmentCard(fragment));
+        const item = document.createElement("li");
+        item.append(renderFragmentCard(fragment));
+        list.append(item);
     }
     if (!visible.length) {
         // An empty REGISTER, not an empty workspace — the generic "No PSBTs
@@ -1256,9 +1263,12 @@ function renderFocusFragments() {
     }
     el("fragmentEmpty").hidden = true;
 }
+// Cards are <article>s: they land in the canvas's div node layer and in
+// session containers, neither of which is a list. True lists (the focus
+// register list, the objects panel) wrap them in their own <li>.
 function renderFragmentCard(fragment) {
     const card = fragmentCardModel(fragment.inspect, displayNetwork());
-    const item = document.createElement("li");
+    const item = document.createElement("article");
     item.className = "list-item session-fragment session-card";
     const ref = { kind: "fragment", key: fragment.key };
     decorateWireTarget(item, ref);
@@ -1819,7 +1829,7 @@ function decorateWireTarget(node, ref) {
 // hint), plus the session's own actions. There is no second, published-area
 // copy in the work area.
 function renderSessionContainer(sessionObject) {
-    const item = document.createElement("li");
+    const item = document.createElement("article");
     item.className = "list-item session-card session-container";
     const ref = { kind: "session", key: sessionObject.key };
     decorateWireTarget(item, ref);
@@ -1833,7 +1843,7 @@ function renderSessionContainer(sessionObject) {
         ? (session.fragments.find((fragment) => fragment.key === sessionObject.contentKey) ?? null)
         : null;
     if (content) {
-        const inner = document.createElement("ul");
+        const inner = document.createElement("div");
         inner.className = "item-list session-card-list";
         inner.append(renderFragmentCard(content));
         item.append(inner);
@@ -1935,7 +1945,7 @@ function sessionCountMeta(peerKey) {
     return span("item-meta", `sees ${count} session(s)`);
 }
 function renderPeerCard(peer) {
-    const item = document.createElement("li");
+    const item = document.createElement("article");
     item.className = "list-item session-card session-peer-card";
     // The Tableau color follows the immutable transport address, never the
     // editable local label and never a fabricated group fingerprint.
@@ -1963,7 +1973,7 @@ function renderPeerCard(peer) {
 // block): one card, member chips inside, wired as a unit through its first
 // member (the presenter expands any member ref to the whole group).
 function renderBridgeGroupCard(members) {
-    const item = document.createElement("li");
+    const item = document.createElement("article");
     item.className = "list-item session-card session-bridge-group";
     decorateWireTarget(item, { kind: "peer", key: members[0].key });
     const head = document.createElement("div");

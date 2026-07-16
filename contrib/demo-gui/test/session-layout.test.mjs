@@ -404,6 +404,30 @@ test("a local 'peer' presents as a disk location, not an identity", () => {
   assert.match(html, /<option value="local">local \(disk path/);
 });
 
+test("canvas cards are articles; the workbench viewport is focusable and named", () => {
+  // The node layer is a div, not a list — cards must not be stray <li>.
+  for (const fn of [
+    "renderFragmentCard",
+    "renderSessionContainer",
+    "renderPeerCard",
+    "renderBridgeGroupCard",
+  ]) {
+    const start = app.indexOf(`function ${fn}`);
+    assert.ok(start >= 0, `${fn} exists`);
+    assert.match(app.slice(start, start + 500), /createElement\("article"\)/, fn);
+  }
+  // True lists still wrap cards in their own list items.
+  assert.match(app, /const item = document\.createElement\("li"\);\s*\n\s*item\.append\(renderFragmentCard\(fragment\)\);/);
+  // The scrolling viewport is keyboard-reachable and announces itself.
+  const workbenchTag = html.match(/<div id="spatialWorkbench"[^>]*>/s)?.[0] ?? "";
+  assert.match(workbenchTag, /tabindex="0"/);
+  assert.match(workbenchTag, /role="region"/);
+  assert.match(workbenchTag, /aria-label="Spatial workbench/);
+  // The Mine label is three-way: drafts present / all published / nothing
+  // loaded at all.
+  assert.match(app, /nothing loaded yet; paste or create a fragment to begin/);
+});
+
 test("one queue drain at a time; busy cards hold interaction for real", () => {
   // joinAllWires spans many awaits — a second press mid-drain must not
   // re-plan and double-execute the queue…

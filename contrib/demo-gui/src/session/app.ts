@@ -1530,11 +1530,16 @@ function renderCanvas(): void {
     sessionKeys.length ? "sessions" : "sessions — none yet",
     "Monotone shared registers for PSBT fragments. Wire a fragment in to write it (⊔); wire a peer in to authorize it.",
   );
+  // Three-way: unpublished drafts, everything published, or nothing loaded
+  // at all — "every loaded fragment is published" would be a lie on an
+  // empty page.
   const mineLabel = label(
     "label:mine",
     mineKeys.length
       ? "mine — not published to any session; wiring a card to a session publishes it"
-      : "mine — every loaded fragment is published",
+      : session.fragments.length
+        ? "mine — every loaded fragment is published"
+        : "mine — nothing loaded yet; paste or create a fragment to begin",
     "Local-only drafts. Wiring a card to a session writes it into that register (a visible move).",
   );
   const frame = canvasWrapper("frame:mine", "session-mine-frame");
@@ -1597,7 +1602,9 @@ function renderFocusFragments(): void {
   if (!focused) return;
   const visible = session.fragments.filter((fragment) => focused.contentKey === fragment.key);
   for (const fragment of visible) {
-    list.append(renderFragmentCard(fragment));
+    const item = document.createElement("li");
+    item.append(renderFragmentCard(fragment));
+    list.append(item);
   }
   if (!visible.length) {
     // An empty REGISTER, not an empty workspace — the generic "No PSBTs
@@ -1610,9 +1617,12 @@ function renderFocusFragments(): void {
 }
 
 
-function renderFragmentCard(fragment: SessionFragment): HTMLLIElement {
+// Cards are <article>s: they land in the canvas's div node layer and in
+// session containers, neither of which is a list. True lists (the focus
+// register list, the objects panel) wrap them in their own <li>.
+function renderFragmentCard(fragment: SessionFragment): HTMLElement {
   const card = fragmentCardModel(fragment.inspect, displayNetwork());
-  const item = document.createElement("li");
+  const item = document.createElement("article");
   item.className = "list-item session-fragment session-card";
   const ref: NodeRef = { kind: "fragment", key: fragment.key };
   decorateWireTarget(item, ref);
@@ -2227,8 +2237,8 @@ function decorateWireTarget(node: HTMLElement, ref: NodeRef): void {
 // holding the register's value as a full fragment card (or an empty-register
 // hint), plus the session's own actions. There is no second, published-area
 // copy in the work area.
-function renderSessionContainer(sessionObject: SessionObject): HTMLLIElement {
-  const item = document.createElement("li");
+function renderSessionContainer(sessionObject: SessionObject): HTMLElement {
+  const item = document.createElement("article");
   item.className = "list-item session-card session-container";
   const ref: NodeRef = { kind: "session", key: sessionObject.key };
   decorateWireTarget(item, ref);
@@ -2249,7 +2259,7 @@ function renderSessionContainer(sessionObject: SessionObject): HTMLLIElement {
     ? (session.fragments.find((fragment) => fragment.key === sessionObject.contentKey) ?? null)
     : null;
   if (content) {
-    const inner = document.createElement("ul");
+    const inner = document.createElement("div");
     inner.className = "item-list session-card-list";
     inner.append(renderFragmentCard(content));
     item.append(inner);
@@ -2396,8 +2406,8 @@ function sessionCountMeta(peerKey: string): HTMLElement {
   return span("item-meta", `sees ${count} session(s)`);
 }
 
-function renderPeerCard(peer: PeerObject): HTMLLIElement {
-  const item = document.createElement("li");
+function renderPeerCard(peer: PeerObject): HTMLElement {
+  const item = document.createElement("article");
   item.className = "list-item session-card session-peer-card";
   // The Tableau color follows the immutable transport address, never the
   // editable local label and never a fabricated group fingerprint.
@@ -2438,8 +2448,8 @@ function renderPeerCard(peer: PeerObject): HTMLLIElement {
 // A bridged peer group renders as ONE peer node (the demo's green bridge
 // block): one card, member chips inside, wired as a unit through its first
 // member (the presenter expands any member ref to the whole group).
-function renderBridgeGroupCard(members: PeerObject[]): HTMLLIElement {
-  const item = document.createElement("li");
+function renderBridgeGroupCard(members: PeerObject[]): HTMLElement {
+  const item = document.createElement("article");
   item.className = "list-item session-card session-bridge-group";
   decorateWireTarget(item, { kind: "peer", key: members[0].key });
   const head = document.createElement("div");
