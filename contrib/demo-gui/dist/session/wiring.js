@@ -60,6 +60,7 @@ export function mintSession(state, name) {
         name: name.trim() || next.key,
         contentKey: null,
         peerKeys: [],
+        replicas: {},
     };
     return {
         state: { ...next.state, sessions: [...next.state.sessions, session] },
@@ -224,6 +225,32 @@ export function authorizePeerOnSession(state, sessionKey, peerKey) {
             : session),
     };
 }
+// The authorized peers whose replicas are not known to hold the register's
+// current value — the peers a change must be broadcast to before every
+// replica can compute the same LUB. Empty registers have nothing to
+// distribute; a peer with no marker (never delivered to) is stale.
+export function staleReplicaPeers(session) {
+    if (!session.contentKey)
+        return [];
+    return session.peerKeys.filter((peerKey) => session.replicas[peerKey] !== session.contentKey);
+}
+// Record a delivery (or a receipt): these peers' replicas now hold the
+// fragment. Grow-only knowledge — markers are only ever overwritten by
+// newer deliveries, never cleared; staleness is DERIVED by comparison with
+// contentKey, so a register advance implicitly re-flags every peer.
+export function markReplicas(state, sessionKey, peerKeys, fragmentKey) {
+    return {
+        ...state,
+        sessions: state.sessions.map((session) => {
+            if (session.key !== sessionKey)
+                return session;
+            const replicas = { ...session.replicas };
+            for (const peerKey of peerKeys)
+                replicas[peerKey] = fragmentKey;
+            return { ...session, replicas };
+        }),
+    };
+}
 // Fragments removed from the fragment set must also leave the registers
 // that reference them (a register whose value is dropped becomes empty).
 export function dropFragmentKey(state, fragmentKey) {
@@ -284,6 +311,9 @@ export function forkSession(state, sessionKey, contentKey) {
         name: source.name,
         contentKey,
         peerKeys: [...source.peerKeys],
+        // Peers still hold the ABORTED session's value: the carried-over
+        // markers differ from the forked content, so the shell re-broadcasts.
+        replicas: { ...source.replicas },
     };
     return {
         state: {
@@ -314,6 +344,10 @@ export function mergeSessions(state, leftKey, rightKey) {
         // both do, the shell writes the joined result over this.
         contentKey: left.contentKey ?? right.contentKey,
         peerKeys: [...left.peerKeys, ...right.peerKeys.filter((key) => !left.peerKeys.includes(key))],
+        // Marker union (left wins ties): whatever a peer held, it holds — any
+        // marker differing from the merged content reads as stale, which is
+        // exactly right after a merge.
+        replicas: { ...right.replicas, ...left.replicas },
     };
     return {
         state: {

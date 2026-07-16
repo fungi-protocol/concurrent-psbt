@@ -15,6 +15,7 @@ import {
   forkSession,
   idleWire,
   fragmentSessionKeys,
+  markReplicas,
   mergeSessions,
   mineFragmentKeys,
   mintDescriptor,
@@ -34,6 +35,7 @@ import {
   retiredByDerivation,
   sessionByKey,
   sessionFocus,
+  staleReplicaPeers,
   registerIncompatibility,
   sessionIsShared,
   sessionsHolding,
@@ -148,6 +150,54 @@ test("register writes: set the content, authorize peers idempotently, drop nulls
   // Unknown session keys are a no-op, not a throw.
   const untouched = writeSessionContent(state, "session-404", "psbt-3");
   assert.deepEqual(untouched, state);
+});
+
+test("replica markers make distribution need-based: staleness is derived", () => {
+  let state = emptyObjects();
+  state = mintSession(state, "s").state;
+  // An empty register has nothing to distribute, whoever is authorized.
+  state = authorizePeerOnSession(state, "session-1", "peer-a");
+  assert.deepEqual(staleReplicaPeers(sessionByKey(state, "session-1")), []);
+  // A value appears: every authorized peer without a marker is stale — a
+  // freshly authorized peer receives the current value the same way.
+  state = writeSessionContent(state, "session-1", "psbt-1");
+  state = authorizePeerOnSession(state, "session-1", "peer-b");
+  assert.deepEqual(staleReplicaPeers(sessionByKey(state, "session-1")), ["peer-a", "peer-b"]);
+  // A delivery marks the replica; the other peer stays stale.
+  state = markReplicas(state, "session-1", ["peer-a"], "psbt-1");
+  assert.deepEqual(staleReplicaPeers(sessionByKey(state, "session-1")), ["peer-b"]);
+  state = markReplicas(state, "session-1", ["peer-b"], "psbt-1");
+  assert.deepEqual(staleReplicaPeers(sessionByKey(state, "session-1")), []);
+  // A register advance implicitly re-flags every peer: markers are grow-only
+  // knowledge, staleness is DERIVED by comparison with the content.
+  state = writeSessionContent(state, "session-1", "psbt-2");
+  assert.deepEqual(staleReplicaPeers(sessionByKey(state, "session-1")), ["peer-a", "peer-b"]);
+  // A fork carries the markers: peers hold the ABORTED session's value, so
+  // the forked register (new content) reads them as behind.
+  state = markReplicas(state, "session-1", ["peer-a", "peer-b"], "psbt-2");
+  const fork = forkSession(state, "session-1", "psbt-9");
+  assert.equal(fork.forked.replicas["peer-a"], "psbt-2");
+  assert.deepEqual(staleReplicaPeers(fork.forked), ["peer-a", "peer-b"]);
+  // Unknown session keys are a no-op, not a throw.
+  assert.deepEqual(markReplicas(state, "session-404", ["peer-a"], "x"), state);
+});
+
+test("merged sessions union replica markers, left wins ties", () => {
+  let state = emptyObjects();
+  state = mintSession(state, "L").state; // session-1
+  state = mintSession(state, "R").state; // session-2
+  state = writeSessionContent(state, "session-1", "psbt-1");
+  state = writeSessionContent(state, "session-2", "psbt-2");
+  state = markReplicas(state, "session-1", ["peer-x", "peer-shared"], "psbt-1");
+  state = markReplicas(state, "session-2", ["peer-y", "peer-shared"], "psbt-2");
+  const merged = mergeSessions(state, "session-1", "session-2").merged;
+  // Whatever a peer held, it holds; any marker differing from the merged
+  // content derives as stale, which is exactly right after a merge.
+  assert.deepEqual(merged.replicas, {
+    "peer-y": "psbt-2",
+    "peer-x": "psbt-1",
+    "peer-shared": "psbt-1",
+  });
 });
 
 // --- join admissibility ------------------------------------------------------
@@ -876,7 +926,15 @@ test("a session is only a register and peers — identity material lives on peer
   state = mintSession(state, "a").state;
   state = mintSession(state, "b").state;
   const merge = mergeSessions(state, "session-1", "session-2");
-  assert.deepEqual(Object.keys(merge.merged).sort(), ["contentKey", "key", "name", "peerKeys"]);
+  // (replicas is delivery BOOKKEEPING — peer key → value their replica
+  // holds — not identity material.)
+  assert.deepEqual(Object.keys(merge.merged).sort(), [
+    "contentKey",
+    "key",
+    "name",
+    "peerKeys",
+    "replicas",
+  ]);
   assert.equal(merge.merged.contentKey, null); // ⊥ ⊔ ⊥ is still empty
   assert.ok(!merge.notes.some((note) => /transport|ticket/.test(note)));
 });

@@ -120,7 +120,7 @@ test("session containers hold the register card and explicit sync — never a tr
   assert.match(container, /renderFragmentCard\(content\)/);
   assert.match(container, /empty register — wire a fragment in/);
   assert.doesNotMatch(container, /fragmentKeys/);
-  assert.match(container, /button\("Sync now"/);
+  assert.match(container, /button\(\n\s*"Sync now"/);
 });
 
 test("new session is a one-field action in the canvas bar, not a utilities panel", () => {
@@ -197,8 +197,9 @@ test("standing wire edges: Mine sees every session, peers their authorized ones"
   assert.match(overlay, /"session-edge-auth"/);
   // Redraw hooks: every render; a resize re-lays the canvas out (the SVG
   // lives in world coordinates, so scrolling needs no hook at all), latched
-  // to one render per animation frame.
-  assert.match(app, /drawWireOverlay\(\);\n\}/);
+  // to one render per animation frame. render() closes by reconciling
+  // distribution — after the edges are drawn, stale replicas get broadcasts.
+  assert.match(app, /drawWireOverlay\(\);\n(?:\s*\/\/[^\n]*\n)*\s*scheduleAutoBroadcasts\(\);\n\}/);
   assert.match(app, /if \(resizeRenderQueued\) return;/);
   assert.match(app, /requestAnimationFrame\(\(\) => \{\n\s*resizeRenderQueued = false;\n\s*render\(\);/);
   assert.doesNotMatch(app, /addEventListener\("scroll", drawWireOverlay/);
@@ -360,6 +361,36 @@ test("clicking a row toggles ITS OWN expanded detail; the ladder resets all rows
   // A removed/retired fragment forgets its per-row flips with its other state.
   assert.match(app, /detailLevels\.delete\(key\);\n\s*clearRowOverrides\(key\);/);
   assert.match(app, /detailLevels\.delete\(fragment\.key\);\n\s*clearRowOverrides\(fragment\.key\);/);
+});
+
+test("distribution is need-based: session changes auto-broadcast to stale replicas", () => {
+  // render() is the reconciliation point — every state change funnels
+  // through it, and any register value some replica lacks is broadcast.
+  const renderStart = app.indexOf("function render(): void");
+  const renderSlice = app.slice(renderStart, app.indexOf("function wireDom", renderStart));
+  assert.match(renderSlice, /scheduleAutoBroadcasts\(\)/);
+  // Each (session, peer, value) attempt runs ONCE — no retry storm; failures
+  // land in the event log and Sync now is the manual retry.
+  const schedStart = app.indexOf("function scheduleAutoBroadcasts");
+  const schedSlice = app.slice(schedStart, app.indexOf("async function autoBroadcast", schedStart));
+  assert.match(schedSlice, /staleReplicaPeers\(sessionObject\)/);
+  assert.match(schedSlice, /broadcastAttempts\.has\(attempt\)\) continue/);
+  assert.match(schedSlice, /broadcastAttempts\.add\(attempt\)/);
+  // The auto path composes its own snapshot from the carrier — a background
+  // broadcast must not clobber a half-configured manual sync form.
+  const autoStart = app.indexOf("async function autoBroadcast");
+  const autoSlice = app.slice(autoStart, app.indexOf("// --- negotiation panel", autoStart));
+  assert.match(autoSlice, /\{ \.\.\.syncFormSnapshot\(\), \.\.\.overrides \}/);
+  // A successful delivery marks the carrier's whole bridge group as holding
+  // the value (manual Sync now and auto-broadcast share this settlement).
+  const settleStart = app.indexOf("function settleSessionDelivery");
+  const settleSlice = app.slice(settleStart, app.indexOf("async function syncSessionOverPeer", settleStart));
+  assert.match(
+    settleSlice,
+    /markReplicas\(objects, sessionKey, bridgeGroupContaining\(objects, carrier\.key\), fragmentKey\)/,
+  );
+  // Sync now survives — demoted to the demonstration/debugging affordance.
+  assert.match(app, /"Sync now",\n\s*"Demonstration\/debugging: broadcasting is automatic/);
 });
 
 test("a mid-drag scroll re-anchors the wire to the source card", () => {
@@ -666,7 +697,7 @@ test("a disk-location peer syncs over the watched-dir register", () => {
   assert.match(html, /placeholder="npub1… \/ doc… \/ signaling address \/ register directory"/);
   // Syncing over a "local" peer (a storage place, not an endpoint) drives
   // the register rooted at its path.
-  assert.match(app, /carrier\?\.transport === "local" \? "watched-dir"/);
+  assert.match(app, /carrier\.transport === "local" \? "watched-dir" : carrier\.transport/);
   assert.match(app, /transport === "watched-dir" && carrier\.identity/);
   // Empty session registers are admitted: the directory may hold the frontier.
   assert.match(app, /transport !== "local" && transport !== "watched-dir"/);

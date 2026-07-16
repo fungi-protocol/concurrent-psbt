@@ -10,6 +10,7 @@ export interface SessionObject {
     name: string;
     contentKey: string | null;
     peerKeys: string[];
+    replicas: Record<string, string>;
 }
 export interface PeerObject {
     key: string;
@@ -80,6 +81,8 @@ export declare function sessionByKey(state: ObjectsState, key: string): SessionO
 export declare function peerByKey(state: ObjectsState, key: string): PeerObject | null;
 export declare function writeSessionContent(state: ObjectsState, sessionKey: string, fragmentKey: string): ObjectsState;
 export declare function authorizePeerOnSession(state: ObjectsState, sessionKey: string, peerKey: string): ObjectsState;
+export declare function staleReplicaPeers(session: SessionObject): string[];
+export declare function markReplicas(state: ObjectsState, sessionKey: string, peerKeys: readonly string[], fragmentKey: string): ObjectsState;
 export declare function dropFragmentKey(state: ObjectsState, fragmentKey: string): ObjectsState;
 export declare function fragmentSessionKeys(state: ObjectsState, fragmentKey: string): string[];
 export declare function mineFragmentKeys(fragmentKeys: readonly string[], state: ObjectsState): string[];

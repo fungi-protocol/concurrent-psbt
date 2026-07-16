@@ -24,7 +24,7 @@ import { addFragment, asArray, asObject, asString, buildConfirmArgs, buildCreate
 import { amountBits, amountSpanParts, DETAIL_LEVELS, elisionLabel, fragmentBadges, fragmentCardModel, groupAggregate, rawKeymapSections, rowDetailPairs, rowFacePairs, signedAmountSpanParts, } from "./display.js";
 import { addressFromScript } from "./encoding.js";
 import { classifyPaste, mintFromPaste, SAMPLE_PASTES, } from "./ingest.js";
-import { actionState, addBridge, authorizePeerOnSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, forkSession, idleWire, mergeSessions, mineFragmentKeys, writeSessionContent, mintPeer, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, registerIncompatibility, retiredByDerivation, sessionByKey, sessionFocus, sessionIsShared, sessionsHolding, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
+import { actionState, addBridge, authorizePeerOnSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, forkSession, idleWire, markReplicas, mergeSessions, mineFragmentKeys, staleReplicaPeers, writeSessionContent, mintPeer, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, registerIncompatibility, retiredByDerivation, sessionByKey, sessionFocus, sessionIsShared, sessionsHolding, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
 import { curveBetween, curveMidpoint, laneLayout, } from "./layout.js";
 import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, SORT_MODES, toggledBitfieldValue, TX_MODIFIABLE_BITS, validateEditor, violationsFromServer, } from "./editor.js";
 import { descriptorColorKey, groupColorKey, paletteColor, paletteRegistry, peerColorKey, } from "./palette.js";
@@ -2052,7 +2052,8 @@ function renderSessionContainer(sessionObject) {
     actions.append(button("Focus", "Fill the viewport with this session", () => {
         focus = sessionFocus(sessionObject.key);
         render();
-    }), button("Sync now", "Sync this session's register value over its peers' transports", () => {
+    }), button("Sync now", "Demonstration/debugging: broadcasting is automatic when the register changes — " +
+        "this forces one manual sync over a member peer's transport (and retries failed broadcasts)", () => {
         void syncSessionOverPeer(sessionObject.key, null);
     }));
     item.append(actions);
@@ -3391,12 +3392,17 @@ function syncFormSnapshot() {
         signalTimeoutMs: inputValue("syncSignalTimeoutMs"),
     };
 }
-async function runSyncRequest(psbts, sourceLabel) {
-    const built = buildSyncRequest(syncFormSnapshot(), psbts);
+// Returns whether the sync succeeded, so session-broadcast callers can
+// record which replicas now hold the value. The snapshot is a parameter —
+// the manual paths pass the form's, auto-broadcast composes its own from
+// the carrier peer without touching the form (a background broadcast must
+// not clobber a half-configured manual sync).
+async function runSyncRequest(snapshot, psbts, sourceLabel) {
+    const built = buildSyncRequest(snapshot, psbts);
     if (built.ok === false) {
         showStatus(built.error, true);
         setSyncState("error", built.error);
-        return;
+        return false;
     }
     // buildSyncRequest always sets transport; the DTO type keeps it optional
     // for the legacy no-transport request shape.
@@ -3404,7 +3410,7 @@ async function runSyncRequest(psbts, sourceLabel) {
     if (unavailable) {
         showStatus(unavailable, true);
         setSyncState("error", unavailable);
-        return;
+        return false;
     }
     const runButton = el("syncRun");
     runButton.disabled = true;
@@ -3436,11 +3442,13 @@ async function runSyncRequest(psbts, sourceLabel) {
         }
         logEvent(summary);
         showStatus("", false);
+        return true;
     }
     catch (error) {
         setSyncState("error", error instanceof Error ? error.message : String(error));
         pushSyncResult(`sync failed: ${error instanceof Error ? error.message : String(error)}`);
         reportError("sync", error);
+        return false;
     }
     finally {
         runButton.disabled = false;
@@ -3461,7 +3469,7 @@ async function runSync(event) {
         return;
     }
     const selected = selectedFragments(session);
-    await withBusy(selected.map((fragment) => `fragment:${fragment.key}`), () => runSyncRequest(selected.map((fragment) => fragment.psbt), `sync of ${selected.length} selected fragment(s)`));
+    await withBusy(selected.map((fragment) => `fragment:${fragment.key}`), () => runSyncRequest(syncFormSnapshot(), selected.map((fragment) => fragment.psbt), `sync of ${selected.length} selected fragment(s)`));
 }
 // Peer→session wiring: sync the session's register value over the peer's
 // transport. Sessions have no transport of their own, so with no peer given
@@ -3473,6 +3481,30 @@ async function runSync(event) {
 function usablePeerForSync(peer) {
     return peer && peerUsableForSync(peer) ? peer : null;
 }
+// The transport parameters a carrier peer supplies. A disk-location peer is
+// a storage place, not an endpoint: syncing over it means driving the
+// watched-dir register rooted at its path; iroh peers bring their ticket
+// along. The manual path writes these into the form (the user should SEE
+// the parameters); auto-broadcast merges them into its own snapshot.
+function carrierOverrides(carrier) {
+    if (carrier.transport === "nostr" || carrier.transport === "unknown")
+        return null;
+    const transport = carrier.transport === "local" ? "watched-dir" : carrier.transport;
+    return {
+        transport,
+        ...(transport === "watched-dir" && carrier.identity ? { sources: carrier.identity } : {}),
+        ...(carrier.transport === "iroh" && carrier.identity
+            ? { irohTicket: carrier.identity, irohTicketOut: false }
+            : {}),
+    };
+}
+// A successful session broadcast means the carrier's replica (and, through
+// it, its whole bridge group) now holds the value — record that, so the
+// need-based auto-broadcast has nothing left to do for those peers.
+function settleSessionDelivery(sessionKey, carrier, fragmentKey) {
+    objects = markReplicas(objects, sessionKey, bridgeGroupContaining(objects, carrier.key), fragmentKey);
+    render();
+}
 async function syncSessionOverPeer(sessionKey, peerKey) {
     const sessionObject = sessionByKey(objects, sessionKey);
     if (!sessionObject)
@@ -3482,18 +3514,17 @@ async function syncSessionOverPeer(sessionKey, peerKey) {
         .map((key) => usablePeerForSync(peerByKey(objects, key)))
         .find((candidate) => candidate !== null);
     const carrier = usablePeerForSync(peer) ?? memberPeer ?? null;
-    // A disk-location peer is a storage place, not an endpoint: syncing over
-    // it means driving the watched-dir register rooted at its path. Bare
-    // "local" survives only as the no-carrier fallback (form-configured
+    // Bare "local" survives only as the no-carrier fallback (form-configured
     // server-side sources/state).
-    const transport = carrier?.transport === "local" ? "watched-dir" : (carrier?.transport ?? "local");
+    const overrides = carrier ? carrierOverrides(carrier) : null;
+    const transport = overrides?.transport ?? "local";
     el("syncTransport").value = transport;
     renderSyncFields();
-    if (carrier && transport === "watched-dir" && carrier.identity) {
-        el("syncSources").value = carrier.identity;
+    if (overrides?.sources) {
+        el("syncSources").value = overrides.sources;
     }
-    if (carrier && carrier.transport === "iroh" && carrier.identity) {
-        el("syncIrohTicket").value = carrier.identity;
+    if (overrides?.irohTicket) {
+        el("syncIrohTicket").value = overrides.irohTicket;
         el("syncIrohTicketOut").checked = false;
     }
     const content = sessionObject.contentKey ? fragmentByKey(sessionObject.contentKey) : null;
@@ -3506,7 +3537,47 @@ async function syncSessionOverPeer(sessionKey, peerKey) {
     // The state chip and results land in the sync drawer — open it, or the
     // container's Sync now reads as a dead button.
     revealPanel("syncResults");
-    await withBusy([`session:${sessionKey}`, ...(carrier ? [`peer:${carrier.key}`] : [])], () => runSyncRequest(content ? [content.psbt] : [], `session ${sessionObject.name} (register ${content?.key ?? "empty"})`));
+    const ok = await withBusy([`session:${sessionKey}`, ...(carrier ? [`peer:${carrier.key}`] : [])], () => runSyncRequest(syncFormSnapshot(), content ? [content.psbt] : [], `session ${sessionObject.name} (register ${content?.key ?? "empty"})`));
+    if (ok && carrier && content)
+        settleSessionDelivery(sessionKey, carrier, content.key);
+}
+// --- need-based auto-broadcast ----------------------------------------------
+//
+// Distribution is a CONSEQUENCE of change, not a button: whenever a session's
+// register holds a value some authorized peer's replica is not known to hold
+// (staleReplicaPeers — a register advance implicitly re-flags every peer, a
+// freshly authorized peer has no marker at all), that value is broadcast over
+// the peer's own transport so every replica can compute the same LUB. Each
+// (session, peer, value) attempt runs ONCE — failures land in the event log
+// and sync drawer, and "Sync now" survives as the demonstration/debugging
+// affordance and manual retry.
+const broadcastAttempts = new Set();
+function scheduleAutoBroadcasts() {
+    for (const sessionObject of objects.sessions) {
+        const content = sessionObject.contentKey ? fragmentByKey(sessionObject.contentKey) : null;
+        if (!content)
+            continue;
+        for (const stalePeerKey of staleReplicaPeers(sessionObject)) {
+            const peer = usablePeerForSync(peerByKey(objects, stalePeerKey));
+            if (!peer)
+                continue; // no drivable transport: Sync now stays the path
+            const attempt = `${sessionObject.key}→${peer.key}:${content.key}`;
+            if (broadcastAttempts.has(attempt))
+                continue;
+            broadcastAttempts.add(attempt);
+            void autoBroadcast(sessionObject, peer, content);
+        }
+    }
+}
+async function autoBroadcast(sessionObject, peer, content) {
+    const overrides = carrierOverrides(peer);
+    if (!overrides)
+        return;
+    logEvent(`auto-broadcast: ${peer.name}'s replica of ${sessionObject.name} is behind — ` +
+        `sending ${content.key} over ${overrides.transport}`);
+    const ok = await withBusy([`session:${sessionObject.key}`, `peer:${peer.key}`], () => runSyncRequest({ ...syncFormSnapshot(), ...overrides }, [content.psbt], `auto-broadcast of ${sessionObject.name} to ${peer.name}`));
+    if (ok)
+        settleSessionDelivery(sessionObject.key, peer, content.key);
 }
 // --- negotiation panel -----------------------------------------------------------
 function payMode() {
@@ -3725,6 +3796,11 @@ function render() {
         paintWireTargets();
     // The standing edges reflect the freshly-rendered card geometry.
     drawWireOverlay();
+    // Every state change funnels through render, so this is THE reconciliation
+    // point for need-based distribution: any register value some replica lacks
+    // is broadcast now (once per value — the attempt set makes it idempotent
+    // across the render churn).
+    scheduleAutoBroadcasts();
 }
 // --- wiring (DOM event hookup) -----------------------------------------------------
 function wireDom() {
