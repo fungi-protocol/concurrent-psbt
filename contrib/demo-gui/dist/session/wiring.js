@@ -476,6 +476,21 @@ export function registerIncompatibility(summary) {
         "to an ordered list have no join) — make it unordered first, or clear its " +
         "modifiable flags");
 }
+// Did content ⊔ result actually land on the result's rung of the lattice?
+// A register may advance by a mint exactly when the join of its value with
+// the mint result IS the result (up to shuffle): same ordering, same
+// modifiable flags, same shape. Unsetting modifiable bits (3 ≤ {2,1} ≤ 0)
+// and sorting (clearing TX_UNORDERED) pass; a DOWNWARD transform like
+// make-unordered joins cleanly but the join absorbs it back into the old
+// value (flags AND, ordered wins) — the summaries differ, so it fails here
+// and the caller falls back to its fork offer.
+export function joinAdvances(joined, result) {
+    return (joined.ordering === result.ordering &&
+        joined.modifiableInputs === result.modifiableInputs &&
+        joined.modifiableOutputs === result.modifiableOutputs &&
+        joined.inputCount === result.inputCount &&
+        joined.outputCount === result.outputCount);
+}
 function unordered(a, b, x, y) {
     return (a === x && b === y) || (a === y && b === x);
 }

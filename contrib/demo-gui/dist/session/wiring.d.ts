@@ -119,6 +119,7 @@ export interface WireVerdict {
 }
 export type FragmentSummaryLookup = (key: string) => FragmentSummary | null;
 export declare function registerIncompatibility(summary: FragmentSummary): string | null;
+export declare function joinAdvances(joined: FragmentSummary, result: FragmentSummary): boolean;
 export declare function nodeDisplayName(ref: NodeRef, state: ObjectsState): string;
 export type WireDisposition = "compatible" | "blocked" | "unbacked";
 export declare function wireDisposition(v: WireVerdict): WireDisposition;

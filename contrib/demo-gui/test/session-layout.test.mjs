@@ -664,23 +664,38 @@ test("a join absorbed by its operand reports itself instead of looking broken", 
   assert.match(styles, /\.session-wire-reason-absorbed\s*\{/);
 });
 
-test("settlement retires sources but never advances a register", () => {
+test("settlement retires sources; registers advance only by ⊔", () => {
   const start = app.indexOf("function settleDerivation");
   const end = app.indexOf("// --- contextual enablement", start);
   assert.ok(start >= 0 && end > start, "settlement slice is bounded");
   const settle = app.slice(start, end);
-  // Registers change only through an explicit write gesture — the
-  // fragment-into-session and session-merge paths call writeSessionContent
-  // themselves. A derivation must not promote a bystander register that
-  // happens to hold a source as its content…
-  assert.doesNotMatch(settle, /writeSessionContent/);
-  // …and the retire rule (results and register contents survive) lives in
-  // the model, where session-wiring.test.mjs exercises it directly.
-  assert.match(settle, /retiredByDerivation\(sourceKeys, resultKeys, objects/);
+  // The retire pass itself never touches a register — the retire rule
+  // (results and register contents survive) lives in the model, where
+  // session-wiring.test.mjs exercises it directly.
+  const retirePass = settle.slice(0, settle.indexOf("function settleJoin"));
+  assert.doesNotMatch(retirePass, /writeSessionContent/);
+  assert.match(retirePass, /retiredByDerivation\(sourceKeys, resultKeys, objects/);
+  // settleMint's ONLY register write is the honest lattice advance: the
+  // probe join (content ⊔ result) must land on the result's rung —
+  // joinAdvances — before writeSessionContent runs. An absorbed downward
+  // transform or a genuine conflict still falls through to the fork offer.
+  const writes = settle.match(/writeSessionContent/g) ?? [];
+  assert.equal(writes.length, 1, "one register write in the settlement slice");
+  assert.match(
+    settle,
+    /joinAdvances\(fragmentSummary\(inspect\), fragmentSummary\(result\.inspect\)\)[\s\S]*?writeSessionContent\(objects, holder\.key, joined\.key\)/,
+  );
+  // The advance probes WITHOUT minting first: joinPsbts runs before any
+  // addResponse, so the non-advance path leaves no clutter behind.
+  assert.ok(
+    settle.indexOf("backend.joinPsbts") < settle.indexOf("addResponse"),
+    "probe join precedes the mint",
+  );
   // The minting ops' keep-the-original opt-out skips the retire pass (the
-  // session fork offer still runs — monotonicity is not optional).
+  // register advance / fork offer still runs — monotonicity is not optional).
   assert.match(settle, /if \(!keep\) settleDerivation\(sourceKeys, resultKeys/);
-  // Joins are exempt from the fork offer: a join result ⊒ its operands.
+  // Joins are exempt from the probe and the fork offer: a join result ⊒ its
+  // operands by construction, so the probe would be a re-run.
   assert.match(settle, /options\?\.monotone \|\| resultKeys\.length !== 1/);
 });
 

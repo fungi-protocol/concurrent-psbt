@@ -29,6 +29,7 @@ import {
   peerBridgeGroups,
   peerByKey,
   peerUsableForSync,
+  joinAdvances,
   pruneWires,
   queueWire,
   remapWireRef,
@@ -486,6 +487,46 @@ test("pruneWires re-canonicalizes endpoints that became register contents", () =
     { source: { kind: "fragment", key: "psbt-1" }, target: { kind: "fragment", key: "psbt-2" } },
   ];
   assert.equal(pruneWires(doubled, state, ["psbt-1", "psbt-2"]).length, 1);
+});
+
+test("joinAdvances: content ⊔ result must land on the result's lattice rung", () => {
+  const summary = (overrides = {}) => ({
+    format: "bip370",
+    ordering: "unordered",
+    inputCount: 2,
+    outputCount: 2,
+    sortMode: null,
+    seedHex: null,
+    uniqueIdHex: null,
+    knownInputSats: null,
+    outputSats: null,
+    feeSats: null,
+    modifiableInputs: false,
+    modifiableOutputs: false,
+    outputUidPresent: 2,
+    ...overrides,
+  });
+  // Unsetting modifiable bits: the joined flags equal the result's (AND
+  // clears them too) → a genuine register advance.
+  assert.equal(joinAdvances(summary(), summary()), true);
+  // Sorting an unordered register value: the join retains the sorted
+  // result's fixed order → advance.
+  assert.equal(
+    joinAdvances(summary({ ordering: "ordered" }), summary({ ordering: "ordered" })),
+    true,
+  );
+  // make-unordered is DOWNWARD: the join absorbs it back into the old
+  // ordered/unmodifiable value while the result is unordered/modifiable —
+  // not an advance, the caller must fork instead.
+  assert.equal(
+    joinAdvances(
+      summary({ ordering: "ordered" }),
+      summary({ modifiableInputs: true, modifiableOutputs: true }),
+    ),
+    false,
+  );
+  // A join that resurrects elements the mint removed is not the result.
+  assert.equal(joinAdvances(summary({ inputCount: 3 }), summary()), false);
 });
 
 test("remapWiresAfterJoin: joining one edge leaves the component's others queued", () => {

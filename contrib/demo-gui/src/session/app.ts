@@ -89,6 +89,7 @@ import {
   emptyObjects,
   enrichDescriptor,
   forkSession,
+  joinAdvances,
   idleWire,
   markReplicas,
   mergeSessions,
@@ -576,11 +577,15 @@ function settleJoin(operandKeys: readonly string[], resultKey: string): void {
 // A minting op replaces its source by default; the surface's "keep the
 // original" checkbox opts the gesture out. The toolbar box governs the
 // one-click ops, each saving drawer carries its own. When a source is a
-// session's register content the settlement leaves it in place (register
-// guard) and instead offers the monotone escape hatch: abort the session
-// and create a new one in its stead, seeded with the result. Joins pass
-// monotone=true — a join result ⊒ its operands, so wiring it into the
-// session is the ordinary register advance, not a fork.
+// session's register content, the register first tries the honest lattice
+// advance: content ⊔ result, computed by the pure backend join. When that
+// join computes — unsetting modifiable bits (3 ≤ {2,1} ≤ 0), sorting an
+// unordered PSBT (clearing TX_UNORDERED is monotone and the fixed order
+// covers the set), adding data — the register simply advances; only a
+// genuine ⊔ conflict falls back to the fork offer (abort the session and
+// create a new one in its stead, seeded with the result). Joins pass
+// monotone=true — a join result ⊒ its operands by construction, so the
+// probe join would be a re-run; wiring it in is the ordinary advance.
 async function settleMint(
   keepBoxId: string,
   sourceKeys: readonly string[],
@@ -613,6 +618,45 @@ async function settleMint(
           `(${incompatibility}); it stays a local draft`,
       );
       continue;
+    }
+    // Monotone advance first: the register takes content ⊔ result,
+    // computed by the pure backend join WITHOUT adding anything yet. The
+    // mint is a genuine advance only when the join lands on the result's
+    // rung of the lattice (joinAdvances): a downward transform like
+    // make-unordered joins cleanly but gets ABSORBED into the old value —
+    // that is not an advance, it falls through to the fork offer, exactly
+    // like a ⊔ conflict does.
+    const content = fragmentByKey(oldContent);
+    const result = fragmentByKey(resultKey);
+    if (content && result) {
+      try {
+        const response = await backend.joinPsbts([content.psbt, result.psbt]);
+        const inspect = response.inspect ?? (await backend.inspectPsbt(response.psbt));
+        if (joinAdvances(fragmentSummary(inspect), fragmentSummary(result.inspect))) {
+          const joined = await addResponse(
+            { psbt: response.psbt, inspect },
+            "join",
+            `⊔ advance of ${holder.name} by ${resultKey}`,
+          );
+          objects = writeSessionContent(objects, holder.key, joined.key);
+          settleJoin([oldContent, resultKey], joined.key);
+          logEvent(
+            `${holder.name} (${holder.key}) advanced monotonically: ` +
+              `${oldContent} ⊔ ${resultKey} → ${joined.key} — no fork needed`,
+          );
+          render();
+          continue;
+        }
+        logEvent(
+          `${holder.name} (${holder.key}): ${oldContent} ⊔ ${resultKey} absorbs the ` +
+            `transform back into the old value — not an advance; offering the fork`,
+        );
+      } catch (error) {
+        logEvent(
+          `${holder.name} (${holder.key}): ${oldContent} ⊔ ${resultKey} conflicts ` +
+            `(${error instanceof Error ? error.message : String(error)}) — offering the fork`,
+        );
+      }
     }
     if (!(await promptSessionFork(holder, oldContent, resultKey))) {
       logEvent(
