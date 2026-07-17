@@ -139,6 +139,7 @@ export declare function queueWire(wires: PendingWire[], source: NodeRef, target:
 export declare function unqueueWire(wires: PendingWire[], key: string): PendingWire[];
 export declare function nodeExists(ref: NodeRef, state: ObjectsState, fragmentKeys: readonly string[]): boolean;
 export declare function pruneWires(wires: PendingWire[], state: ObjectsState, fragmentKeys: readonly string[], summaryOf?: FragmentSummaryLookup): PendingWire[];
+export declare function remapWiresAfterJoin(wires: PendingWire[], operandKeys: readonly string[], resultKey: string): PendingWire[];
 export interface WireComponent {
     nodes: NodeRef[];
     wires: PendingWire[];

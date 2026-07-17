@@ -32,6 +32,7 @@ import {
   pruneWires,
   queueWire,
   remapWireRef,
+  remapWiresAfterJoin,
   retiredByDerivation,
   sessionByKey,
   sessionFocus,
@@ -485,6 +486,40 @@ test("pruneWires re-canonicalizes endpoints that became register contents", () =
     { source: { kind: "fragment", key: "psbt-1" }, target: { kind: "fragment", key: "psbt-2" } },
   ];
   assert.equal(pruneWires(doubled, state, ["psbt-1", "psbt-2"]).length, 1);
+});
+
+test("remapWiresAfterJoin: joining one edge leaves the component's others queued", () => {
+  // A chain A—B—C is queued; the user clicks Join on the A—B pill. The join
+  // retires A and B into J; the B—C edge must FOLLOW THE VALUE (J—C), not
+  // vanish with its endpoint.
+  const state = emptyObjects();
+  const chain = [
+    { source: ref("fragment", "psbt-a"), target: ref("fragment", "psbt-b") },
+    { source: ref("fragment", "psbt-b"), target: ref("fragment", "psbt-c") },
+  ];
+  const remapped = remapWiresAfterJoin(chain, ["psbt-a", "psbt-b"], "psbt-j");
+  assert.deepEqual(remapped, [
+    // The joined edge collapses onto the result (a self-wire)...
+    { source: ref("fragment", "psbt-j"), target: ref("fragment", "psbt-j") },
+    // ...while the neighbour re-aims at the result.
+    { source: ref("fragment", "psbt-j"), target: ref("fragment", "psbt-c") },
+  ]);
+  // pruneWires then drops the self-wire and keeps the survivor: exactly one
+  // edge left after joining exactly one edge.
+  assert.deepEqual(pruneWires(remapped, state, ["psbt-c", "psbt-j"]), [
+    { source: ref("fragment", "psbt-j"), target: ref("fragment", "psbt-c") },
+  ]);
+
+  // An absorbed join (result IS one of the operands) stays put: nothing to
+  // remap, non-fragment endpoints never touched.
+  const absorbed = remapWiresAfterJoin(
+    [{ source: ref("fragment", "psbt-a"), target: ref("session", "session-1") }],
+    ["psbt-a", "psbt-b"],
+    "psbt-a",
+  );
+  assert.deepEqual(absorbed, [
+    { source: ref("fragment", "psbt-a"), target: ref("session", "session-1") },
+  ]);
 });
 
 // --- action labels + target vocabulary ----------------------------------------

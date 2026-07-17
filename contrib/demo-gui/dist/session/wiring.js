@@ -669,6 +669,19 @@ export function pruneWires(wires, state, fragmentKeys, summaryOf) {
     }
     return live;
 }
+// After a join settles, queued wires FOLLOW THE VALUE: endpoints that named
+// a retired operand remap onto the join result. Joining one edge of a
+// component must leave its neighbours queued (now against the result), not
+// silently drop them when pruneWires sees their operand gone. The joined
+// edge itself becomes a self-wire and prunes out; wires collapsing onto an
+// already-queued pair dedupe by key — both in pruneWires.
+export function remapWiresAfterJoin(wires, operandKeys, resultKey) {
+    const operands = new Set(operandKeys);
+    const follow = (ref) => ref.kind === "fragment" && operands.has(ref.key) && ref.key !== resultKey
+        ? { kind: "fragment", key: resultKey }
+        : ref;
+    return wires.map((wire) => ({ source: follow(wire.source), target: follow(wire.target) }));
+}
 // Connected components of the pending-wire graph (the demo's
 // joinComponents): the toolbar Join applies each component as a unit.
 export function wireComponents(wires) {

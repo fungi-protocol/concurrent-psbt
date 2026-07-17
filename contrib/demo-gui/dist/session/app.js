@@ -24,7 +24,7 @@ import { addFragment, asArray, asObject, asString, buildConfirmArgs, buildCreate
 import { amountBits, amountSpanParts, DETAIL_LEVELS, fragmentBadges, fragmentCardModel, groupAggregate, rawKeymapSections, rowDetailPairs, rowFacePairs, signedAmountSpanParts, } from "./display.js";
 import { addressFromScript } from "./encoding.js";
 import { classifyPaste, mintFromPaste, SAMPLE_PASTES, } from "./ingest.js";
-import { actionState, addBridge, authorizePeerOnSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, forkSession, idleWire, markReplicas, mergeSessions, mineFragmentKeys, staleReplicaPeers, writeSessionContent, mintPeer, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, registerIncompatibility, retiredByDerivation, sessionByKey, sessionFocus, sessionIsShared, sessionsHolding, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
+import { actionState, addBridge, authorizePeerOnSession, applyTxOutputs, beginWire, bridgeGroupContaining, completeWire, componentPlan, dropFragmentKey, emptyObjects, enrichDescriptor, forkSession, idleWire, markReplicas, mergeSessions, mineFragmentKeys, staleReplicaPeers, writeSessionContent, mintPeer, mintSession, overviewFocus, peerBridgeGroups, peerByKey, peerUsableForSync, pruneWires, queueWire, registerIncompatibility, remapWiresAfterJoin, retiredByDerivation, sessionByKey, sessionFocus, sessionIsShared, sessionsHolding, unionBridgedPeersIntoSessions, unqueueWire, validateFocus, wireComponents, wireDisposition, wireKey, wireQueueSummary, wireVerdict, remapWireRef, } from "./wiring.js";
 import { curveBetween, curveMidpoint, laneLayout, } from "./layout.js";
 import { applyEdit, applyFix, decodedEditsLeftBehind, editorModel, rawEditsForSave, SORT_MODES, toggledBitfieldValue, TX_MODIFIABLE_BITS, TX_UNORDERED_SET_HEX, validateEditor, violationsFromServer, } from "./editor.js";
 import { descriptorColorKey, groupColorKey, paletteColor, paletteRegistry, peerColorKey, } from "./palette.js";
@@ -367,6 +367,10 @@ function settleDerivation(sourceKeys, resultKeys, livesOn) {
 }
 function settleJoin(operandKeys, resultKey) {
     settleDerivation(operandKeys, [resultKey], resultKey);
+    // Queued wires follow the value: edges that referenced a retired operand
+    // now point at the result, so joining one edge of a component leaves the
+    // others queued instead of dropping with their endpoints.
+    pendingWires = remapWiresAfterJoin(pendingWires, operandKeys, resultKey);
 }
 // A minting op replaces its source by default; the surface's "keep the
 // original" checkbox opts the gesture out. The toolbar box governs the

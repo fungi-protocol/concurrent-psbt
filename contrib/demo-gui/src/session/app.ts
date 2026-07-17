@@ -104,6 +104,7 @@ import {
   pruneWires,
   queueWire,
   registerIncompatibility,
+  remapWiresAfterJoin,
   retiredByDerivation,
   sessionByKey,
   sessionFocus,
@@ -562,6 +563,10 @@ function settleDerivation(
 
 function settleJoin(operandKeys: readonly string[], resultKey: string): void {
   settleDerivation(operandKeys, [resultKey], resultKey);
+  // Queued wires follow the value: edges that referenced a retired operand
+  // now point at the result, so joining one edge of a component leaves the
+  // others queued instead of dropping with their endpoints.
+  pendingWires = remapWiresAfterJoin(pendingWires, operandKeys, resultKey);
 }
 
 // A minting op replaces its source by default; the surface's "keep the
