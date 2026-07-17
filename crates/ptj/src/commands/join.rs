@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use concurrent_psbt::Join;
@@ -108,12 +108,92 @@ pub(crate) fn join_psbts(psbts: impl IntoIterator<Item = Psbt>) -> Result<Psbt> 
     if psbts.iter().all(|psbt| psbt.global.is_unordered()) {
         join_unordered(psbts)
     } else if psbts.iter().any(|psbt| psbt.global.is_unordered()) {
-        Err(Error::new(
-            "PSBTs are not joinable: cannot mix unordered and ordered PSBTs",
-        ))
+        // Clearing TX_UNORDERED is monotone: once any replica fixed an order,
+        // the joined PSBT is ordered. The frozen-set precheck above already
+        // guaranteed every ordered operand's sets equal the union (ordered
+        // implies unmodifiable per the gate), so each unordered operand can
+        // be aligned onto the fixed order by identity and combined strictly.
+        let (ordered, unordered): (Vec<_>, Vec<_>) = psbts
+            .into_iter()
+            .partition(|psbt| !psbt.global.is_unordered());
+        let base = combine_ordered(ordered)?;
+        let aligned = unordered
+            .into_iter()
+            .map(|psbt| align_to_order(psbt, &base))
+            .collect::<Result<Vec<_>>>()?;
+        combine_ordered(std::iter::once(base).chain(aligned).collect())
     } else {
         combine_ordered(psbts)
     }
+}
+
+/// Rewrite an unordered PSBT into the element order of `base`, so the strict
+/// positional combine can merge them. Every element is placed at the position
+/// its identity (outpoint / unique id) occupies in `base`; positions the
+/// operand doesn't cover are filled with `base`'s own entries, which join
+/// idempotently. The ordering-domain metadata the sorter strips (TX_UNORDERED,
+/// negotiation, removal + fee bands) is stripped here too: the result lives in
+/// the ordered domain and must not resurrect what the sorter projected away.
+fn align_to_order(mut psbt: Psbt, base: &Psbt) -> Result<Psbt> {
+    use concurrent_psbt::payments::negotiation::GlobalNegotiationExt;
+    use concurrent_psbt::removal::GlobalRemovalExt;
+
+    if psbt.global.signals_removal() {
+        return Err(Error::new(
+            "PSBT is not joinable: unordered operand carries removal tombstones; \
+             sort it before joining with an ordered PSBT",
+        ));
+    }
+
+    let input_position: BTreeMap<_, _> = base
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(position, input)| ((input.previous_txid, input.spent_output_index), position))
+        .collect();
+    let output_position: BTreeMap<_, _> = base
+        .outputs
+        .iter()
+        .enumerate()
+        .filter_map(|(position, output)| {
+            output
+                .unique_id()
+                .map(|id| (id.as_bytes().to_vec(), position))
+        })
+        .collect();
+
+    let mut inputs: Vec<_> = base.inputs.clone();
+    for input in psbt.inputs {
+        let key = (input.previous_txid, input.spent_output_index);
+        let position = input_position.get(&key).copied().ok_or_else(|| {
+            Error::new("PSBT is not joinable: ordered PSBT does not contain the input")
+        })?;
+        inputs[position] = input;
+    }
+    let mut outputs: Vec<_> = base.outputs.clone();
+    for output in psbt.outputs {
+        let id = output.unique_id().ok_or_else(|| {
+            Error::new("PSBT is not joinable: unordered output lacks a unique id")
+        })?;
+        let position = output_position
+            .get(id.as_bytes())
+            .copied()
+            .ok_or_else(|| {
+                Error::new("PSBT is not joinable: ordered PSBT does not contain the output")
+            })?;
+        outputs[position] = output;
+    }
+
+    psbt.global.clear_unordered();
+    psbt.global.clear_negotiation();
+    psbt.global.clear_removal_and_fee();
+    psbt.global.input_count = inputs.len();
+    psbt.global.output_count = outputs.len();
+    Ok(Psbt {
+        global: psbt.global,
+        inputs,
+        outputs,
+    })
 }
 
 /// Join unordered PSBTs: inputs keyed by outpoint, outputs by unique id.
@@ -273,13 +353,58 @@ mod tests {
     }
 
     #[test]
-    fn mixed_phases_are_refused() {
-        let unordered = psbt(0x00, true, vec![input(1)], vec![output(10, 1)]);
-        let ordered = psbt(0x00, false, vec![input(1)], vec![output(10, 1)]);
+    fn unordered_joins_ordered_and_the_fixed_order_is_retained() {
+        // A replica that already fixed an order joins with a replica still in
+        // the unordered phase. The ordered side covers the unordered side's
+        // elements, so its order wins and the unordered side's data merges
+        // into the matching entries by identity.
+        let ordered = psbt(
+            0x00,
+            false,
+            vec![input(2), input(1)],
+            vec![output(20, 2), output(10, 1)],
+        );
+        let mut unordered = psbt(0x03, true, vec![input(1)], vec![output(10, 1)]);
+        unordered.inputs[0].unknowns.insert(
+            psbt_v2::raw::Key {
+                type_value: 0xa0,
+                key: vec![],
+            },
+            vec![7],
+        );
 
-        let error = join_psbts([unordered, ordered]).expect_err("phases cannot mix");
+        let joined = join_psbts([unordered, ordered]).expect("fixed order covers the set");
+        assert!(!joined.global.is_unordered());
+        assert_eq!(joined.global.tx_modifiable_flags, 0x00);
+        // The ordered operand's positions are retained…
+        assert_eq!(
+            joined.inputs[0].previous_txid,
+            bitcoin::Txid::from_byte_array([2; 32])
+        );
+        assert_eq!(
+            joined.inputs[1].previous_txid,
+            bitcoin::Txid::from_byte_array([1; 32])
+        );
+        // …and the unordered operand's field landed on the right entry.
+        assert_eq!(joined.inputs[1].unknowns.len(), 1);
+        assert_eq!(joined.outputs.len(), 2);
+    }
+
+    #[test]
+    fn unordered_elements_missing_from_the_fixed_order_are_refused() {
+        // The unordered side added an input the fixed order never included:
+        // an ordered PSBT's set is frozen, so this must refuse.
+        let ordered = psbt(0x00, false, vec![input(1)], vec![output(10, 1)]);
+        let unordered = psbt(
+            0x03,
+            true,
+            vec![input(1), input(2)],
+            vec![output(10, 1)],
+        );
+
+        let error = join_psbts([unordered, ordered]).expect_err("fixed sets must not grow");
         assert!(
-            error.to_string().contains("unordered and ordered"),
+            error.to_string().contains("input sets differ"),
             "unexpected error: {error}"
         );
     }
