@@ -371,6 +371,11 @@ function settleJoin(operandKeys, resultKey) {
     // now point at the result, so joining one edge of a component leaves the
     // others queued instead of dropping with their endpoints.
     pendingWires = remapWiresAfterJoin(pendingWires, operandKeys, resultKey);
+    // And so do the CARDS: operands glide to where the result lands.
+    for (const operand of operandKeys) {
+        if (operand !== resultKey)
+            glideTargets.set(`fragment:${operand}`, resultKey);
+    }
 }
 // A minting op replaces its source by default; the surface's "keep the
 // original" checkbox opts the gesture out. The toolbar box governs the
@@ -1249,12 +1254,23 @@ function clearPendingWires() {
 // are rebuilt each render exactly like the old list items.
 const canvasNodes = new Map();
 let canvasLayout = null;
+// Fresh wrappers this render: their first placement must NOT transition —
+// a brand-new card materializes at its rect instead of flying in from the
+// layer origin (the measure pass flushes layout at transform:none, so
+// without the suppression the transform transition WOULD run).
+const freshCanvasNodes = new Set();
+// Join choreography: settled operands whose canvas cards should glide to
+// the result card's position before leaving, instead of vanishing where
+// they stood while the result pops in. Keyed by canvas node key; consumed
+// by the next renderCanvas pass.
+const glideTargets = new Map();
 function canvasWrapper(key, className) {
     let wrapper = canvasNodes.get(key);
     if (!wrapper) {
         wrapper = document.createElement("div");
         wrapper.className = className;
         canvasNodes.set(key, wrapper);
+        freshCanvasNodes.add(key);
         el("nodeLayer").append(wrapper);
     }
     return wrapper;
@@ -1318,12 +1334,23 @@ function renderCanvas() {
             : "mine — nothing loaded yet; paste or create a fragment to begin", "Local-only drafts. Wiring a card to a session writes it into that register (a visible move).");
     const frame = canvasWrapper("frame:mine", "session-mine-frame");
     live.add("frame:mine");
+    // Vanished nodes leave; settled join operands leave THROUGH the result:
+    // the wrapper stays for one last placement (below) that glides it onto
+    // the result card while it fades, then it is removed.
+    const departing = [];
     for (const [key, wrapper] of canvasNodes) {
-        if (!live.has(key)) {
+        if (live.has(key))
+            continue;
+        canvasNodes.delete(key);
+        const resultKey = glideTargets.get(key);
+        if (resultKey) {
+            departing.push({ wrapper, resultKey });
+        }
+        else {
             wrapper.remove();
-            canvasNodes.delete(key);
         }
     }
+    glideTargets.clear();
     // Measure, lay out, place. Wrapper widths are fixed per lane (CSS);
     // heights are whatever the cards need.
     const workbench = el("spatialWorkbench");
@@ -1347,8 +1374,39 @@ function renderCanvas() {
     world.style.height = `${layout.world.height}px`;
     for (const [key, rect] of layout.positions) {
         const wrapper = canvasNodes.get(key);
-        if (wrapper)
+        if (!wrapper)
+            continue;
+        if (freshCanvasNodes.has(key)) {
+            // First placement: materialize at the rect, no glide from the origin.
+            wrapper.style.transition = "none";
             placeWrapper(wrapper, rect.x, rect.y);
+            requestAnimationFrame(() => {
+                wrapper.style.transition = "";
+            });
+        }
+        else {
+            placeWrapper(wrapper, rect.x, rect.y);
+        }
+    }
+    freshCanvasNodes.clear();
+    // The join choreography: each settled operand's card glides onto the
+    // result's rect (the result fragment's own card, or the session container
+    // that now holds it as register content) and fades; removal follows the
+    // transition, with a timer fallback for reduced-motion (transition: none
+    // fires no transitionend).
+    for (const { wrapper, resultKey } of departing) {
+        const holder = objects.sessions.find((candidate) => candidate.contentKey === resultKey);
+        const rect = layout.positions.get(`fragment:${resultKey}`) ??
+            (holder ? layout.positions.get(`session:${holder.key}`) : undefined);
+        if (!rect) {
+            wrapper.remove();
+            continue;
+        }
+        wrapper.classList.add("session-node-departing");
+        placeWrapper(wrapper, rect.x, rect.y);
+        const drop = () => wrapper.remove();
+        wrapper.addEventListener("transitionend", drop, { once: true });
+        window.setTimeout(drop, 400);
     }
     placeWrapper(peersLabel, layout.mineFrame.x, Math.max(0, layout.lanes.peersY - 22));
     placeWrapper(sessionsLabel, layout.mineFrame.x, layout.lanes.sessionsY - 22);

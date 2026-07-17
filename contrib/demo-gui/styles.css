@@ -3138,6 +3138,17 @@ img.session-lifehash {
   margin: 0;
 }
 
+/* A join operand on its way out: glides onto the result card's rect while
+   fading, under the live cards, and no longer a wire target. */
+.session-node-departing {
+  opacity: 0;
+  z-index: 0;
+  pointer-events: none;
+  transition:
+    transform 180ms ease,
+    opacity 180ms ease;
+}
+
 .session-node-peer {
   width: 220px;
 }
@@ -3197,6 +3208,7 @@ img.session-lifehash {
 
 @media (prefers-reduced-motion: reduce) {
   .session-canvas-node,
+  .session-node-departing,
   .session-lane-label,
   .session-mine-frame {
     transition: none;

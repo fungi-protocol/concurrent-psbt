@@ -34,14 +34,39 @@ test("canvas nodes are keyed: wrappers survive, contents rebuild", () => {
   // survives so transform transitions animate the moves.
   assert.match(canvas, /canvasNodes\.get\(key\)/);
   assert.match(canvas, /wrapper\.replaceChildren\(card\)/);
-  // Vanished keys are pruned, not leaked.
-  assert.match(canvas, /wrapper\.remove\(\);\s*\n\s*canvasNodes\.delete\(key\)/);
+  // Vanished keys are pruned, not leaked — and settled join operands
+  // depart THROUGH the result (glide + fade) instead of vanishing in place.
+  assert.match(canvas, /canvasNodes\.delete\(key\);/);
+  assert.match(canvas, /glideTargets\.get\(key\)/);
   // Positions come from the PURE layout over MEASURED sizes — no
   // hard-coded lane heights (the mockup's mistake).
   assert.match(canvas, /laneLayout\(\{/);
   assert.match(canvas, /offsetWidth/);
   assert.match(canvas, /offsetHeight/);
   assert.match(canvas, /minWidth: workbench\.clientWidth/);
+});
+
+test("join choreography: operands glide onto the result, fresh cards materialize", () => {
+  const canvas = app.slice(app.indexOf("const canvasNodes"), app.indexOf("function renderFocusFragments"));
+  // settleJoin records each retired operand's destination…
+  assert.match(app, /glideTargets\.set\(`fragment:\$\{operand\}`, resultKey\)/);
+  // …and the place pass moves the departing wrapper onto the result's rect
+  // (the result card, or the session container holding it as content).
+  assert.match(canvas, /layout\.positions\.get\(`fragment:\$\{resultKey\}`\)/);
+  assert.match(canvas, /session:\$\{holder\.key\}/);
+  // Removal follows the transition, with a timer fallback for
+  // reduced-motion (transition: none fires no transitionend).
+  assert.match(canvas, /transitionend/);
+  assert.match(canvas, /setTimeout\(drop, 400\)/);
+  // A FRESH wrapper's first placement does not transition — no card flies
+  // in from the layer origin.
+  assert.match(canvas, /freshCanvasNodes\.has\(key\)/);
+  assert.match(canvas, /wrapper\.style\.transition = "none"/);
+  // The departing card fades under the live cards and takes no gestures.
+  assert.match(
+    styles,
+    /\.session-node-departing\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?pointer-events:\s*none;/,
+  );
 });
 
 test("Mine is a framed canvas lane of local-only drafts", () => {
