@@ -10,11 +10,41 @@ pub(super) fn run(config: CreateConfig) -> Result<Psbt> {
 }
 
 pub(crate) fn create_psbt(config: CreateConfig) -> Result<Psbt> {
+    create_psbt_with_prevouts(config, &[])
+}
+
+/// `prevouts[index]`, when present, is `inputs[index]`'s creating
+/// transaction: it becomes the input's PSBT_IN_NON_WITNESS_UTXO, so a coin
+/// injected into PSBT space carries its utxo data, not just the outpoint.
+/// Positional; a missing or `None` entry leaves a bare outpoint input.
+pub(crate) fn create_psbt_with_prevouts(
+    config: CreateConfig,
+    prevouts: &[Option<bitcoin::Transaction>],
+) -> Result<Psbt> {
     let has_items = !config.inputs.is_empty() || !config.outputs.is_empty();
     let mut constructor = Creator::new().build();
 
-    for input in config.inputs {
-        constructor = constructor.input(Input::new(&input.into_outpoint()));
+    for (index, input) in config.inputs.into_iter().enumerate() {
+        let outpoint = input.into_outpoint();
+        let mut psbt_input = Input::new(&outpoint);
+        if let Some(Some(prevout)) = prevouts.get(index) {
+            let txid = prevout.compute_txid();
+            if txid != outpoint.txid {
+                return Err(Error::new(format!(
+                    "inputs[{index}] raw_tx has txid {txid}, not the outpoint's {}",
+                    outpoint.txid
+                )));
+            }
+            if prevout.output.len() <= outpoint.vout as usize {
+                return Err(Error::new(format!(
+                    "inputs[{index}] raw_tx has {} output(s); vout {} does not exist",
+                    prevout.output.len(),
+                    outpoint.vout
+                )));
+            }
+            psbt_input.non_witness_utxo = Some(prevout.clone());
+        }
+        constructor = constructor.input(psbt_input);
     }
 
     for output in config.outputs {

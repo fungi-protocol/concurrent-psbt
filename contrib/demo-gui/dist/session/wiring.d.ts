@@ -108,7 +108,7 @@ export declare function peerBridgeGroups(state: ObjectsState): string[][];
 export declare function bridgeGroupContaining(state: ObjectsState, peerKey: string): string[];
 export declare function unionBridgedPeersIntoSessions(state: ObjectsState): ObjectsState;
 export declare function peerUsableForSync(peer: PeerObject): boolean;
-export type WireKind = "fragment-join" | "fragment-into-session" | "peer-into-session" | "add-create-input" | "session-merge" | "peer-bridge" | "attribute-scripts" | "none";
+export type WireKind = "fragment-join" | "fragment-into-session" | "peer-into-session" | "add-create-input" | "utxo-inject" | "session-merge" | "peer-bridge" | "attribute-scripts" | "none";
 export interface WireVerdict {
     kind: WireKind;
     allowed: boolean;

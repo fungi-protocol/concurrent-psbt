@@ -343,9 +343,32 @@ test("utxo wiring rows", () => {
   assert.equal(create.allowed, true);
   assert.equal(create.backed, true);
 
-  const toFragment = wireVerdict(ref("utxo", "utxo-1"), ref("fragment", "psbt-1"), state);
-  assert.equal(toFragment.allowed, false);
-  assert.match(toFragment.reason, /create form/);
+  // A utxo is injectable into PSBT space (outpoint + creating tx → a
+  // one-input unordered PSBT that joins onto its spender) — but only once
+  // the paste is decoded enough to know the outpoint.
+  const undecoded = { key: "utxo-1", rawTxHex: "00", txid: null, vout: null, amountSats: null, address: null, fullySigned: null };
+  const pending = wireVerdict(
+    ref("utxo", "utxo-1"),
+    ref("fragment", "psbt-1"),
+    { ...state, utxos: [undecoded] },
+  );
+  assert.equal(pending.kind, "utxo-inject");
+  assert.equal(pending.allowed, false);
+  assert.match(pending.reason, /not decoded/);
+
+  const decoded = { ...undecoded, txid: "aa".repeat(32), vout: 0, amountSats: 1234 };
+  for (const other of [ref("fragment", "psbt-1"), ref("session", "session-1")]) {
+    const inject = wireVerdict(ref("utxo", "utxo-1"), other, { ...state, utxos: [decoded] });
+    assert.equal(inject.kind, "utxo-inject");
+    assert.equal(inject.allowed, true);
+    assert.equal(inject.backed, true);
+    assert.match(inject.label, /Inject/);
+  }
+
+  // Everything else utxo-adjacent still names the manual-create fallback.
+  const toPeer = wireVerdict(ref("utxo", "utxo-1"), ref("peer", "peer-1"), state);
+  assert.equal(toPeer.allowed, false);
+  assert.match(toPeer.reason, /create form/);
 });
 
 test("session merge and peer bridge are wired; attribute-scripts still names its seam", () => {

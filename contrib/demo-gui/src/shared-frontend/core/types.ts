@@ -36,6 +36,10 @@ export interface ExportBip174Response {
 export interface CreateInput {
   txid: string;
   vout: number;
+  // Consensus hex of the creating transaction; maps to the wire field
+  // `raw_tx` and becomes the input's PSBT_IN_NON_WITNESS_UTXO — the
+  // coin-injection path sends the utxo data along with the outpoint.
+  rawTxHex?: string;
 }
 
 export interface CreateOutput {

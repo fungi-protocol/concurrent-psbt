@@ -42,6 +42,7 @@ import {
 export type FragmentOrigin =
   | "paste"
   | "payment-uri"
+  | "utxo-inject"
   | "upload"
   | "import-bip174"
   | "create"

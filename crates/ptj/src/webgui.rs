@@ -1135,8 +1135,8 @@ fn create_response(body: &[u8]) -> Response {
 fn create_response_result(body: &[u8]) -> Result<Vec<u8>> {
     let request: serde_json::Value = serde_json::from_slice(body)
         .map_err(|error| Error::new(format!("parsing JSON request: {error}")))?;
-    let config = create_config_from_request(&request)?;
-    let created = crate::commands::create::create_psbt(config)?;
+    let (config, prevouts) = create_config_from_request(&request)?;
+    let created = crate::commands::create::create_psbt_with_prevouts(config, &prevouts)?;
     Ok(serde_json::json!({
         "psbt": crate::io::encode_psbt(&created),
         "inspect": crate::commands::inspect::inspect_psbt(&created),
@@ -1145,7 +1145,9 @@ fn create_response_result(body: &[u8]) -> Result<Vec<u8>> {
     .into_bytes())
 }
 
-fn create_config_from_request(request: &serde_json::Value) -> Result<CreateConfig> {
+fn create_config_from_request(
+    request: &serde_json::Value,
+) -> Result<(CreateConfig, Vec<Option<bitcoin::Transaction>>)> {
     let object = request
         .as_object()
         .ok_or_else(|| Error::new("request JSON must be an object"))?;
@@ -1168,10 +1170,11 @@ fn create_config_from_request(request: &serde_json::Value) -> Result<CreateConfi
         }
         None => OrderingArg::Unset,
     };
-    let inputs = object
+    let (inputs, prevouts) = object
         .get("inputs")
         .map(parse_create_inputs)
         .transpose()?
+        .map(|parsed| parsed.into_iter().unzip())
         .unwrap_or_default();
     let outputs = object
         .get("outputs")
@@ -1180,17 +1183,25 @@ fn create_config_from_request(request: &serde_json::Value) -> Result<CreateConfi
         .unwrap_or_default();
     let allow_short_seed = optional_bool(request, "allow_short_seed")?;
 
-    Ok(CreateConfig {
-        inputs,
-        outputs,
-        seed,
-        allow_short_seed,
-        ordering,
-        network,
-    })
+    Ok((
+        CreateConfig {
+            inputs,
+            outputs,
+            seed,
+            allow_short_seed,
+            ordering,
+            network,
+        },
+        prevouts,
+    ))
 }
 
-fn parse_create_inputs(value: &serde_json::Value) -> Result<Vec<OutPointArg>> {
+/// Each input is `{txid, vout}` plus an optional `raw_tx` (consensus hex of
+/// the creating transaction) that travels into PSBT_IN_NON_WITNESS_UTXO —
+/// the coin-injection path sends the utxo data along with the outpoint.
+fn parse_create_inputs(
+    value: &serde_json::Value,
+) -> Result<Vec<(OutPointArg, Option<bitcoin::Transaction>)>> {
     let inputs = value
         .as_array()
         .ok_or_else(|| Error::new("request JSON field `inputs` must be an array"))?;
@@ -1215,12 +1226,32 @@ fn parse_create_inputs(value: &serde_json::Value) -> Result<Vec<OutPointArg>> {
                         Error::new(format!("request JSON inputs[{index}].vout exceeds u32"))
                     })
                 })?;
-            Ok(OutPointArg {
-                txid: txid
-                    .parse()
-                    .map_err(|error| Error::new(format!("invalid txid {txid}: {error}")))?,
-                vout,
-            })
+            let raw_tx = object
+                .get("raw_tx")
+                .map(|value| {
+                    let hex = value.as_str().ok_or_else(|| {
+                        Error::new(format!("request JSON inputs[{index}].raw_tx must be a string"))
+                    })?;
+                    let bytes = crate::bytes_arg::decode_hex(hex).map_err(|error| {
+                        Error::new(format!("request JSON inputs[{index}].raw_tx: {error}"))
+                    })?;
+                    bitcoin::consensus::encode::deserialize::<bitcoin::Transaction>(&bytes)
+                        .map_err(|error| {
+                            Error::new(format!(
+                                "request JSON inputs[{index}].raw_tx is not a raw transaction: {error}"
+                            ))
+                        })
+                })
+                .transpose()?;
+            Ok((
+                OutPointArg {
+                    txid: txid
+                        .parse()
+                        .map_err(|error| Error::new(format!("invalid txid {txid}: {error}")))?,
+                    vout,
+                },
+                raw_tx,
+            ))
         })
         .collect()
 }

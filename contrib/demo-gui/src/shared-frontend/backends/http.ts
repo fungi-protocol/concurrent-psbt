@@ -125,7 +125,11 @@ export class HttpBackend implements Backend {
       ordering: request.ordering,
       seed_hex: request.seedHex,
       allow_short_seed: request.allowShortSeed,
-      inputs: request.inputs,
+      inputs: request.inputs.map((input) => ({
+        txid: input.txid,
+        vout: input.vout,
+        raw_tx: input.rawTxHex,
+      })),
       outputs: request.outputs.map((output) => ({
         address: output.address,
         amount_btc: output.amountBtc,

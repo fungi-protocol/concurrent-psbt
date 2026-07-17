@@ -1235,6 +1235,33 @@ async function executeWire(
         }
         break;
       }
+      case "utxo-inject": {
+        // Inject the coin into PSBT space: its outpoint and creating
+        // transaction become the sole input of an unordered, unseeded,
+        // order-unspecified PSBT — no fields specified other than the utxo
+        // data. The injected fragment then meets its target through the
+        // ordinary wire machinery (fragment-join or a register write).
+        const utxoKey = source.kind === "utxo" ? source.key : target.key;
+        const other = source.kind === "utxo" ? target : source;
+        const utxo = objects.utxos.find((candidate) => candidate.key === utxoKey);
+        if (!utxo || utxo.txid === null || utxo.vout === null) return false;
+        const injected = await addResponse(
+          await backend.createPsbt({
+            network: displayNetwork(),
+            ordering: "unset",
+            inputs: [{ txid: utxo.txid, vout: utxo.vout, rawTxHex: utxo.rawTxHex }],
+            outputs: [],
+          }),
+          "utxo-inject",
+          `injection of ${utxoKey}`,
+        );
+        logEvent(
+          `injected ${utxoKey} into PSBT space as ${injected.key} ` +
+            `(one input, PSBT_IN_NON_WITNESS_UTXO carried) — wiring it into ${nodeName(other)}`,
+        );
+        render();
+        return executeWire({ kind: "fragment", key: injected.key }, other);
+      }
       case "session-merge": {
         // Client-orchestrated merge (Q3): merging registers ⊔s their
         // contents and ∪s their peer sets. The UI model unions the peers

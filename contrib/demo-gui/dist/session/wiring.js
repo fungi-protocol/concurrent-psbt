@@ -581,6 +581,22 @@ export function wireVerdict(source, target, state, summaryOf) {
     if (a === "utxo" && b === "create") {
         return verdict("add-create-input", true, true, null, null, `Use ${sourceName} as a create-form input`);
     }
+    if (unordered(a, b, "utxo", "fragment") || unordered(a, b, "utxo", "session")) {
+        // A utxo is injectable into PSBT space: its known outpoint plus its
+        // creating transaction become the sole input of an unordered, unseeded,
+        // order-unspecified PSBT — no fields specified other than the utxo
+        // data. That fragment is joinable, so the coin can meet the fragment
+        // (or register) that spends it through the ordinary ⊔ machinery.
+        const utxoKey = a === "utxo" ? source.key : target.key;
+        const utxo = state.utxos.find((candidate) => candidate.key === utxoKey);
+        const otherName = a === "utxo" ? targetName : sourceName;
+        const otherKind = a === "utxo" ? b : a;
+        const label = `Inject ${a === "utxo" ? sourceName : targetName} into ${otherKind === "session" ? `session ${otherName}` : otherName} (mint a one-input PSBT, then ⊔)`;
+        if (!utxo || utxo.txid === null || utxo.vout === null) {
+            return verdict("utxo-inject", false, true, "the coin's outpoint is not decoded yet (deep classify pending or unavailable)", null, label);
+        }
+        return verdict("utxo-inject", true, true, null, null, label);
+    }
     if (a === "utxo" || b === "utxo") {
         return verdict("none", false, false, "spendable outputs feed the create form (chain sources stay manual for now)");
     }

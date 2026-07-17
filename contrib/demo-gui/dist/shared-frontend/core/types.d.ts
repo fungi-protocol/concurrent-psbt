@@ -16,6 +16,7 @@ export interface ExportBip174Response {
 export interface CreateInput {
     txid: string;
     vout: number;
+    rawTxHex?: string;
 }
 export interface CreateOutput {
     address: string;
