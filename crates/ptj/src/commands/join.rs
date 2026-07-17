@@ -39,7 +39,7 @@ pub(crate) fn join_sources<'a>(
 }
 
 pub(crate) fn join_psbts(psbts: impl IntoIterator<Item = Psbt>) -> Result<Psbt> {
-    let psbts: Vec<Psbt> = psbts.into_iter().collect();
+    let mut psbts: Vec<Psbt> = psbts.into_iter().collect();
 
     // Joinability: a modifiable PSBT is joinable only while unordered —
     // additions rely on set identity, not position. An unmodifiable PSBT is
@@ -51,6 +51,58 @@ pub(crate) fn join_psbts(psbts: impl IntoIterator<Item = Psbt>) -> Result<Psbt> 
                 "PSBT is not joinable: modifiable but not unordered",
             ));
         }
+    }
+
+    // Frozen-set rule (psbt.md): distinct identifiers between operands are
+    // allowed only while the corresponding TX_MODIFIABLE bit is set. An
+    // operand whose bit is clear has frozen its set — the join can only
+    // succeed if that frozen set already IS the union, so every operand with
+    // the bit still set contributes at most a subset of it.
+    let input_sets: Vec<BTreeSet<_>> = psbts
+        .iter()
+        .map(|psbt| {
+            psbt.inputs
+                .iter()
+                .map(|input| (input.previous_txid, input.spent_output_index))
+                .collect()
+        })
+        .collect();
+    let output_sets: Vec<BTreeSet<_>> = psbts
+        .iter()
+        .map(|psbt| {
+            psbt.outputs
+                .iter()
+                .map(|output| output.unique_id().map(|id| id.as_bytes().to_vec()))
+                .collect()
+        })
+        .collect();
+    let input_union: BTreeSet<_> = input_sets.iter().flatten().cloned().collect();
+    let output_union: BTreeSet<_> = output_sets.iter().flatten().cloned().collect();
+    for (index, psbt) in psbts.iter().enumerate() {
+        if psbt.global.tx_modifiable_flags & 0x01 == 0 && input_sets[index] != input_union {
+            return Err(Error::new(
+                "PSBTs are not joinable: input sets differ but inputs are not modifiable",
+            ));
+        }
+        if psbt.global.tx_modifiable_flags & 0x02 == 0 && output_sets[index] != output_union {
+            return Err(Error::new(
+                "PSBTs are not joinable: output sets differ but outputs are not modifiable",
+            ));
+        }
+    }
+
+    // Clearing a modifiable bit is monotone (0x03 ≤ {0x01, 0x02} ≤ 0x00), so
+    // the joined bits 0/1 are the bitwise AND. Has SIGHASH_SINGLE (bit 2) is
+    // grow-only knowledge, so it ORs. The strict field lattice would report a
+    // conflict on unequal flags, so the LUB is normalized into every operand
+    // before wrapping.
+    let joined_flags = psbts
+        .iter()
+        .map(|psbt| psbt.global.tx_modifiable_flags)
+        .reduce(|left, right| (left & right & 0x03) | ((left | right) & 0x04))
+        .unwrap_or(0);
+    for psbt in &mut psbts {
+        psbt.global.tx_modifiable_flags = joined_flags;
     }
 
     if psbts.iter().all(|psbt| psbt.global.is_unordered()) {
@@ -65,23 +117,9 @@ pub(crate) fn join_psbts(psbts: impl IntoIterator<Item = Psbt>) -> Result<Psbt> 
 }
 
 /// Join unordered PSBTs: inputs keyed by outpoint, outputs by unique id.
+/// Set admissibility and flag normalization already happened in
+/// [`join_psbts`]; this only performs the lattice join.
 fn join_unordered(psbts: Vec<Psbt>) -> Result<Psbt> {
-    // Distinct identifiers between operands (added inputs or outputs) are
-    // allowed only while the corresponding TX_MODIFIABLE bit is set. The key
-    // sets are recorded before parsing consumes the operands.
-    let inputs_differ = differ(psbts.iter().map(|psbt| {
-        psbt.inputs
-            .iter()
-            .map(|input| (input.previous_txid, input.spent_output_index))
-            .collect::<BTreeSet<_>>()
-    }));
-    let outputs_differ = differ(psbts.iter().map(|psbt| {
-        psbt.outputs
-            .iter()
-            .map(|output| output.unique_id().map(|id| id.as_bytes().to_vec()))
-            .collect::<BTreeSet<_>>()
-    }));
-
     let result = psbts
         .into_iter()
         .map(|psbt| {
@@ -103,20 +141,7 @@ fn join_unordered(psbts: Vec<Psbt>) -> Result<Psbt> {
         Ok(constructor) => constructor,
         Err(_) => unreachable!("is_ok() guard verified all entries"),
     };
-    let psbt = constructor.into_psbt();
-
-    let flags = psbt.global.tx_modifiable_flags;
-    if inputs_differ && flags & 0x01 == 0 {
-        return Err(Error::new(
-            "PSBTs are not joinable: input sets differ but inputs are not modifiable",
-        ));
-    }
-    if outputs_differ && flags & 0x02 == 0 {
-        return Err(Error::new(
-            "PSBTs are not joinable: output sets differ but outputs are not modifiable",
-        ));
-    }
-    Ok(psbt)
+    Ok(constructor.into_psbt())
 }
 
 /// Combine ordered PSBTs positionally: entry i of every operand must describe
@@ -137,14 +162,6 @@ fn combine_ordered(psbts: Vec<Psbt>) -> Result<Psbt> {
     match result.try_unwrap() {
         Ok(psbt) => Ok(psbt),
         Err(_) => unreachable!("is_ok() guard verified all entries"),
-    }
-}
-
-fn differ<T: Eq>(sets: impl IntoIterator<Item = T>) -> bool {
-    let mut sets = sets.into_iter();
-    match sets.next() {
-        Some(first) => sets.any(|set| set != first),
-        None => false,
     }
 }
 
@@ -265,6 +282,56 @@ mod tests {
             error.to_string().contains("unordered and ordered"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn modifiable_joins_unmodifiable_when_frozen_set_covers_the_union() {
+        // A froze its sets (flags 0x00); B is still fully modifiable but only
+        // holds a subset of A's elements, so the union IS A's frozen set: the
+        // join succeeds and the LUB clears the modifiable bits.
+        let frozen = psbt(
+            0x00,
+            true,
+            vec![input(1), input(2)],
+            vec![output(10, 1), output(20, 2)],
+        );
+        let subset = psbt(0x03, true, vec![input(1)], vec![output(10, 1)]);
+
+        let joined = join_psbts([frozen, subset]).expect("subset joins into the frozen set");
+        assert_eq!(joined.global.tx_modifiable_flags, 0x00);
+        assert_eq!(joined.inputs.len(), 2);
+        assert_eq!(joined.outputs.len(), 2);
+    }
+
+    #[test]
+    fn modifiable_additions_outside_a_frozen_set_are_refused() {
+        // B carries an input A's frozen set doesn't contain: the union would
+        // grow past the frozen set, so the join must refuse.
+        let frozen = psbt(0x00, true, vec![input(1)], vec![output(10, 1)]);
+        let extra = psbt(
+            0x03,
+            true,
+            vec![input(1), input(2)],
+            vec![output(10, 1)],
+        );
+
+        let error = join_psbts([frozen, extra]).expect_err("frozen input set must not grow");
+        assert!(
+            error.to_string().contains("input sets differ"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn partially_modifiable_flags_join_to_their_lub() {
+        // 0x01 (inputs modifiable) ⊔ 0x02 (outputs modifiable) = 0x00: each
+        // dimension is frozen on one side, so with equal sets the join
+        // succeeds and both bits clear.
+        let left = psbt(0x01, true, vec![input(1)], vec![output(10, 1)]);
+        let right = psbt(0x02, true, vec![input(1)], vec![output(10, 1)]);
+
+        let joined = join_psbts([left, right]).expect("equal sets join across partial flags");
+        assert_eq!(joined.global.tx_modifiable_flags, 0x00);
     }
 
     #[test]
