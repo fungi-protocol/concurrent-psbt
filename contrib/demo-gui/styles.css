@@ -1784,12 +1784,31 @@ h2 {
   word-break: break-all;
 }
 
+/* The selection-scoped ops strip: pinned above the drawer bar, shown only
+   while a selection exists (renderOps toggles it with body.ops-bar-open). */
+.session-ops-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 52px;
+  z-index: 30;
+  padding: 8px 14px;
+  max-height: 40vh;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+/* Keep scrolled content clear of the ops strip while it is pinned. */
+body.ops-bar-open {
+  padding-bottom: 140px;
+}
+
 .session-ops {
   display: flex;
   flex-wrap: wrap;
   align-items: end;
   gap: 8px;
-  margin-top: 12px;
 }
 
 .session-ops .item-meta {
@@ -2747,23 +2766,6 @@ button.session-overridden {
 }
 
 @media (max-width: 760px) {
-  /* The selection-scoped operations become a bottom bar (thumb reach). */
-  .session-ops-panel {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 30;
-    margin: 0;
-    border-radius: 12px 12px 0 0;
-    max-height: 40vh;
-    overflow: auto;
-  }
-
-  body {
-    padding-bottom: 220px;
-  }
-
   .session-card-actions button,
   .session-ops button {
     min-height: 40px; /* touch targets */

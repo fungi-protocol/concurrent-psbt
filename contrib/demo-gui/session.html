@@ -110,11 +110,15 @@
         <ul id="objectList" class="item-list session-card-list"></ul>
       </section>
 
-      <!-- Selection-scoped operations: rendered as a bottom bar on narrow
-           viewports. Buttons are enabled/disabled by the presenter's
-           contextual rules; overridable correctness gates surface in
-           #gateOverrides, never silently. -->
-      <section class="control-section session-panel session-panel-wide session-ops-panel" aria-label="Operations on the selection">
+    </main>
+
+
+
+    <!-- Selection-scoped operations: a pinned strip above the drawer bar,
+         shown only while a selection exists. Buttons are enabled/disabled
+         by the presenter's contextual rules; overridable correctness gates
+         surface in #gateOverrides, never silently. -->
+    <section id="opsBar" class="session-ops-bar" aria-label="Operations on the selection" hidden>
         <div class="session-ops" id="sessionOps">
           <span id="selectionCount" class="item-meta">none selected</span>
           <button id="opJoin" type="button" class="primary" data-action="join" title="Lattice join of the selected unordered PSBTs">Join</button>
@@ -131,11 +135,7 @@
         <!-- Pressing a disabled op surfaces its reason here: title tooltips
              are hover-only, and disabled buttons swallow clicks silently. -->
         <p id="opsHint" class="item-meta session-ops-hint" role="status" hidden></p>
-      </section>
-
-    </main>
-
-
+    </section>
 
     <!-- The bottom drawer bar: every utility docks here as a drawer. One
          drawer opens at a time; Esc, the backdrop, or [x] closes it. The
@@ -146,9 +146,9 @@
       <button type="button" aria-expanded="false" aria-controls="createDrawer" data-drawer="createDrawer" data-wire-kind="create" data-wire-key="create">Create fragment</button>
       <button type="button" aria-expanded="false" aria-controls="syncDrawer" data-drawer="syncDrawer">Sync</button>
       <button type="button" aria-expanded="false" aria-controls="negotiateDrawer" data-drawer="negotiateDrawer">Negotiate</button>
-      <button type="button" aria-expanded="false" aria-controls="editorDrawer" data-drawer="editorDrawer">Editor</button>
-      <button type="button" aria-expanded="false" aria-controls="assignIdsDrawer" data-drawer="assignIdsDrawer">Assign ids</button>
-      <button type="button" aria-expanded="false" aria-controls="exportDrawer" data-drawer="exportDrawer">Export</button>
+      <!-- Editor, Assign ids, and Export have no standing toggles: they are
+           selection-scoped, so the ops bar (card Edit, Assign ids, Export
+           BIP 370/174) is their only entrance — one bar, context sensitive. -->
       <button type="button" aria-expanded="false" aria-controls="logDrawer" data-drawer="logDrawer">Log</button>
     </nav>
 

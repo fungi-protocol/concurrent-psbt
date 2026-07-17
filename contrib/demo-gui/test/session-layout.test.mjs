@@ -186,8 +186,16 @@ test("every utility docks in the bottom drawer bar, one drawer at a time", () =>
     "exportDrawer",
     "logDrawer",
   ]) {
-    assert.match(html, new RegExp(`data-drawer="${drawer}"`), `${drawer} has a bar toggle`);
     assert.match(html, new RegExp(`<section id="${drawer}" class="session-drawer"`), `${drawer} is a drawer`);
+  }
+  // Standing toggles exist only for the selection-independent utilities;
+  // the selection-scoped drawers (editor, assign ids, export) open through
+  // the ops bar and card actions instead — one bar, context sensitive.
+  for (const drawer of ["addDrawer", "createDrawer", "syncDrawer", "negotiateDrawer", "logDrawer"]) {
+    assert.match(html, new RegExp(`data-drawer="${drawer}"`), `${drawer} has a bar toggle`);
+  }
+  for (const drawer of ["editorDrawer", "assignIdsDrawer", "exportDrawer"]) {
+    assert.doesNotMatch(html, new RegExp(`data-drawer="${drawer}"`), `${drawer} has no standing toggle`);
   }
   // One drawer at a time: the manager hides every drawer that is not the
   // requested one (a single setter owns all drawer visibility).
@@ -195,9 +203,19 @@ test("every utility docks in the bottom drawer bar, one drawer at a time", () =>
   // The Create-fragment bar button doubles as the utxo drop target while
   // its drawer is closed.
   assert.match(html, /data-drawer="createDrawer" data-wire-kind="create" data-wire-key="create"/);
-  // The ops toolbar stays attached to the work area, not a drawer.
+  // The ops strip is pinned chrome, not scrollable work-area content: it
+  // lives OUTSIDE <main>, above the drawer bar, and renderOps shows it only
+  // while a selection exists.
   const main = html.slice(html.indexOf("<main"), html.indexOf("</main>"));
-  assert.match(main, /session-ops-panel/);
+  assert.doesNotMatch(main, /session-ops/);
+  const opsBar = html.indexOf('id="opsBar"');
+  assert.ok(opsBar > html.indexOf("</main>"), "the ops bar follows the work area");
+  assert.ok(opsBar < html.indexOf('id="drawerBar"'), "the ops bar precedes the drawer bar");
+  assert.match(html, /id="opsBar"[^>]*hidden/);
+  assert.match(app, /el<HTMLElement>\("opsBar"\)\.hidden = selected\.length === 0;/);
+  assert.match(app, /classList\.toggle\("ops-bar-open", selected\.length > 0\)/);
+  assert.match(styles, /\.session-ops-bar\s*\{[\s\S]*?position: fixed;[\s\S]*?bottom: 52px;/);
+  assert.match(styles, /body\.ops-bar-open\s*\{[^}]*padding-bottom/);
 });
 
 test("standing wire edges: Mine sees every session, peers their authorized ones", () => {

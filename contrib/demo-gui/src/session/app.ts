@@ -759,6 +759,10 @@ function renderOps(): void {
   }
 
   const selected = selectedFragments(session);
+  // The ops bar is context sensitive: it pins above the drawer bar only
+  // while a selection exists (the body class keeps content clear of it).
+  el<HTMLElement>("opsBar").hidden = selected.length === 0;
+  document.body.classList.toggle("ops-bar-open", selected.length > 0);
   el<HTMLElement>("selectionCount").textContent = selected.length
     ? `${selected.length} selected`
     : "none selected";
