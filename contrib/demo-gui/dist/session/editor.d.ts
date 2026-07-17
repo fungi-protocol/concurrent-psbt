@@ -1,7 +1,7 @@
 import type { EditViolation, FieldEdit, InspectResponse } from "../shared-frontend/core/backend.js";
 import { type Network } from "./encoding.js";
 export declare const EDIT_SAVE_SEAM = "applyPsbtEdits";
-export type FieldContext = "bitfield" | "sort-mode" | "hex" | "hex32" | "uid" | "integer" | "u32" | "script";
+export type FieldContext = "bitfield" | "unordered-flag" | "sort-mode" | "hex" | "hex32" | "uid" | "integer" | "u32" | "script";
 export declare const TX_MODIFIABLE_KEY_HEX = "06";
 export declare const TX_MODIFIABLE_BITS: readonly [{
     readonly bit: 0;
@@ -17,6 +17,8 @@ export declare function toggledBitfieldValue(value: string, bit: number, checked
 export declare const OUTPUT_UNIQUE_ID_KEY_HEX = "fc0f636f6e63757272656e742d7073627401";
 export declare const SORT_DETERMINISTIC_KEY_HEX = "fc0f636f6e63757272656e742d7073627412";
 export declare const SORT_SEED_KEY_HEX = "fc0f636f6e63757272656e742d7073627411";
+export declare const TX_UNORDERED_KEY_HEX = "fc0f636f6e63757272656e742d7073627410";
+export declare const TX_UNORDERED_SET_HEX = "03";
 export declare const SORT_MODES: readonly [{
     readonly value: "unset";
     readonly label: "unset";

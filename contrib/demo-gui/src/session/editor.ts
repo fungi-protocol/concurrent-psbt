@@ -43,6 +43,8 @@ export type FieldContext =
   | "bitfield" // a raw bitfield byte string (PSBT_GLOBAL_TX_MODIFIABLE): the
   // renderer offers one checkbox per DEFINED bit plus the hex value itself
   // as the escape hatch for bits this program does not (yet) understand
+  | "unordered-flag" // the PSBT_GLOBAL_TX_UNORDERED value bytes: "" (absent)
+  // = ordered, "03" = unordered; rendered as an "ordered" checkbox
   | "sort-mode" // unset | deterministic | explicit
   | "hex" // free-length hex bytes (base64 accepted and converted)
   | "hex32" // exactly 32 bytes
@@ -90,6 +92,14 @@ export const OUTPUT_UNIQUE_ID_KEY_HEX = "fc0f636f6e63757272656e742d7073627401";
 // the seed travels byte-verbatim.
 export const SORT_DETERMINISTIC_KEY_HEX = "fc0f636f6e63757272656e742d7073627412";
 export const SORT_SEED_KEY_HEX = "fc0f636f6e63757272656e742d7073627411";
+
+// PSBT_GLOBAL_TX_UNORDERED (proprietary subtype 0x10): absent on ordered
+// PSBTs, value 0x03 on unordered ones. The editor exposes it as an "ordered"
+// checkbox whose value is the raw entry's bytes — empty (entry absent) means
+// ordered, "03" means unordered, and any other bytes survive verbatim as the
+// escape hatch.
+export const TX_UNORDERED_KEY_HEX = "fc0f636f6e63757272656e742d7073627410";
+export const TX_UNORDERED_SET_HEX = "03";
 export const SORT_MODES = [
   { value: "unset", label: "unset" },
   { value: "deterministic", label: "deterministic (keys derived from the seed)" },
@@ -119,7 +129,8 @@ export interface EditorModel {
   network: Network;
   // Interpretation, not a field: inspect's derived ordering verdict. The
   // editor exposes the underlying records (tx-modifiable bitfield, the
-  // proprietary sort rows), never a stringly "ordering" pseudo-field.
+  // unordered-flag entry, the proprietary sort rows), never a stringly
+  // "ordering" pseudo-field.
   ordering: "ordered" | "unordered" | null;
   sections: EditorSection[];
 }
@@ -152,6 +163,16 @@ export function editorModel(
     asString(txModifiableRaw?.value_hex) ??
     (flags === null ? "" : flags.toString(16).padStart(2, "0"));
 
+  // Same byte-faithful treatment for PSBT_GLOBAL_TX_UNORDERED: the raw
+  // entry's value when the raw maps travel, the interpreted ordering verdict
+  // only as a fallback.
+  const txUnorderedRaw = rawGlobalEntries
+    .map((entry) => asObject(entry))
+    .find((entry) => asString(entry?.key_hex) === TX_UNORDERED_KEY_HEX);
+  const txUnorderedHex =
+    asString(txUnorderedRaw?.value_hex) ??
+    (asString(root?.ordering) === "unordered" ? TX_UNORDERED_SET_HEX : "");
+
   const globalSection: EditorSection = {
     key: "global",
     title: "Global",
@@ -161,6 +182,12 @@ export function editorModel(
         "tx modifiable (PSBT_GLOBAL_TX_MODIFIABLE, hex)",
         txModifiableHex,
         "bitfield",
+      ),
+      field(
+        "global.tx_unordered",
+        "ordered (PSBT_GLOBAL_TX_UNORDERED absent)",
+        txUnorderedHex,
+        "unordered-flag",
       ),
       field(
         "global.sort_mode",
@@ -247,7 +274,14 @@ function rawSections(root: Record<string, unknown> | null): EditorSection[] {
   const raw = asObject(root?.raw);
   if (!raw) return [];
   const sections: EditorSection[] = [];
-  const global = rawSection("raw.global", "Global — raw keymap", asArray(raw.global));
+  const global = rawSection(
+    "raw.global",
+    "Global — raw keymap",
+    asArray(raw.global),
+    // The unordered flag renders (and saves) as the decoded ordered
+    // checkbox; a second editable copy would race it.
+    [TX_UNORDERED_KEY_HEX],
+  );
   if (global) sections.push(global);
   (asArray(raw.inputs) ?? []).forEach((entries, index) => {
     const section = rawSection(
@@ -323,7 +357,8 @@ function rawLabel(map: MapKind, entry: Record<string, unknown> | null): string {
 // Some decoded fields ALSO travel, because they translate into raw entries
 // without client-side re-encoding: global.tx_modifiable -> global 0x06,
 // output.N.unique_id -> the proprietary concurrent-psbt#1 entry of output N
-// (both byte-verbatim; empty deletes the entry), global.sort_mode -> the
+// (both byte-verbatim; empty deletes the entry), global.tx_unordered -> the
+// concurrent-psbt#0x10 entry (empty deletes = ordered), global.sort_mode -> the
 // concurrent-psbt#0x12 entry (its enum IS the value byte; unset deletes),
 // and global.sort_seed -> the concurrent-psbt#0x11 entry (byte-verbatim).
 export function rawEditsForSave(pristine: EditorModel, edited: EditorModel): FieldEdit[] {
@@ -352,6 +387,9 @@ export function rawEditsForSave(pristine: EditorModel, edited: EditorModel): Fie
 export function translatedRawEdit(path: string, value: string): FieldEdit | null {
   if (path === "global.tx_modifiable") {
     return { map: "global", key: TX_MODIFIABLE_KEY_HEX, value: value ? value : null };
+  }
+  if (path === "global.tx_unordered") {
+    return { map: "global", key: TX_UNORDERED_KEY_HEX, value: value ? value : null };
   }
   if (path === "global.sort_mode") {
     const byte = value === "deterministic" ? "01" : value === "explicit" ? "00" : null;
@@ -431,6 +469,7 @@ function canonicalize(text: string, context: FieldContext, network: Network): Ca
       }
       return { value: text, error: "sort mode is unset, deterministic, or explicit", note: null };
     }
+    case "unordered-flag":
     case "hex":
     case "hex32":
     case "uid": {
@@ -532,7 +571,15 @@ export function validateEditor(model: EditorModel): Violation[] {
   const missingUids = model.sections
     .flatMap((section) => section.fields)
     .filter((candidate) => candidate.context === "uid" && !candidate.value && !candidate.error);
-  if (model.ordering === "unordered" && missingUids.length > 0) {
+  // The ordered checkbox is authoritative when present: toggling to
+  // unordered in the dialog must surface the missing-uid violation even
+  // though the inspected verdict said ordered (and vice versa).
+  const txUnordered = fieldAt(model, "global.tx_unordered");
+  const unordered =
+    txUnordered && !txUnordered.error
+      ? txUnordered.value === TX_UNORDERED_SET_HEX
+      : model.ordering === "unordered";
+  if (unordered && missingUids.length > 0) {
     violations.push({
       path: null,
       message: `unordered PSBTs identify outputs by unique id; ${missingUids.length} output(s) have none`,

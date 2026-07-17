@@ -146,6 +146,7 @@ import {
   SORT_MODES,
   toggledBitfieldValue,
   TX_MODIFIABLE_BITS,
+  TX_UNORDERED_SET_HEX,
   validateEditor,
   violationsFromServer,
   type EditorField,
@@ -2893,6 +2894,32 @@ function bitfieldEditorRow(field: EditorField): HTMLElement {
   return row;
 }
 
+// The ordered checkbox: PSBT_GLOBAL_TX_UNORDERED is absent on ordered PSBTs
+// and 0x03 on unordered ones — the checkbox toggles between exactly those two
+// states. Foreign value bytes (neither absent nor 0x03) leave the box
+// unchecked and show verbatim, so toggling is a deliberate overwrite.
+function orderedFlagEditorRow(field: EditorField): HTMLElement {
+  const row = document.createElement("label");
+  row.className = "field-label session-editor-field";
+  row.append(span("", field.label));
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = !field.value && !field.error;
+  box.disabled = Boolean(field.error);
+  box.addEventListener("change", () => {
+    if (!editor) return;
+    editor = applyEdit(editor, field.path, box.checked ? "" : TX_UNORDERED_SET_HEX);
+    renderEditor([]);
+  });
+  row.append(box);
+  if (field.value && field.value !== TX_UNORDERED_SET_HEX) {
+    row.append(span("item-meta", `raw value ${field.value}`));
+  }
+  if (field.error) row.append(span("session-status-error", field.error));
+  if (field.note) row.append(span("item-meta", field.note));
+  return row;
+}
+
 // Sort mode is a three-valued enum (the psbt.md PSBT_GLOBAL_SORT_DETERMINISTIC
 // entry: absent | 0x01 | 0x00) — a select, structured like the tx-modifiable
 // bitfield row, never free text.
@@ -2935,6 +2962,10 @@ function renderEditor(violations: ReturnType<typeof validateEditor>): void {
     for (const field of section.fields) {
       if (field.context === "bitfield") {
         box.append(bitfieldEditorRow(field));
+        continue;
+      }
+      if (field.context === "unordered-flag") {
+        box.append(orderedFlagEditorRow(field));
         continue;
       }
       if (field.context === "sort-mode") {

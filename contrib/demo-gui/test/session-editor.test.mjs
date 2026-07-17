@@ -18,6 +18,8 @@ import {
   toggledBitfieldValue,
   TX_MODIFIABLE_BITS,
   TX_MODIFIABLE_KEY_HEX,
+  TX_UNORDERED_KEY_HEX,
+  TX_UNORDERED_SET_HEX,
   validateEditor,
   violationsFromServer,
 } from "../dist/session/editor.js";
@@ -359,6 +361,79 @@ test("toggledBitfieldValue flips one bit, preserves the rest, refuses garbage", 
   // as a byte and clobbered: the toggle refuses instead.
   assert.equal(toggledBitfieldValue("banana", 0, true), null);
   assert.equal(toggledBitfieldValue("012", 1, true), null); // odd length
+});
+
+test("the ordered checkbox field mirrors PSBT_GLOBAL_TX_UNORDERED byte-faithfully", () => {
+  // No raw maps: the interpreted ordering verdict is the fallback.
+  const unordered = model(); // INSPECT: ordering "unordered"
+  assert.equal(fieldAt(unordered, "global.tx_unordered").value, TX_UNORDERED_SET_HEX);
+  assert.equal(fieldAt(unordered, "global.tx_unordered").context, "unordered-flag");
+  const ordered = editorModel("psbt-1", { ...INSPECT, ordering: "ordered" }, "regtest");
+  assert.equal(fieldAt(ordered, "global.tx_unordered").value, "");
+
+  // With raw maps the entry's bytes win and the raw row collapses into the
+  // decoded field (a second editable copy would race it).
+  const withRaw = editorModel(
+    "psbt-1",
+    {
+      ...INSPECT,
+      ordering: "ordered", // stale verdict loses to the raw bytes
+      raw: {
+        global: [
+          {
+            key_hex: TX_UNORDERED_KEY_HEX,
+            value_hex: "03",
+            key_type: 252,
+            key_data_hex: TX_UNORDERED_KEY_HEX.slice(2),
+            kind: "proprietary",
+            proprietary: { prefix_utf8: "concurrent-psbt", subtype: 16, key_data_hex: "" },
+          },
+        ],
+        inputs: [[]],
+        outputs: [[], []],
+      },
+    },
+    "regtest",
+  );
+  assert.equal(fieldAt(withRaw, "global.tx_unordered").value, "03");
+  assert.equal(fieldAt(withRaw, `raw.global.${TX_UNORDERED_KEY_HEX}`), null);
+});
+
+test("ordered-checkbox edits travel as the TX_UNORDERED raw-keymap edit", () => {
+  // Unordered -> ordered: clearing the value deletes the entry on save.
+  const pristine = model();
+  let edited = applyEdit(model(), "global.tx_unordered", "");
+  assert.deepEqual(rawEditsForSave(pristine, edited), [
+    { map: "global", key: TX_UNORDERED_KEY_HEX, value: null },
+  ]);
+  assert.deepEqual(decodedEditsLeftBehind(pristine, edited), []);
+
+  // Ordered -> unordered: the 0x03 marker byte travels.
+  const orderedPristine = editorModel("psbt-1", { ...INSPECT, ordering: "ordered" }, "regtest");
+  edited = applyEdit(
+    editorModel("psbt-1", { ...INSPECT, ordering: "ordered" }, "regtest"),
+    "global.tx_unordered",
+    TX_UNORDERED_SET_HEX,
+  );
+  assert.deepEqual(rawEditsForSave(orderedPristine, edited), [
+    { map: "global", key: TX_UNORDERED_KEY_HEX, value: TX_UNORDERED_SET_HEX },
+  ]);
+});
+
+test("validation follows the ordered checkbox, not the stale inspect verdict", () => {
+  // INSPECT is unordered with one output missing a uid; toggling the
+  // checkbox to ordered clears the missing-uid demand…
+  const toggledOrdered = applyEdit(model(), "global.tx_unordered", "");
+  assert.deepEqual(validateEditor(toggledOrdered), []);
+  // …and toggling an ordered fragment to unordered raises it.
+  const toggledUnordered = applyEdit(
+    editorModel("psbt-1", { ...INSPECT, ordering: "ordered" }, "regtest"),
+    "global.tx_unordered",
+    TX_UNORDERED_SET_HEX,
+  );
+  assert.ok(
+    validateEditor(toggledUnordered).some((violation) => /unique id/.test(violation.message)),
+  );
 });
 
 test("the proprietary unique-id raw row collapses into the decoded field", () => {
