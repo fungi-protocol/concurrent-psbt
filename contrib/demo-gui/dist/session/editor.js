@@ -29,6 +29,7 @@
 // - Edits NEVER mutate the source fragment: a saved edit mints a NEW
 //   fragment (grow-only, like every other operation result).
 import { asArray, asNumber, asObject, asString } from "./state.js";
+import { proprietaryFieldName } from "./display.js";
 import { bytesToHex, parseFlexible } from "./encoding.js";
 // The Backend seam method the save path drives (the field-edit route:
 // psbt + raw-keymap edits -> validated, re-encoded psbt). Named here so the
@@ -192,7 +193,7 @@ function rawSection(key, title, entries, collapsedKeys = []) {
         const kind = asString(entry?.kind) ?? "unknown";
         if (kind === "known")
             continue; // already shown as a decoded field
-        const row = field(`${key}.${keyHex}`, rawLabel(entry), asString(entry?.value_hex) ?? "", "hex");
+        const row = field(`${key}.${keyHex}`, rawLabel(mapKind(key), entry), asString(entry?.value_hex) ?? "", "hex");
         row.note = "clearing the value deletes the entry on save";
         fields.push(row);
     }
@@ -200,13 +201,23 @@ function rawSection(key, title, entries, collapsedKeys = []) {
         return null;
     return { key, title, fields };
 }
-function rawLabel(entry) {
+function mapKind(sectionKey) {
+    if (sectionKey.startsWith("raw.input"))
+        return "input";
+    if (sectionKey.startsWith("raw.output"))
+        return "output";
+    return "global";
+}
+function rawLabel(map, entry) {
     const kind = asString(entry?.kind) ?? "unknown";
     const keyType = asNumber(entry?.key_type);
     if (kind === "proprietary") {
         const proprietary = asObject(entry?.proprietary);
         const prefix = asString(proprietary?.prefix_utf8) ?? asString(proprietary?.prefix_hex);
         const subtype = asNumber(proprietary?.subtype);
+        const name = proprietaryFieldName(map, prefix, subtype);
+        if (name !== null)
+            return name;
         if (prefix !== null && subtype !== null) {
             return `proprietary ${prefix} #${subtype}`;
         }

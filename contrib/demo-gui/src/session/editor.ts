@@ -31,6 +31,7 @@
 
 import type { EditViolation, FieldEdit, InspectResponse } from "../shared-frontend/core/backend.js";
 import { asArray, asNumber, asObject, asString } from "./state.js";
+import { proprietaryFieldName, type MapKind } from "./display.js";
 import { bytesToHex, parseFlexible, type Network } from "./encoding.js";
 
 // The Backend seam method the save path drives (the field-edit route:
@@ -284,7 +285,7 @@ function rawSection(
     if (collapsedKeys.includes(keyHex)) continue;
     const kind = asString(entry?.kind) ?? "unknown";
     if (kind === "known") continue; // already shown as a decoded field
-    const row = field(`${key}.${keyHex}`, rawLabel(entry), asString(entry?.value_hex) ?? "", "hex");
+    const row = field(`${key}.${keyHex}`, rawLabel(mapKind(key), entry), asString(entry?.value_hex) ?? "", "hex");
     row.note = "clearing the value deletes the entry on save";
     fields.push(row);
   }
@@ -292,13 +293,21 @@ function rawSection(
   return { key, title, fields };
 }
 
-function rawLabel(entry: Record<string, unknown> | null): string {
+function mapKind(sectionKey: string): MapKind {
+  if (sectionKey.startsWith("raw.input")) return "input";
+  if (sectionKey.startsWith("raw.output")) return "output";
+  return "global";
+}
+
+function rawLabel(map: MapKind, entry: Record<string, unknown> | null): string {
   const kind = asString(entry?.kind) ?? "unknown";
   const keyType = asNumber(entry?.key_type);
   if (kind === "proprietary") {
     const proprietary = asObject(entry?.proprietary);
     const prefix = asString(proprietary?.prefix_utf8) ?? asString(proprietary?.prefix_hex);
     const subtype = asNumber(proprietary?.subtype);
+    const name = proprietaryFieldName(map, prefix, subtype);
+    if (name !== null) return name;
     if (prefix !== null && subtype !== null) {
       return `proprietary ${prefix} #${subtype}`;
     }

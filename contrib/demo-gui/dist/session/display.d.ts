@@ -127,6 +127,8 @@ export interface RawKeymapSection {
     title: string;
     entries: RawKeymapEntry[];
 }
+export type MapKind = "global" | "input" | "output";
+export declare function proprietaryFieldName(map: MapKind, prefix: string | null, subtype: number | null): string | null;
 export declare function rawKeymapSections(inspect: InspectResponse | null): RawKeymapSection[];
 export type DetailLevel = "collapsed" | "grouped" | "expanded";
 export declare const DETAIL_LEVELS: readonly DetailLevel[];

@@ -915,7 +915,47 @@ const OUTPUT_KEYTYPE_NAMES: Record<string, string> = {
   fc: "PSBT_OUT_PROPRIETARY",
 };
 
-function rawKeymapEntries(map: unknown, names: Record<string, string>): RawKeymapEntry[] {
+/// The three PSBT map kinds; proprietary subtypes are scoped per kind.
+export type MapKind = "global" | "input" | "output";
+
+// psbt.md proprietary subtypes under the concurrent-psbt prefix, per map
+// kind. Named entries render by spec field name; an unnamed subtype falls
+// back to the generic `prefix#subtype` annotation.
+const CONCURRENT_PSBT_FIELD_NAMES: Record<MapKind, Record<number, string>> = {
+  global: {
+    0x10: "PSBT_GLOBAL_TX_UNORDERED",
+    0x11: "PSBT_GLOBAL_SORT_SEED",
+    0x12: "PSBT_GLOBAL_SORT_DETERMINISTIC",
+    0x20: "PSBT_GLOBAL_PAYMENT",
+    0x21: "PSBT_GLOBAL_CONFIRMATION",
+    0x22: "PSBT_GLOBAL_EXPLICIT_FEE_CONTRIBUTION",
+    0x23: "PSBT_GLOBAL_REMOVED_INPUT",
+    0x24: "PSBT_GLOBAL_REMOVED_OUTPUT",
+  },
+  input: {
+    0x10: "PSBT_IN_SORT_KEY",
+    0x11: "PSBT_IN_UNIQUE_ID",
+  },
+  output: {
+    0x01: "PSBT_OUT_UNIQUE_ID",
+    0x10: "PSBT_OUT_SORT_KEY",
+  },
+};
+
+export function proprietaryFieldName(
+  map: MapKind,
+  prefix: string | null,
+  subtype: number | null,
+): string | null {
+  if (prefix !== "concurrent-psbt" || subtype === null) return null;
+  return CONCURRENT_PSBT_FIELD_NAMES[map][subtype] ?? null;
+}
+
+function rawKeymapEntries(
+  map: unknown,
+  mapKind: MapKind,
+  names: Record<string, string>,
+): RawKeymapEntry[] {
   const entries: RawKeymapEntry[] = [];
   for (const rawEntry of asArray(map) ?? []) {
     const object = asObject(rawEntry);
@@ -935,7 +975,7 @@ function rawKeymapEntries(map: unknown, names: Record<string, string>): RawKeyma
       // the annotation must never contradict the kind.
       name:
         kind === "proprietary" && prefix !== null
-          ? `${prefix}#${subtype ?? "?"}`
+          ? (proprietaryFieldName(mapKind, prefix, subtype) ?? `${prefix}#${subtype ?? "?"}`)
           : kind === "known"
             ? (names[keyHex.slice(0, 2).toLowerCase()] ?? null)
             : null,
@@ -948,13 +988,13 @@ export function rawKeymapSections(inspect: InspectResponse | null): RawKeymapSec
   const raw = asObject(asObject(inspect)?.raw);
   if (!raw) return [];
   const sections: RawKeymapSection[] = [
-    { title: "global map", entries: rawKeymapEntries(raw.global, GLOBAL_KEYTYPE_NAMES) },
+    { title: "global map", entries: rawKeymapEntries(raw.global, "global", GLOBAL_KEYTYPE_NAMES) },
   ];
   (asArray(raw.inputs) ?? []).forEach((map, index) => {
-    sections.push({ title: `input map ${index}`, entries: rawKeymapEntries(map, INPUT_KEYTYPE_NAMES) });
+    sections.push({ title: `input map ${index}`, entries: rawKeymapEntries(map, "input", INPUT_KEYTYPE_NAMES) });
   });
   (asArray(raw.outputs) ?? []).forEach((map, index) => {
-    sections.push({ title: `output map ${index}`, entries: rawKeymapEntries(map, OUTPUT_KEYTYPE_NAMES) });
+    sections.push({ title: `output map ${index}`, entries: rawKeymapEntries(map, "output", OUTPUT_KEYTYPE_NAMES) });
   });
   return sections;
 }

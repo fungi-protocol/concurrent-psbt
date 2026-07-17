@@ -453,7 +453,7 @@ test("rawKeymapSections: the three map kinds, faithful to serialization order", 
       "PSBT_GLOBAL_TX_MODIFIABLE",
       "PSBT_GLOBAL_VERSION",
       "PSBT_GLOBAL_INPUT_COUNT",
-      "concurrent-psbt#16",
+      "PSBT_GLOBAL_TX_UNORDERED",
     ],
   );
 
