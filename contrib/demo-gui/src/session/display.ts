@@ -748,11 +748,6 @@ export function fragmentCardModel(
   };
 }
 
-// Elision helper for the shell: show `shown` rows, elide the rest by count.
-export function elisionLabel(shown: number, total: number): string | null {
-  return total > shown ? `+${total - shown} more` : null;
-}
-
 // ---------------------------------------------------------------------------
 // Expanded row detail — everything inspect knows about ONE input/output.
 // ---------------------------------------------------------------------------

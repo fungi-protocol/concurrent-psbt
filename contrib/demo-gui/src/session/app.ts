@@ -55,7 +55,6 @@ import {
   amountBits,
   amountSpanParts,
   DETAIL_LEVELS,
-  elisionLabel,
   fragmentBadges,
   fragmentCardModel,
   groupAggregate,
@@ -1752,9 +1751,6 @@ function renderCanvas(): void {
 
 // --- fragment cards --------------------------------------------------------------
 
-const INPUT_ROWS_SHOWN = 3;
-const OUTPUT_ROWS_SHOWN = 3;
-
 // Single-session focus: the register's value as a flat card list (the
 // canvas is hidden; this list is the whole view).
 function renderFocusFragments(): void {
@@ -1894,19 +1890,14 @@ function renderFragmentCard(fragment: SessionFragment): HTMLElement {
         inputColumn.append(span("session-column-heading", "inputs"));
         outputColumn.append(span("session-column-heading", "outputs"));
       }
-      for (const input of group.inputs.slice(0, INPUT_ROWS_SHOWN)) {
+      for (const input of group.inputs) {
         const expanded = rowExpanded(fragment.key, "input", input.index);
         inputColumn.append(coinRow(fragment, "input", input.index, inputRow(input, expanded), expanded));
       }
-      const inputsHidden = elisionLabel(INPUT_ROWS_SHOWN, group.inputs.length);
-      if (inputsHidden) inputColumn.append(span("item-meta session-elided", `inputs ${inputsHidden}`));
-
-      for (const output of group.outputs.slice(0, OUTPUT_ROWS_SHOWN)) {
+      for (const output of group.outputs) {
         const expanded = rowExpanded(fragment.key, "output", output.index);
         outputColumn.append(coinRow(fragment, "output", output.index, outputRow(output, expanded), expanded));
       }
-      const outputsHidden = elisionLabel(OUTPUT_ROWS_SHOWN, group.outputs.length);
-      if (outputsHidden) outputColumn.append(span("item-meta session-elided", `outputs ${outputsHidden}`));
       columns.append(inputColumn, outputColumn);
       groupNode.append(columns);
     }

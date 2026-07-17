@@ -551,10 +551,6 @@ export function fragmentCardModel(inspect, network, provenance, dimension = "pro
         balance: balanceSheet(summary, inspect),
     };
 }
-// Elision helper for the shell: show `shown` rows, elide the rest by count.
-export function elisionLabel(shown, total) {
-    return total > shown ? `+${total - shown} more` : null;
-}
 // An address-bearing fact is ONE fact with up to three representations:
 // the address (base58/bech32, when the script encodes one), the raw script
 // hex, and the decoded opcodes. First entry = what the fact shows by

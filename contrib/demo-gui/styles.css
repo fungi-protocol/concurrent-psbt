@@ -2506,10 +2506,6 @@ h2 {
   cursor: help;
 }
 
-.session-elided {
-  font-size: 12px;
-}
-
 /* Wire mode: the armed source, admissible targets, blocked pairs. */
 
 .session-wire-status {

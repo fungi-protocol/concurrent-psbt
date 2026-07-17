@@ -9,7 +9,6 @@ import {
   cardGroups,
   declaredFeeSatsFromInspect,
   decodeScript,
-  elisionLabel,
   feeLine,
   formatFeeRate,
   fragmentBadges,
@@ -292,12 +291,6 @@ test("fragmentBadges: undecoded fragments degrade honestly", () => {
     badges.map((badgeView) => badgeView.emoji),
     [null, null],
   );
-});
-
-test("elisionLabel counts what the card hides", () => {
-  assert.equal(elisionLabel(3, 10), "+7 more");
-  assert.equal(elisionLabel(3, 3), null);
-  assert.equal(elisionLabel(5, 2), null);
 });
 
 // --- expanded row detail (rowDetailPairs) -----------------------------------

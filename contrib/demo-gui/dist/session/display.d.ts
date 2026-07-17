@@ -105,7 +105,6 @@ export interface FragmentCardModel {
     balance: BalanceSheet;
 }
 export declare function fragmentCardModel(inspect: InspectResponse | null, network: Network, provenance?: ProvenanceMap, dimension?: GroupingDimension): FragmentCardModel;
-export declare function elisionLabel(shown: number, total: number): string | null;
 export interface RowDetailPair {
     label: string;
     value: string;
