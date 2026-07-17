@@ -10,7 +10,7 @@ export interface SessionObject {
     name: string;
     contentKey: string | null;
     peerKeys: string[];
-    replicas: Record<string, string>;
+    replicas: Record<string, string[]>;
 }
 export interface PeerObject {
     key: string;

@@ -78,12 +78,15 @@ export interface SessionObject {
   contentKey: string | null;
   peerKeys: string[];
   // What each authorized peer's REPLICA is known to hold (peer key → the
-  // register value last delivered to or received from it). Distribution is
-  // need-based, not a button: a replica whose marker differs from
-  // contentKey cannot compute the same LUB, so the shell broadcasts to it
-  // as soon as the register changes (and a freshly authorized peer, having
-  // no marker, receives the current value the same way).
-  replicas: Record<string, string>;
+  // register values delivered to or received from it). GROW-ONLY, like
+  // everything else here: a delivery only ever adds to what a replica is
+  // known to hold, so out-of-order settles commute and stale knowledge is
+  // never overwritten by an older in-flight delivery. Distribution is
+  // need-based, not a button: a replica not known to hold contentKey
+  // cannot compute the same LUB, so the shell broadcasts to it as soon as
+  // the register changes (and a freshly authorized peer, holding nothing,
+  // receives the current value the same way).
+  replicas: Record<string, string[]>;
 }
 
 // A peer is the other end of a configured transport: an iroh ticket, an
@@ -391,16 +394,21 @@ export function authorizePeerOnSession(
 // The authorized peers whose replicas are not known to hold the register's
 // current value — the peers a change must be broadcast to before every
 // replica can compute the same LUB. Empty registers have nothing to
-// distribute; a peer with no marker (never delivered to) is stale.
+// distribute; a peer holding nothing (never delivered to) is stale.
 export function staleReplicaPeers(session: SessionObject): string[] {
-  if (!session.contentKey) return [];
-  return session.peerKeys.filter((peerKey) => session.replicas[peerKey] !== session.contentKey);
+  const contentKey = session.contentKey;
+  if (!contentKey) return [];
+  return session.peerKeys.filter(
+    (peerKey) => !(session.replicas[peerKey] ?? []).includes(contentKey),
+  );
 }
 
 // Record a delivery (or a receipt): these peers' replicas now hold the
-// fragment. Grow-only knowledge — markers are only ever overwritten by
-// newer deliveries, never cleared; staleness is DERIVED by comparison with
-// contentKey, so a register advance implicitly re-flags every peer.
+// fragment. Grow-only knowledge — a delivery only ever ADDS to what a
+// replica is known to hold (settles of concurrent broadcasts commute; an
+// older delivery landing late can never erase a newer one). Staleness is
+// DERIVED against contentKey, so a register advance implicitly re-flags
+// every peer.
 export function markReplicas(
   state: ObjectsState,
   sessionKey: string,
@@ -412,7 +420,10 @@ export function markReplicas(
     sessions: state.sessions.map((session) => {
       if (session.key !== sessionKey) return session;
       const replicas = { ...session.replicas };
-      for (const peerKey of peerKeys) replicas[peerKey] = fragmentKey;
+      for (const peerKey of peerKeys) {
+        const held = replicas[peerKey] ?? [];
+        if (!held.includes(fragmentKey)) replicas[peerKey] = [...held, fragmentKey];
+      }
       return { ...session, replicas };
     }),
   };
@@ -505,7 +516,7 @@ export function forkSession(
     contentKey,
     peerKeys: [...source.peerKeys],
     // Peers still hold the ABORTED session's value: the carried-over
-    // markers differ from the forked content, so the shell re-broadcasts.
+    // holdings lack the forked content, so the shell re-broadcasts.
     replicas: { ...source.replicas },
   };
   return {
@@ -543,6 +554,20 @@ export interface SessionMergeResult {
   notes: string[];
 }
 
+// ⊔ of two replica maps: per-peer union of held values. Both inputs are
+// grow-only knowledge, so the merge is their join — never a pick.
+function unionReplicas(
+  left: Record<string, string[]>,
+  right: Record<string, string[]>,
+): Record<string, string[]> {
+  const union = { ...left };
+  for (const [peerKey, held] of Object.entries(right)) {
+    const existing = union[peerKey] ?? [];
+    union[peerKey] = [...existing, ...held.filter((key) => !existing.includes(key))];
+  }
+  return union;
+}
+
 export function mergeSessions(
   state: ObjectsState,
   leftKey: string,
@@ -567,10 +592,10 @@ export function mergeSessions(
     // both do, the shell writes the joined result over this.
     contentKey: left.contentKey ?? right.contentKey,
     peerKeys: [...left.peerKeys, ...right.peerKeys.filter((key) => !left.peerKeys.includes(key))],
-    // Marker union (left wins ties): whatever a peer held, it holds — any
-    // marker differing from the merged content reads as stale, which is
-    // exactly right after a merge.
-    replicas: { ...right.replicas, ...left.replicas },
+    // Holdings union, per peer: whatever a peer held, it holds — a replica
+    // not holding the merged content reads as stale, which is exactly
+    // right after a merge.
+    replicas: unionReplicas(left.replicas, right.replicas),
   };
   return {
     state: {

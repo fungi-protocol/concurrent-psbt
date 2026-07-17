@@ -168,21 +168,29 @@ test("replica markers make distribution need-based: staleness is derived", () =>
   assert.deepEqual(staleReplicaPeers(sessionByKey(state, "session-1")), ["peer-b"]);
   state = markReplicas(state, "session-1", ["peer-b"], "psbt-1");
   assert.deepEqual(staleReplicaPeers(sessionByKey(state, "session-1")), []);
-  // A register advance implicitly re-flags every peer: markers are grow-only
+  // A register advance implicitly re-flags every peer: holdings are grow-only
   // knowledge, staleness is DERIVED by comparison with the content.
   state = writeSessionContent(state, "session-1", "psbt-2");
   assert.deepEqual(staleReplicaPeers(sessionByKey(state, "session-1")), ["peer-a", "peer-b"]);
-  // A fork carries the markers: peers hold the ABORTED session's value, so
-  // the forked register (new content) reads them as behind.
+  // Deliveries UNION into the holdings — an older broadcast settling late
+  // can never erase the knowledge that a replica holds the newer value.
   state = markReplicas(state, "session-1", ["peer-a", "peer-b"], "psbt-2");
+  state = markReplicas(state, "session-1", ["peer-a"], "psbt-1"); // stale settle, out of order
+  assert.deepEqual(sessionByKey(state, "session-1").replicas["peer-a"], ["psbt-1", "psbt-2"]);
+  assert.deepEqual(staleReplicaPeers(sessionByKey(state, "session-1")), []);
+  // …and marking a value already held is a no-op (idempotent join).
+  state = markReplicas(state, "session-1", ["peer-a"], "psbt-2");
+  assert.deepEqual(sessionByKey(state, "session-1").replicas["peer-a"], ["psbt-1", "psbt-2"]);
+  // A fork carries the holdings: peers hold the ABORTED session's value, so
+  // the forked register (new content) reads them as behind.
   const fork = forkSession(state, "session-1", "psbt-9");
-  assert.equal(fork.forked.replicas["peer-a"], "psbt-2");
+  assert.ok(fork.forked.replicas["peer-b"].includes("psbt-2"));
   assert.deepEqual(staleReplicaPeers(fork.forked), ["peer-a", "peer-b"]);
   // Unknown session keys are a no-op, not a throw.
   assert.deepEqual(markReplicas(state, "session-404", ["peer-a"], "x"), state);
 });
 
-test("merged sessions union replica markers, left wins ties", () => {
+test("merged sessions union replica holdings per peer — a join, not a pick", () => {
   let state = emptyObjects();
   state = mintSession(state, "L").state; // session-1
   state = mintSession(state, "R").state; // session-2
@@ -191,12 +199,13 @@ test("merged sessions union replica markers, left wins ties", () => {
   state = markReplicas(state, "session-1", ["peer-x", "peer-shared"], "psbt-1");
   state = markReplicas(state, "session-2", ["peer-y", "peer-shared"], "psbt-2");
   const merged = mergeSessions(state, "session-1", "session-2").merged;
-  // Whatever a peer held, it holds; any marker differing from the merged
-  // content derives as stale, which is exactly right after a merge.
+  // Whatever a peer held, it holds — BOTH sides for a shared peer; any
+  // replica not holding the merged content derives as stale, which is
+  // exactly right after a merge.
   assert.deepEqual(merged.replicas, {
-    "peer-y": "psbt-2",
-    "peer-x": "psbt-1",
-    "peer-shared": "psbt-1",
+    "peer-x": ["psbt-1"],
+    "peer-y": ["psbt-2"],
+    "peer-shared": ["psbt-1", "psbt-2"],
   });
 });
 
