@@ -7,12 +7,25 @@ use psbt_v2::v2::Output;
 use crate::collections::hashmap::{HashMapExt, ResultHashMapExt};
 use crate::lattice::join::Join;
 
+use super::SetLen;
 use super::output::{OutputExt, OutputUniqueIdExt, ResultOutput, UniqueId};
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct OutputSet(HashMap<UniqueId, Output>);
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ResultOutputSet(pub(crate) HashMap<UniqueId, ResultOutput>);
+
+impl SetLen for OutputSet {
+    fn len(&self) -> usize {
+        OutputSet::len(self)
+    }
+}
+
+impl SetLen for ResultOutputSet {
+    fn len(&self) -> usize {
+        ResultOutputSet::len(self)
+    }
+}
 
 impl OutputSet {
     /// Insert an output known to be fresh, keyed by its unique ID.
