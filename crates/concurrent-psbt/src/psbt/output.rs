@@ -120,6 +120,39 @@ impl OutputUniqueIdExt for Output {
     }
 }
 
+/// Subtype for `PSBT_OUT_SORT_KEY`.
+///
+/// Up to 32 bytes of arbitrary data used as a lexicographic sort key.
+/// Must be distinct across all outputs in a PSBT.
+pub const PSBT_OUT_SORT_KEY_SUBTYPE: u8 = 0x10;
+
+/// Extension trait on [`psbt_v2::v2::Output`] for accessing the sort key proprietary field.
+pub trait OutputSortKeyExt {
+    /// Get the sort key, if set.
+    fn sort_key(&self) -> Option<&[u8]>;
+    /// Set the sort key.
+    fn set_sort_key(&mut self, key: Vec<u8>);
+}
+
+impl OutputSortKeyExt for Output {
+    fn sort_key(&self) -> Option<&[u8]> {
+        let key = psbt_v2::raw::ProprietaryKey {
+            prefix: crate::PROPRIETARY_PREFIX.to_vec(),
+            subtype: PSBT_OUT_SORT_KEY_SUBTYPE,
+            key: vec![],
+        };
+        self.proprietaries.get(&key).map(|v| v.as_slice())
+    }
+
+    fn set_sort_key(&mut self, sort_key: Vec<u8>) {
+        let key = psbt_v2::raw::ProprietaryKey {
+            prefix: crate::PROPRIETARY_PREFIX.to_vec(),
+            subtype: PSBT_OUT_SORT_KEY_SUBTYPE,
+            key: vec![],
+        };
+        self.proprietaries.insert(key, sort_key);
+    }
+}
 pub use super::output_set::{OutputSet, ResultOutputSet};
 
 #[cfg(test)]
@@ -316,6 +349,14 @@ mod tests {
                     a.clone().join(b.clone()).join(c.clone()),
                     a.join(b.join(c)),
                 );
+            }
+
+            #[test]
+            fn sort_key_roundtrips(key in proptest::collection::vec(any::<u8>(), 0..=32)) {
+                let mut output = Output::default();
+                prop_assert_eq!(output.sort_key(), None);
+                output.set_sort_key(key.clone());
+                prop_assert_eq!(output.sort_key(), Some(key.as_slice()));
             }
         }
     }

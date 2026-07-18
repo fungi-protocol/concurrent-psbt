@@ -36,6 +36,92 @@ joinable_struct! {
     }
 }
 
+/// Subtype for `PSBT_GLOBAL_TX_UNORDERED`.
+///
+/// Value is `0x03` when set, indicating both inputs and outputs are unordered.
+pub const PSBT_GLOBAL_TX_UNORDERED_SUBTYPE: u8 = 0x10;
+
+/// Subtype for `PSBT_GLOBAL_SORT_SEED`.
+///
+/// At least 128 bits of randomness (or a protocol transcript commitment)
+/// used to derive deterministic sort keys.
+pub const PSBT_GLOBAL_SORT_SEED_SUBTYPE: u8 = 0x11;
+
+/// Subtype for `PSBT_GLOBAL_SORT_DETERMINISTIC`.
+///
+/// `0x01` = sort keys derived from seed (explicit keys MUST NOT be set).
+/// `0x00` = explicit sort keys required.
+pub const PSBT_GLOBAL_SORT_DETERMINISTIC_SUBTYPE: u8 = 0x12;
+
+fn proprietary_key(subtype: u8) -> raw::ProprietaryKey {
+    raw::ProprietaryKey {
+        prefix: crate::PROPRIETARY_PREFIX.to_vec(),
+        subtype,
+        key: vec![],
+    }
+}
+
+/// Extension trait on [`Global`] for accessing sort-related proprietary fields.
+pub trait GlobalSortExt {
+    /// Return `true` if `PSBT_GLOBAL_TX_UNORDERED` is set to `0x03`.
+    fn is_unordered(&self) -> bool;
+    /// Get the sort seed, if set.
+    fn sort_seed(&self) -> Option<&[u8]>;
+    /// Set the sort seed.
+    fn set_sort_seed(&mut self, seed: Vec<u8>);
+    /// Get the `PSBT_GLOBAL_SORT_DETERMINISTIC` value, if set.
+    fn sort_deterministic(&self) -> Option<u8>;
+    /// Set `PSBT_GLOBAL_SORT_DETERMINISTIC`.
+    fn set_sort_deterministic(&mut self, mode: u8);
+    /// Set `PSBT_GLOBAL_TX_UNORDERED` to `0x03`.
+    fn set_unordered(&mut self);
+    /// Clear `PSBT_GLOBAL_TX_UNORDERED` (remove the field).
+    fn clear_unordered(&mut self);
+}
+
+impl GlobalSortExt for Global {
+    fn is_unordered(&self) -> bool {
+        self.proprietaries
+            .get(&proprietary_key(PSBT_GLOBAL_TX_UNORDERED_SUBTYPE))
+            .is_some_and(|v| v.as_slice() == [0x03])
+    }
+
+    fn sort_seed(&self) -> Option<&[u8]> {
+        self.proprietaries
+            .get(&proprietary_key(PSBT_GLOBAL_SORT_SEED_SUBTYPE))
+            .map(|v| v.as_slice())
+    }
+
+    fn set_sort_seed(&mut self, seed: Vec<u8>) {
+        self.proprietaries
+            .insert(proprietary_key(PSBT_GLOBAL_SORT_SEED_SUBTYPE), seed);
+    }
+
+    fn sort_deterministic(&self) -> Option<u8> {
+        self.proprietaries
+            .get(&proprietary_key(PSBT_GLOBAL_SORT_DETERMINISTIC_SUBTYPE))
+            .and_then(|v| v.first().copied())
+    }
+
+    fn set_sort_deterministic(&mut self, mode: u8) {
+        self.proprietaries.insert(
+            proprietary_key(PSBT_GLOBAL_SORT_DETERMINISTIC_SUBTYPE),
+            vec![mode],
+        );
+    }
+
+    fn set_unordered(&mut self) {
+        self.proprietaries.insert(
+            proprietary_key(PSBT_GLOBAL_TX_UNORDERED_SUBTYPE),
+            vec![0x03],
+        );
+    }
+
+    fn clear_unordered(&mut self) {
+        self.proprietaries
+            .remove(&proprietary_key(PSBT_GLOBAL_TX_UNORDERED_SUBTYPE));
+    }
+}
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -74,6 +160,23 @@ mod tests {
             let joined = a.wrap().join(b.wrap());
             assert!(!joined.is_ok());
             assert!(joined.try_unwrap().is_err());
+        }
+
+        #[test]
+        fn sort_metadata_roundtrips_and_clears() {
+            let mut global = Global::default();
+            assert!(!global.is_unordered());
+            assert_eq!(global.sort_deterministic(), None);
+
+            global.set_unordered();
+            global.set_sort_seed(vec![1, 2, 3]);
+            global.set_sort_deterministic(2);
+
+            assert!(global.is_unordered());
+            assert_eq!(global.sort_seed(), Some([1, 2, 3].as_slice()));
+            assert_eq!(global.sort_deterministic(), Some(2));
+            global.clear_unordered();
+            assert!(!global.is_unordered());
         }
     }
 
@@ -186,6 +289,25 @@ mod tests {
                 } else {
                     prop_assert!(a.try_unwrap().is_err());
                 }
+            }
+
+            #[test]
+            fn sort_metadata_roundtrips(
+                seed in proptest::collection::vec(any::<u8>(), 0..=32),
+                mode in any::<u8>(),
+            ) {
+                let mut global = Global::default();
+                prop_assert!(!global.is_unordered());
+
+                global.set_unordered();
+                global.set_sort_seed(seed.clone());
+                global.set_sort_deterministic(mode);
+
+                prop_assert!(global.is_unordered());
+                prop_assert_eq!(global.sort_seed(), Some(seed.as_slice()));
+                prop_assert_eq!(global.sort_deterministic(), Some(mode));
+                global.clear_unordered();
+                prop_assert!(!global.is_unordered());
             }
         }
     }
