@@ -1,0 +1,16 @@
+name: Nextest (Darwin)
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  nextest:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Run nextest
+        run: nix build --no-update-lock-file '.#checks.aarch64-darwin.tests-nightly-dev'
