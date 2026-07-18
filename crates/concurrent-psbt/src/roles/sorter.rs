@@ -36,6 +36,22 @@ fn derive_sort_key(seed: &[u8], id: &[u8]) -> [u8; 32] {
 #[derive(Debug)]
 pub struct Deterministic;
 
+/// The spec minimum for `PSBT_GLOBAL_SORT_SEED` under deterministic ordering:
+/// "`PSBT_GLOBAL_SORT_SEED` MUST be set and contain at least 128 bits of
+/// randomness" when `PSBT_GLOBAL_SORT_DETERMINISTIC` is `0x01`. Length is the
+/// only property a validator can check; 16 bytes carries 128 bits at most.
+pub const SPEC_MIN_SEED_BYTES: usize = 16;
+
+/// Whether the deterministic sorter enforces the spec's 128-bit seed minimum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SeedPolicy {
+    /// Reject seeds shorter than [`SPEC_MIN_SEED_BYTES`] (the spec MUST).
+    #[default]
+    RequireSpecMinimum,
+    /// Accept seeds below the spec minimum (explicit override).
+    AllowBelowSpecMinimum,
+}
+
 /// Sort mode: ordering determined by explicit sort key fields on each input/output.
 #[derive(Debug)]
 pub struct ExplicitSortKeys;
@@ -85,6 +101,8 @@ pub enum SortError {
     DuplicateSortKey(Vec<u8>),
     /// Sort seed is required but not set.
     MissingSortSeed,
+    /// Sort seed is shorter than the spec minimum (actual byte length).
+    SeedBelowSpecMinimum(usize),
 }
 
 impl std::fmt::Display for SortError {
@@ -100,6 +118,12 @@ impl std::fmt::Display for SortError {
                 write!(f, "duplicate sort key: {encoded}")
             }
             Self::MissingSortSeed => write!(f, "PSBT_GLOBAL_SORT_SEED not set"),
+            Self::SeedBelowSpecMinimum(len) => write!(
+                f,
+                "PSBT_GLOBAL_SORT_SEED is {len} byte{}; deterministic ordering \
+                 requires at least 128 bits (16 bytes) of randomness",
+                if *len == 1 { "" } else { "s" },
+            ),
         }
     }
 }
@@ -236,14 +260,28 @@ impl Sorter<Deterministic> {
     /// and produce an ordered BIP 370 [`Psbt`].
     ///
     /// # Errors
-    /// Returns [`SortError::MissingSortSeed`] if `PSBT_GLOBAL_SORT_SEED` is not set.
+    /// Returns [`SortError::MissingSortSeed`] if the seed is absent, or
+    /// [`SortError::SeedBelowSpecMinimum`] if it is shorter than 16 bytes.
     pub fn into_ordered_psbt(self) -> Result<Psbt, SortError> {
+        self.into_ordered_psbt_with(SeedPolicy::RequireSpecMinimum)
+    }
+
+    /// Apply deterministic ordering under an explicit [`SeedPolicy`].
+    ///
+    /// # Errors
+    /// Returns [`SortError::MissingSortSeed`] if the seed is absent, or
+    /// [`SortError::SeedBelowSpecMinimum`] when required by the policy.
+    pub fn into_ordered_psbt_with(self, policy: SeedPolicy) -> Result<Psbt, SortError> {
         let seed = self
             .0
             .global
             .sort_seed()
             .ok_or(SortError::MissingSortSeed)?
             .to_vec();
+
+        if policy == SeedPolicy::RequireSpecMinimum && seed.len() < SPEC_MIN_SEED_BYTES {
+            return Err(SortError::SeedBelowSpecMinimum(seed.len()));
+        }
 
         ordered_psbt(
             self.0,
@@ -369,6 +407,54 @@ mod tests {
             let psbt = empty_psbt();
             let sorter: Sorter<Deterministic> = Sorter(psbt, PhantomData);
             assert!(sorter.into_ordered_psbt().is_err());
+        }
+
+        #[test]
+        fn deterministic_short_seed_rejected() {
+            let mut psbt = empty_psbt();
+            psbt.global.set_sort_seed(vec![7u8; 8]);
+            let sorter: Sorter<Deterministic> = Sorter(psbt, PhantomData);
+            assert!(matches!(
+                sorter.into_ordered_psbt(),
+                Err(SortError::SeedBelowSpecMinimum(8))
+            ));
+        }
+
+        #[test]
+        fn deterministic_spec_minimum_seed_accepted() {
+            let mut psbt = empty_psbt();
+            psbt.global.set_sort_seed(vec![7u8; SPEC_MIN_SEED_BYTES]);
+            let sorter: Sorter<Deterministic> = Sorter(psbt, PhantomData);
+            assert!(sorter.into_ordered_psbt().is_ok());
+        }
+
+        #[test]
+        fn deterministic_short_seed_allowed_by_explicit_policy() {
+            let mut psbt = empty_psbt();
+            psbt.global.set_sort_seed(vec![7u8; 8]);
+            let sorter: Sorter<Deterministic> = Sorter(psbt, PhantomData);
+            assert!(
+                sorter
+                    .into_ordered_psbt_with(SeedPolicy::AllowBelowSpecMinimum)
+                    .is_ok()
+            );
+        }
+
+        #[test]
+        fn deterministic_missing_seed_not_relaxed_by_policy() {
+            let sorter: Sorter<Deterministic> = Sorter(empty_psbt(), PhantomData);
+            assert!(matches!(
+                sorter.into_ordered_psbt_with(SeedPolicy::AllowBelowSpecMinimum),
+                Err(SortError::MissingSortSeed)
+            ));
+        }
+
+        #[test]
+        fn seed_below_minimum_display_names_lengths() {
+            let message = SortError::SeedBelowSpecMinimum(8).to_string();
+            assert!(message.contains("8 bytes"));
+            assert!(message.contains("128 bits"));
+            assert!(message.contains("16 bytes"));
         }
 
         #[test]
@@ -706,7 +792,7 @@ mod tests {
 
             #[test]
             fn deterministic_orders_inputs_and_outputs(
-                seed in proptest::collection::vec(any::<u8>(), 1..=32),
+                seed in proptest::collection::vec(any::<u8>(), 16..=32),
                 first in any::<u8>(),
                 second in any::<u8>(),
             ) {
