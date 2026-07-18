@@ -34,7 +34,7 @@ fn derive_sort_key(seed: &[u8], id: &[u8]) -> [u8; 32] {
 /// or transaction-specific nonce) so that all participants produce the
 /// same order without revealing sort criteria to observers.
 #[derive(Debug)]
-pub struct Deterministic;
+pub enum Deterministic {}
 
 /// The spec minimum for `PSBT_GLOBAL_SORT_SEED` under deterministic ordering:
 /// "`PSBT_GLOBAL_SORT_SEED` MUST be set and contain at least 128 bits of
@@ -54,11 +54,11 @@ pub enum SeedPolicy {
 
 /// Sort mode: ordering determined by explicit sort key fields on each input/output.
 #[derive(Debug)]
-pub struct ExplicitSortKeys;
+pub enum ExplicitSortKeys {}
 
 /// Sort mode: not yet chosen. The default typestate for [`Sorter`].
 #[derive(Debug, Clone, PartialEq)]
-pub struct Unset;
+pub enum Unset {}
 
 /// Typestate wrapper that applies a sort order to an [`UnorderedPsbt`].
 ///
