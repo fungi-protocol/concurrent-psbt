@@ -55,6 +55,12 @@ impl HashMapResultValue for ResultOutput {
 /// Computed from the `PSBT_OUT_UNIQUE_ID` proprietary field, keyed by subtype
 /// [`PSBT_OUT_UNIQUE_ID_SUBTYPE`]. Used as the map key in `OutputSet`
 /// so that outputs can be merged in an order-independent way.
+///
+/// Any length is valid. 32 bytes is a *recommendation* — collision
+/// resistance for ids minted blindly by parties that cannot coordinate —
+/// not a validity rule. Interoperating protocols bring their own ids: an
+/// interactive-tx `serial_id` is 8 bytes and is usable verbatim
+/// (zero-padding it to 32 bytes would add no entropy and no meaning).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UniqueId(Vec<u8>);
 
