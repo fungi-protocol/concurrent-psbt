@@ -98,15 +98,16 @@ mod prop {
     fn build(ops: &[Op]) -> ResultUnorderedPsbt {
         let mut inputs = InputSet::default();
         let mut outputs = OutputSet::default();
-        let mut global = Global::default();
+        let mut global = Global {
+            tx_modifiable_flags: 0x03,
+            ..Global::default()
+        };
         for op in ops {
             match *op {
                 Op::AddInput(b) => inputs.add(make_input(b, 0)),
                 Op::AddOutput(b) => outputs.add(make_output(b)),
                 Op::RemoveInput(b) => global.remove_input(&make_input(b, 0)),
-                Op::RemoveOutput(b) => {
-                    global.remove_output_id(&UniqueId::new(vec![b; 16]))
-                }
+                Op::RemoveOutput(b) => global.remove_output_id(&UniqueId::new(vec![b; 16])),
             }
         }
         UnorderedPsbt {
@@ -136,8 +137,7 @@ mod prop {
 
         let mut inputs: Vec<Input> = clean.inputs.clone().into_iter().collect();
         retain_live_inputs(global, &mut inputs);
-        let live_inputs: BTreeSet<Vec<u8>> =
-            inputs.iter().map(input_removal_id).collect();
+        let live_inputs: BTreeSet<Vec<u8>> = inputs.iter().map(input_removal_id).collect();
 
         let mut outputs: Vec<Output> = clean.outputs.clone().into_iter().collect();
         retain_live_outputs(global, &mut outputs);

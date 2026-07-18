@@ -21,8 +21,8 @@
 //! the pre-existing `PSBT_GLOBAL_CONFIRMATION`/`PSBT_GLOBAL_PAYMENT` sets in
 //! [`crate::payments::negotiation`]. This module only sequences them.
 
-use crate::payments::graph::{ParticipantId, PaymentGraph, RecipientResolver};
 use crate::lattice::join::Join;
+use crate::payments::graph::{ParticipantId, PaymentGraph, RecipientResolver};
 use crate::payments::negotiation::{Confirmation, unordered_unique_id};
 use crate::tx::{ResultUnorderedPsbt, UnorderedPsbt, UnorderedPsbtError};
 
@@ -275,8 +275,8 @@ fn empty_state() -> ResultUnorderedPsbt {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::payments::negotiation::{GlobalNegotiationExt, PAYMENT_KIND_REAL, Payment};
     use crate::output::{OutputUniqueIdExt, UniqueId};
+    use crate::payments::negotiation::{GlobalNegotiationExt, PAYMENT_KIND_REAL, Payment};
 
     fn resolve_by_first_byte(script: &[u8]) -> Option<ParticipantId> {
         script.first().map(|b| [*b; 32])
@@ -284,7 +284,10 @@ mod tests {
 
     /// A serialized PSBT carrying one payment Alice(0x0a) -> script [0x0b].
     fn psbt_with_payment(payer: u8, script: &[u8], amount: u64, uid: u8) -> Vec<u8> {
-        let mut global = psbt_v2::v2::Global::default();
+        let mut global = psbt_v2::v2::Global {
+            tx_modifiable_flags: 0x03,
+            ..psbt_v2::v2::Global::default()
+        };
         global.add_payment(
             [uid; 16],
             Payment {
