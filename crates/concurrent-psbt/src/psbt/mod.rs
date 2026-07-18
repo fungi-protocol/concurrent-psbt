@@ -12,3 +12,7 @@ mod input_set;
 pub mod output;
 mod output_set;
 pub mod tx;
+
+pub(crate) trait SetLen {
+    fn len(&self) -> usize;
+}

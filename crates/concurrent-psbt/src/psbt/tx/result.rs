@@ -1,25 +1,14 @@
-#![allow(clippy::result_large_err)]
-
-use std::fmt;
-
-use psbt_v2::v2::{Global, Output, Psbt};
+use psbt_v2::v2::Psbt;
 
 use crate::global::{GlobalExt, ResultGlobal};
-use crate::input::{InputSet, ResultInputSet};
+use crate::input::ResultInputSet;
 use crate::lattice::join::Join;
-use crate::lattice::partial::{Conflict, JoinResult};
-use crate::output::{OutputSet, ResultOutputSet};
+use crate::lattice::partial::Conflict;
+use crate::output::ResultOutputSet;
 
-/// A BIP 370 PSBT decomposed into [`Global`], [`InputSet`], and [`OutputSet`], without ordering.
-///
-/// Inputs are keyed by outpoint and outputs by unique ID, enabling conflict-safe joins.
-/// Use [`UnorderedPsbt::wrap`] to enter the result domain for concurrent merging.
-#[derive(Debug, Clone, PartialEq)]
-pub struct UnorderedPsbt {
-    pub global: Global,
-    pub inputs: InputSet,
-    pub outputs: OutputSet,
-}
+use super::sized_set::SizedSet;
+use super::tx_modifiability_flags::TxModifiableFlags;
+use super::{UnorderedPsbt, UnorderedPsbtError};
 
 /// Result-domain version of [`UnorderedPsbt`], where every field tracks either
 /// a clean value or accumulated conflicts.
@@ -33,131 +22,52 @@ pub struct ResultUnorderedPsbt {
     pub(crate) outputs: ResultOutputSet,
 }
 
-/// Error returned when a clean [`UnorderedPsbt`] cannot be built from a PSBT.
-#[derive(Debug, Clone, PartialEq)]
-pub enum UnorderedPsbtError {
-    /// An output is missing the `PSBT_OUT_UNIQUE_ID` proprietary field.
-    MissingOutputUniqueId(Box<Output>),
-    /// The PSBT accumulated conflicts while being converted to unordered form.
-    Conflict(Box<ResultUnorderedPsbt>),
-}
-
-impl From<Output> for UnorderedPsbtError {
-    fn from(output: Output) -> Self {
-        Self::MissingOutputUniqueId(Box::new(output))
-    }
-}
-
-impl fmt::Display for UnorderedPsbtError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingOutputUniqueId(_) => write!(f, "output missing PSBT_OUT_UNIQUE_ID"),
-            Self::Conflict(_) => write!(f, "unordered PSBT contains conflicting fields"),
-        }
-    }
-}
-
-impl std::error::Error for UnorderedPsbtError {}
-
-impl UnorderedPsbt {
-    /// Parse a v2 PSBT into unordered representation.
-    ///
-    /// # Errors
-    /// Returns an error if any output is missing `PSBT_OUT_UNIQUE_ID`, or if
-    /// duplicate input/output keys accumulate conflicting field values.
-    pub fn try_from_psbt(psbt: Psbt) -> Result<Self, UnorderedPsbtError> {
-        let result = ResultUnorderedPsbt::try_from_psbt(psbt)?;
-        result
-            .try_unwrap()
-            .map_err(|result| UnorderedPsbtError::Conflict(Box::new(result)))
-    }
-
-    /// Convert to a BIP 370 [`Psbt`].
-    ///
-    /// **Warning:** Input and output ordering in the resulting PSBT is
-    /// arbitrary (HashMap iteration order). Two UnorderedPsbt values
-    /// that are join-equal may produce different Psbt serializations.
-    /// Use `Sorter` to apply deterministic
-    /// ordering before serializing for signing or comparison.
-    ///
-    /// The live-set projection is applied (tombstoned inputs/outputs are
-    /// dropped) so callers see the same live set the sorter would produce. This
-    /// is the NON-TERMINAL exit: unlike the sorter, it KEEPS the tombstone (and
-    /// fee) proprietary fields in place, so the projection stays reproducible if
-    /// the artifact is re-parsed back into the unordered domain. No-op when the
-    /// `removal` feature is off (tombstones ignored, fail-safe).
-    pub fn into_psbt(self) -> Psbt {
-        let mut inputs: Vec<_> = self.inputs.into_iter().collect();
-        let mut outputs: Vec<_> = self.outputs.into_iter().collect();
-        let global = self.global;
-        crate::removal::retain_live_inputs(&global, &mut inputs);
-        crate::removal::retain_live_outputs(&global, &mut outputs);
-        let mut global = global;
-        global.input_count = inputs.len();
-        global.output_count = outputs.len();
-        Psbt {
+impl ResultUnorderedPsbt {
+    fn into_sized_sets(
+        self,
+    ) -> (
+        ResultGlobal,
+        SizedSet<ResultInputSet, { TxModifiableFlags::INPUTS_BIT }>,
+        SizedSet<ResultOutputSet, { TxModifiableFlags::OUTPUTS_BIT }>,
+    ) {
+        let Self {
             global,
             inputs,
             outputs,
-        }
-    }
+        } = self;
 
-    /// Lift this [`UnorderedPsbt`] into the result domain as a [`ResultUnorderedPsbt`] with all fields `Ok`.
-    pub fn wrap(self) -> ResultUnorderedPsbt {
-        let inputs = self.inputs.wrap();
-        let outputs = self.outputs.wrap();
-        let mut global = self.global;
-        // Sync counts before wrapping so the ResultGlobal is consistent.
-        global.input_count = inputs.len();
-        global.output_count = outputs.len();
-        ResultUnorderedPsbt {
-            global: global.wrap(),
-            inputs,
-            outputs,
-        }
+        let inputs = SizedSet::new(&global, inputs);
+        let outputs = SizedSet::new(&global, outputs);
+
+        (global, inputs, outputs)
     }
 }
 
 impl Join for ResultUnorderedPsbt {
     fn join(self, other: Self) -> Self {
-        // Capture pre-join set sizes for consistency checks.
-        let self_input_len = self.inputs.len();
-        let self_output_len = self.outputs.len();
-        let other_input_len = other.inputs.len();
-        let other_output_len = other.outputs.len();
+        let (self_global, self_inputs, self_outputs) = self.into_sized_sets();
+        let (other_global, other_inputs, other_outputs) = other.into_sized_sets();
 
-        let inputs = self.inputs.join(other.inputs);
-        let outputs = self.outputs.join(other.outputs);
-        let input_len = inputs.len();
-        let output_len = outputs.len();
+        let inputs = self_inputs.join(other_inputs);
+        let outputs = self_outputs.join(other_outputs);
 
-        // Count sync: check each operand's consistency, then update.
-        //
-        // For each operand, if its declared count matches its set size,
-        // the count was consistent: update to the joined set size.
-        // If not, the operand had an unflagged inconsistency: flag it.
-        // If already Err(Conflict), preserve for joining.
-        let mut self_global = self.global;
-        let mut other_global = other.global;
+        let inputs_modifiability = inputs.modifiability().clone();
+        let outputs_modifiability = outputs.modifiability().clone();
 
-        fn sync_count(count: &mut JoinResult<usize>, pre_len: usize, post_len: usize) {
-            if let Ok(n) = *count {
-                if n == pre_len {
-                    *count = Ok(post_len);
-                } else {
-                    *count = Err(Conflict::from_values([n, pre_len]));
-                }
-            }
-        }
+        let self_flags = TxModifiableFlags::from(&self_global);
+        let other_flags = TxModifiableFlags::from(&other_global);
 
-        sync_count(&mut self_global.input_count, self_input_len, input_len);
-        sync_count(&mut self_global.output_count, self_output_len, output_len);
-        sync_count(&mut other_global.input_count, other_input_len, input_len);
-        sync_count(&mut other_global.output_count, other_output_len, output_len);
+        let tx_modifiable_flags =
+            self_flags.complete_join(other_flags, inputs_modifiability, outputs_modifiability);
 
-        // Now join globals. Consistent counts are both Ok(joined_len)
-        // and merge cleanly. Flagged inconsistencies join via Conflict.
-        let global = self_global.join(other_global);
+        let mut global = self_global.join(other_global);
+        global.tx_modifiable_flags = tx_modifiable_flags;
+
+        let (input_count, inputs) = inputs.into_parts();
+        let (output_count, outputs) = outputs.into_parts();
+
+        global.input_count = input_count;
+        global.output_count = output_count;
 
         ResultUnorderedPsbt {
             global,
@@ -177,7 +87,8 @@ impl ResultUnorderedPsbt {
     /// Returns the first output missing a `PSBT_OUT_UNIQUE_ID` field.
     pub fn try_from_psbt(psbt: Psbt) -> Result<Self, UnorderedPsbtError> {
         let inputs = ResultInputSet::from_inputs(psbt.inputs);
-        let outputs = ResultOutputSet::try_from_outputs(psbt.outputs)?;
+        let outputs = ResultOutputSet::try_from_outputs(psbt.outputs)
+            .map_err(|output| UnorderedPsbtError::MissingOutputUniqueId(Box::new(output)))?;
 
         let mut global = psbt.global.wrap();
 
@@ -236,7 +147,10 @@ impl ResultUnorderedPsbt {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+    use crate::input::InputSet;
     use crate::lattice::join::Join;
+    use crate::output::OutputSet;
+    use psbt_v2::v2::{Global, Output};
 
     #[cfg(any(feature = "unit-tests", feature = "prop-tests"))]
     #[test]
@@ -267,6 +181,18 @@ mod tests {
     mod unit {
         use super::*;
         use bitcoin::transaction;
+
+        #[test]
+        fn into_sized_sets_preserves_global_and_synchronizes_sets() {
+            let wrapped = make_psbt_with_sets(0x03, [1], [2]).wrap();
+            let expected_global = wrapped.global.clone();
+
+            let (global, inputs, outputs) = wrapped.into_sized_sets();
+
+            assert_eq!(global, expected_global);
+            assert_eq!(inputs.joined_count(), Ok(1));
+            assert_eq!(outputs.joined_count(), Ok(1));
+        }
 
         fn make_unordered_psbt() -> UnorderedPsbt {
             UnorderedPsbt {
@@ -530,36 +456,133 @@ mod tests {
             assert_eq!(joined.global.output_count, Ok(joined.outputs.len()));
         }
 
-        fn make_populated_psbt(txid_byte: u8) -> UnorderedPsbt {
+        fn make_psbt_with_sets(
+            flags: u8,
+            input_ids: impl IntoIterator<Item = u8>,
+            output_ids: impl IntoIterator<Item = u8>,
+        ) -> UnorderedPsbt {
             use crate::output::PSBT_OUT_UNIQUE_ID_SUBTYPE;
             use bitcoin::hashes::Hash;
 
-            let input = psbt_v2::v2::Input::new(&bitcoin::OutPoint {
-                txid: bitcoin::Txid::from_byte_array([txid_byte; 32]),
-                vout: 0,
-            });
             let mut inputs = InputSet::default();
-            inputs.add(input);
+            for id in input_ids {
+                inputs.add(psbt_v2::v2::Input::new(&bitcoin::OutPoint {
+                    txid: bitcoin::Txid::from_byte_array([id; 32]),
+                    vout: 0,
+                }));
+            }
 
-            let mut output = psbt_v2::v2::Output {
-                amount: bitcoin::Amount::from_sat(100_000),
-                script_pubkey: bitcoin::ScriptBuf::new_op_return([txid_byte; 20]),
-                ..Default::default()
-            };
-            let key = psbt_v2::raw::ProprietaryKey {
-                prefix: b"concurrent-psbt".to_vec(),
-                subtype: PSBT_OUT_UNIQUE_ID_SUBTYPE,
-                key: vec![],
-            };
-            output.proprietaries.insert(key, vec![txid_byte; 16]);
             let mut outputs = OutputSet::default();
-            outputs.add(output);
+            for id in output_ids {
+                let mut output = psbt_v2::v2::Output {
+                    amount: bitcoin::Amount::from_sat(100_000),
+                    script_pubkey: bitcoin::ScriptBuf::new_op_return([id; 20]),
+                    ..Default::default()
+                };
+                let key = psbt_v2::raw::ProprietaryKey {
+                    prefix: b"concurrent-psbt".to_vec(),
+                    subtype: PSBT_OUT_UNIQUE_ID_SUBTYPE,
+                    key: vec![],
+                };
+                output.proprietaries.insert(key, vec![id; 16]);
+                outputs.add(output);
+            }
 
             UnorderedPsbt {
-                global: Global::default(),
+                global: Global {
+                    tx_modifiable_flags: flags,
+                    ..Global::default()
+                },
                 inputs,
                 outputs,
             }
+        }
+
+        fn make_populated_psbt(txid_byte: u8) -> UnorderedPsbt {
+            make_psbt_with_sets(0x03, [txid_byte], [txid_byte])
+        }
+
+        #[test]
+        fn differing_modifiability_joins_when_frozen_sets_cover_other_sets() {
+            let inputs_frozen = make_psbt_with_sets(0x02, [1, 2], [10]);
+            let outputs_frozen = make_psbt_with_sets(0x01, [1], [10, 20]);
+
+            let joined = inputs_frozen.wrap().join(outputs_frozen.wrap());
+
+            assert_eq!(joined.global.tx_modifiable_flags, Ok(0x00));
+            assert_eq!(joined.global.input_count, Ok(2));
+            assert_eq!(joined.global.output_count, Ok(2));
+            assert!(
+                joined.is_ok(),
+                "cross-subset join should be clean: {joined:#?}"
+            );
+        }
+
+        #[test]
+        fn differing_modifiability_conflicts_when_input_subset_rule_fails() {
+            let inputs_frozen = make_psbt_with_sets(0x02, [1], [10]);
+            let outputs_frozen = make_psbt_with_sets(0x01, [2], [10]);
+
+            let joined = inputs_frozen.wrap().join(outputs_frozen.wrap());
+
+            assert_eq!(
+                joined.global.tx_modifiable_flags,
+                Err(Conflict::from_values([0x02, 0x01]))
+            );
+            assert!(joined.global.input_count.is_err());
+            assert_eq!(joined.global.output_count, Ok(1));
+        }
+
+        #[test]
+        fn differing_modifiability_conflicts_when_output_subset_rule_fails() {
+            let inputs_frozen = make_psbt_with_sets(0x02, [1], [10]);
+            let outputs_frozen = make_psbt_with_sets(0x01, [1], [20]);
+
+            let joined = inputs_frozen.wrap().join(outputs_frozen.wrap());
+
+            assert_eq!(
+                joined.global.tx_modifiable_flags,
+                Err(Conflict::from_values([0x02, 0x01]))
+            );
+            assert_eq!(joined.global.input_count, Ok(1));
+            assert!(joined.global.output_count.is_err());
+        }
+
+        #[test]
+        fn equal_non_modifiable_flags_conflict_when_frozen_sets_differ() {
+            let empty = make_psbt_with_sets(0x00, [], []);
+            let populated = make_psbt_with_sets(0x00, [1], [10]);
+
+            let joined = empty.wrap().join(populated.wrap());
+
+            assert_eq!(
+                joined.global.tx_modifiable_flags,
+                Err(Conflict::from_values([0x00]))
+            );
+            assert!(joined.global.input_count.is_err());
+            assert!(joined.global.output_count.is_err());
+        }
+
+        #[test]
+        fn failed_join_records_the_immediate_effective_flag_operands() {
+            let a = make_psbt_with_sets(0x02, [1], []);
+            let b = make_psbt_with_sets(0x03, [2], []);
+            let c = make_psbt_with_sets(0x02, [1, 2], []);
+
+            let first_failure = a.clone().wrap().join(b.clone().wrap());
+            assert_eq!(
+                first_failure.global.tx_modifiable_flags,
+                Err(Conflict::from_values([0x02, 0x03])),
+            );
+
+            let coherent_bc = b.wrap().join(c.wrap());
+            assert_eq!(coherent_bc.global.tx_modifiable_flags, Ok(0x02));
+
+            let outer_failure = a.wrap().join(coherent_bc);
+            assert_eq!(
+                outer_failure.global.tx_modifiable_flags,
+                Err(Conflict::from_values([0x02])),
+            );
         }
 
         #[test]
@@ -710,11 +733,25 @@ mod tests {
             ]
         }
 
+        fn equivalent_result_psbts(
+            mut left: ResultUnorderedPsbt,
+            mut right: ResultUnorderedPsbt,
+        ) -> bool {
+            let left_flags = TxModifiableFlags::from(&left.global);
+            let right_flags = TxModifiableFlags::from(&right.global);
+            if !left_flags.equivalent(&right_flags) {
+                return false;
+            }
+            left.global.tx_modifiable_flags = left_flags.canonicalized();
+            right.global.tx_modifiable_flags = right_flags.canonicalized();
+            left == right
+        }
+
         proptest! {
             #[test]
             fn idempotent(a in arb_result_unordered_psbt()) {
                 let cloned = a.clone();
-                prop_assert_eq!(a.clone().join(cloned), a);
+                prop_assert!(equivalent_result_psbts(a.clone().join(cloned), a));
             }
 
             #[test]
@@ -732,7 +769,7 @@ mod tests {
             ) {
                 let ab_c = a.clone().join(b.clone()).join(c.clone());
                 let a_bc = a.join(b.join(c));
-                prop_assert_eq!(ab_c, a_bc);
+                prop_assert!(equivalent_result_psbts(ab_c, a_bc));
             }
 
             #[test]
@@ -758,11 +795,35 @@ mod tests {
             }
 
             #[test]
-            fn join_syncs_counts(a in arb_unordered_psbt(), b in arb_unordered_psbt()) {
+            fn join_syncs_or_conflicts_counts_with_modifiability(
+                a in arb_unordered_psbt(),
+                b in arb_unordered_psbt(),
+            ) {
                 let joined = a.wrap().join(b.wrap());
-                // Count fields should match the joined set sizes
-                prop_assert_eq!(joined.global.input_count, Ok(joined.inputs.len()));
-                prop_assert_eq!(joined.global.output_count, Ok(joined.outputs.len()));
+                let clean_input_count = Ok(joined.inputs.len());
+                let conflicted_input_count =
+                    Err(Conflict::from_values([joined.inputs.len()]));
+                let clean_output_count = Ok(joined.outputs.len());
+                let conflicted_output_count =
+                    Err(Conflict::from_values([joined.outputs.len()]));
+
+                prop_assert!(
+                    joined.global.input_count == clean_input_count
+                        || joined.global.input_count == conflicted_input_count
+                );
+                prop_assert!(
+                    joined.global.output_count == clean_output_count
+                        || joined.global.output_count == conflicted_output_count
+                );
+                if joined.global.tx_modifiable_flags.is_ok() {
+                    prop_assert_eq!(joined.global.input_count, clean_input_count);
+                    prop_assert_eq!(joined.global.output_count, clean_output_count);
+                } else {
+                    prop_assert!(
+                        joined.global.input_count.is_err()
+                            || joined.global.output_count.is_err()
+                    );
+                }
             }
 
             #[test]

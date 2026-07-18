@@ -8,6 +8,7 @@ use psbt_v2::v2::Input;
 use crate::collections::hashmap::{HashMapExt, ResultHashMapExt};
 use crate::lattice::join::Join;
 
+use super::SetLen;
 use super::input::{InputExt, ResultInput, out_point};
 
 /// Set of conflict-free PSBT inputs keyed by the [`OutPoint`] they spend.
@@ -22,6 +23,18 @@ pub struct InputSet(HashMap<OutPoint, Input>);
 /// Inputs at matching outpoints are joined field-by-field; disjoint outpoints are preserved.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ResultInputSet(pub(crate) HashMap<OutPoint, ResultInput>);
+
+impl SetLen for InputSet {
+    fn len(&self) -> usize {
+        InputSet::len(self)
+    }
+}
+
+impl SetLen for ResultInputSet {
+    fn len(&self) -> usize {
+        ResultInputSet::len(self)
+    }
+}
 
 impl InputSet {
     /// Insert an input known to be fresh, keyed by its outpoint.

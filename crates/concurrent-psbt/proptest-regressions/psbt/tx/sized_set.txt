@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 3e92ea03252e4afa387954c79f479854b0e290d7487b33576e6958d4580e9aa3 # shrinks to a = SizedSet { modifiability: Ok(Modifiable(false)), count: Ok(0), set: TestSet({}) }, b = SizedSet { modifiability: Ok(Modifiable(false)), count: Ok(1), set: TestSet({0}) }, c = SizedSet { modifiability: Ok(Modifiable(true)), count: Ok(0), set: TestSet({}) }
