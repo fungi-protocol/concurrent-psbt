@@ -17,6 +17,7 @@ pub enum Constructor {
     Both(typed::Constructor<BothModifiable, crate::sort::Unset>),
     InputsOnly(typed::Constructor<InputsModifiable, crate::sort::Unset>),
     OutputsOnly(typed::Constructor<OutputsModifiable, crate::sort::Unset>),
+    NotModifiable(crate::tx::UnorderedPsbt),
 }
 
 impl Constructor {
@@ -48,6 +49,7 @@ impl Constructor {
             Self::Both(c) => c.into_inner(),
             Self::InputsOnly(c) => c.into_inner(),
             Self::OutputsOnly(c) => c.into_inner(),
+            Self::NotModifiable(psbt) => psbt,
         }
     }
 
@@ -57,7 +59,21 @@ impl Constructor {
             Self::Both(c) => c.into_psbt(),
             Self::InputsOnly(c) => c.into_psbt(),
             Self::OutputsOnly(c) => c.into_psbt(),
+            Self::NotModifiable(psbt) => psbt.into_psbt(),
         }
+    }
+
+    /// Join two runtime constructors and redispatch on the joined modifiability flags.
+    ///
+    /// # Errors
+    /// Returns the conflicted result domain when any field or frozen-set
+    /// invariant prevents a clean join.
+    pub fn try_join(self, other: Self) -> Result<Self, ResultConstructor> {
+        crate::Join::join(
+            ResultConstructor::wrap(self),
+            ResultConstructor::wrap(other),
+        )
+        .try_unwrap()
     }
 }
 
@@ -65,9 +81,8 @@ impl Constructor {
 ///
 /// Wraps [`ResultUnorderedPsbt`](crate::tx::ResultUnorderedPsbt) directly,
 /// erasing the modifiability type parameter. Implements [`Join`](crate::Join):
-/// if two PSBTs have different `tx_modifiable_flags`, the join produces a
-/// [`Conflict`](crate::Conflict) in that global field, just like any other
-/// field-level disagreement.
+/// differing `tx_modifiable_flags` join according to the unordered PSBT
+/// modifiability rules, including the frozen-set subset checks.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultConstructor(crate::tx::ResultUnorderedPsbt);
 
@@ -84,6 +99,7 @@ impl ResultConstructor {
             Constructor::Both(c) => Self(c.into_inner().wrap()),
             Constructor::InputsOnly(c) => Self(c.into_inner().wrap()),
             Constructor::OutputsOnly(c) => Self(c.into_inner().wrap()),
+            Constructor::NotModifiable(psbt) => Self(psbt.wrap()),
         }
     }
 
@@ -145,10 +161,7 @@ impl ResultConstructor {
                     0x02 => Ok(Constructor::OutputsOnly(
                         typed::Constructor::from_unordered(psbt),
                     )),
-                    // flags 0x00 means neither is modifiable; still a valid
-                    // state after joining (e.g. both sides cleared flags).
-                    // Default to Both since construction is complete.
-                    _ => Ok(Constructor::Both(typed::Constructor::from_unordered(psbt))),
+                    _ => Ok(Constructor::NotModifiable(psbt)),
                 }
             }
             Err(result) => Err(Self(result)),
@@ -198,10 +211,13 @@ mod tests {
 
     fn assert_variant(constructor: Constructor, flags: u8) {
         match (constructor, flags) {
-            (Constructor::Both(_), 0x03 | 0x00)
+            (Constructor::Both(_), 0x03)
             | (Constructor::InputsOnly(_), 0x01)
-            | (Constructor::OutputsOnly(_), 0x02) => {}
-            (constructor, flags) => panic!("unexpected constructor {constructor:?} for {flags:#04x}"),
+            | (Constructor::OutputsOnly(_), 0x02)
+            | (Constructor::NotModifiable(_), 0x00) => {}
+            (constructor, flags) => {
+                panic!("unexpected constructor {constructor:?} for {flags:#04x}")
+            }
         }
     }
 
@@ -234,7 +250,12 @@ mod tests {
                 Constructor::try_from_psbt(psbt(flags, version)).expect("known flags dispatch"),
             );
             assert!(wrapped.is_ok());
-            assert_variant(wrapped.try_unwrap().expect("wrapped constructors are clean"), flags);
+            assert_variant(
+                wrapped
+                    .try_unwrap()
+                    .expect("wrapped constructors are clean"),
+                flags,
+            );
 
             let mut missing_id = psbt(flags, version);
             missing_id.outputs.push(psbt_v2::v2::Output::default());
@@ -253,8 +274,8 @@ mod tests {
             .expect("the result domain accepts completed construction");
         assert_variant(no_flags.try_unwrap().expect("clean result unwraps"), 0x00);
 
-        let clean = ResultConstructor::try_from_psbt(psbt(0x03, version))
-            .expect("empty PSBT is valid");
+        let clean =
+            ResultConstructor::try_from_psbt(psbt(0x03, version)).expect("empty PSBT is valid");
         assert!(clean.is_ok());
 
         let mut missing_id = psbt(0x03, version);
@@ -281,9 +302,31 @@ mod tests {
             sections.push((section.to_owned(), field.to_owned()));
         });
         assert!(sections.iter().any(|(section, _)| section == "global"));
-        assert!(sections.iter().any(|(section, _)| section.starts_with("input:")));
-        assert!(sections.iter().any(|(section, _)| section.starts_with("output:")));
+        assert!(
+            sections
+                .iter()
+                .any(|(section, _)| section.starts_with("input:"))
+        );
+        assert!(
+            sections
+                .iter()
+                .any(|(section, _)| section.starts_with("output:"))
+        );
         assert!(joined.try_unwrap().is_err());
+    }
+
+    #[test]
+    fn clean_dynamic_try_join_redispatches_anded_modifiability() {
+        let inputs_only =
+            Constructor::try_from_psbt(psbt(0x01, 2)).expect("inputs-only constructor");
+        let outputs_only =
+            Constructor::try_from_psbt(psbt(0x02, 2)).expect("outputs-only constructor");
+
+        let joined = inputs_only
+            .try_join(outputs_only)
+            .expect("equal frozen sets are joinable");
+
+        assert!(matches!(joined, Constructor::NotModifiable(_)));
     }
 
     #[cfg(feature = "unit-tests")]
