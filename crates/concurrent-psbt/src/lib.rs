@@ -2,6 +2,11 @@
 #![allow(unused_features)]
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
+/// Deliberately uncovered code used to prove the 100% coverage gate fails closed.
+pub fn uncovered_coverage_fixture() -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "unit-tests")]
