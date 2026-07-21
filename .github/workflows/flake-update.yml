@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Require CI-triggering service token
         env:
           GH_TOKEN_FOR_UPDATES: ${{ secrets.GH_TOKEN_FOR_UPDATES }}
@@ -26,7 +26,7 @@ jobs:
             exit 1
           fi
       - name: Install Determinate Nix
-        uses: DeterminateSystems/determinate-nix-action@629b284231c2a82554b724e357e47fc6020833c8 # v3.21.2
+        uses: DeterminateSystems/determinate-nix-action@d96678350ffd6a456235832eb11e1c491589b7bb # v3.21.8
       - name: Update flake.lock and open pull request
         uses: DeterminateSystems/update-flake-lock@834c491b2ece4de0bbd00d85214bb5e83b4da5c6 # v28
         with:
@@ -40,7 +40,7 @@ jobs:
 
             The repository-scoped service token ensures the pull request triggers the normal CI workflows.
       - name: Validate updated lock file
-        uses: DeterminateSystems/flake-checker-action@3164002371bc90729c68af0e24d5aacf20d7c9f6 # v12
+        uses: DeterminateSystems/flake-checker-action@de924abd783455e8429c858962b9e43062d19da1 # v13
         with:
           check-supported: "false"
           ignore-missing-flake-lock: "false"
