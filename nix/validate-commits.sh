@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scrub-commit-history — verify commit hygiene across history
+# validate-commits — enforce repository invariants across commits
 #
 # Walks commit history and checks each commit for unresolved work-item
 # markers in messages and optionally runs nix flake check on each.
@@ -65,11 +65,11 @@ A single bookmark/branch name or commit hash works in both modes.
 
 Revset defaults (when no extra arguments given):
   jj mode:   -r 'trunk()..@' (ancestors of @ since trunk)
-  git mode:  origin/main..HEAD (or all commits if no remote)
+  git mode:  origin/main..HEAD (requires an origin/main merge base)
 
 Revset options:
   --log-revset    use the VCS's own default revset (skip default range)
-  --everything    scrub all branches (jj: all() ~ root(); git: --all)
+  --everything    validate all branches (jj: all() ~ root(); git: --all)
 EOF
   exit 1
 }
@@ -262,7 +262,9 @@ else
     if [ -n "$merge_base" ]; then
       git_args+=("$merge_base..HEAD")
     else
-      git_args+=(HEAD)
+      echo "error: could not find merge-base with origin/main" >&2
+      echo "hint: pass an explicit range after --" >&2
+      exit 1
     fi
   fi
   if ! git_output=$(git "${git_args[@]}"); then
@@ -323,10 +325,10 @@ fmt_rerun_hint() {
     change_id=$(jj log --ignore-working-copy --no-graph -r "$1" \
       -T 'change_id.shortest(7)' 2>/dev/null || true)
     if [ -n "$change_id" ]; then
-      echo "    rerun: nix run .#scrub-commit-history -- -r $change_id"
+      echo "    rerun: nix run .#validate-commits -- -r $change_id"
     fi
   else
-    echo "    rerun: nix run .#scrub-commit-history -- --git ${1:0:12}"
+    echo "    rerun: nix run .#validate-commits -- --git ${1:0:12}"
   fi
 }
 
@@ -441,10 +443,22 @@ echo "Checking for conflicts..."
 for idx in "${ordered[@]}"; do
   hash=${linear[$idx]}
   reason=""
-  if git ls-tree --name-only "$hash" 2>/dev/null | grep -qE '^\.jj(conflict-|-do-not-resolve)'; then
+  if ! tree_names=$(git ls-tree --name-only "$hash"); then
+    echo "error: git ls-tree failed for $hash" >&2
+    exit 1
+  fi
+  if grep -qE '^\.jj(conflict-|-do-not-resolve)' <<<"$tree_names"; then
     reason="jj conflict tree"
-  elif git grep -q -E '<{7}|>{7}|={7}' "$hash" -- 2>/dev/null; then
-    reason="conflict markers"
+  else
+    if git grep -q -E '<{7}|>{7}|={7}' "$hash" --; then
+      reason="conflict markers"
+    else
+      status=$?
+      if [ "$status" -gt 1 ]; then
+        echo "error: git grep failed for $hash" >&2
+        exit 1
+      fi
+    fi
   fi
   if [ -n "$reason" ]; then
     echo "  ✗ $(fmt_commit "$hash") ($reason)"
@@ -502,8 +516,22 @@ if git cat-file -e "$tip_hash:.gitignore" 2>/dev/null; then
   echo "Checking gitignore monotonicity..."
   for idx in "${ordered[@]}"; do
     hash=${linear[$idx]}
-    leaked=$(git ls-tree -r --name-only "$hash" 2>/dev/null |
-      git -C "$tmpdir/repo" check-ignore --stdin 2>/dev/null || true)
+    if ! tree_names=$(git ls-tree -r --name-only "$hash"); then
+      echo "error: git ls-tree failed for $hash" >&2
+      exit 1
+    fi
+    if leaked=$(printf '%s\n' "$tree_names" |
+      git -C "$tmpdir/repo" check-ignore --stdin); then
+      :
+    else
+      status=$?
+      if [ "$status" -eq 1 ]; then
+        leaked=""
+      else
+        echo "error: git check-ignore failed for $hash" >&2
+        exit 1
+      fi
+    fi
     if [ -n "$leaked" ]; then
       first=$(echo "$leaked" | head -1)
       count=$(echo "$leaked" | wc -l)

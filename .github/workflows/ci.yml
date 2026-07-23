@@ -4,7 +4,7 @@ on:
     branches: [main]
   pull_request:
 jobs:
-  scrub:
+  validate-commits:
     runs-on: ubuntu-latest
     steps:
       - name: Compute fetch depth
@@ -20,15 +20,15 @@ jobs:
           fetch-depth: ${{ steps.fetch-depth.outputs.depth }}
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
-      - name: Scrub commit history
+      - name: Validate commits
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             # HEAD is the pull request's synthetic merge commit:
             # https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request
-            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#scrub-commit-history' -- --git --forward --parallel --keep-going --print-build-logs \
+            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --parallel --keep-going --print-build-logs \
               -- '${{ github.event.pull_request.base.sha }}..HEAD'
           else
-            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#scrub-commit-history' -- --git --forward --parallel --keep-going --print-build-logs
+            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --parallel --keep-going --print-build-logs
           fi
       - name: Link recorded nextest result
         run: |

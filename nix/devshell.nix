@@ -14,7 +14,7 @@
             cargo-llvm-cov
             cargo-nextest
             cargo-sort
-            config.packages.scrub-commit-history
+            config.packages.validate-commits
             config.treefmt.build.wrapper
             just
             rust-analyzer
