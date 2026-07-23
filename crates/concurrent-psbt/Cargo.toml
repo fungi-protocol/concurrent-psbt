@@ -8,5 +8,8 @@ default = ["unit-tests", "prop-tests"]
 unit-tests = []
 prop-tests = []
 
+[dev-dependencies]
+proptest = "1"
+
 [lints]
 workspace = true
