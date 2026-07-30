@@ -15,11 +15,19 @@ jobs:
           else
             echo "depth=0" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: ${{ steps.fetch-depth.outputs.depth }}
-      - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Check Nix flake inputs
+        uses: DeterminateSystems/flake-checker-action@de924abd783455e8429c858962b9e43062d19da1 # v13
+        with:
+          check-owner: "false"
+          check-supported: "false"
+          ignore-missing-flake-lock: "false"
+          fail-mode: "true"
+          send-statistics: "false"
+      - uses: DeterminateSystems/nix-installer-action@33c9ab3ef95cd57c164d9d6eb1f9a46338538d41 # main
+      - uses: DeterminateSystems/magic-nix-cache-action@55718cd9ebf1737a061487d5ada21abf31e99a98 # main
       - name: Validate commits
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -34,7 +42,7 @@ jobs:
         run: |
           # The history check already realized this derivation; this only adds an out-link.
           nix build --no-update-lock-file --out-link result-nextest '.#checks.x86_64-linux.tests-nightly-dev'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nextest-nightly-dev-x86_64-linux
           path: result-nextest/nextest-run.zip
