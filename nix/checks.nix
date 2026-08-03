@@ -156,6 +156,18 @@
               mkdir -p $out
             '';
 
+        cargo-shear = toolchains.nightly.mkCargoDerivation (
+          commonArgs
+          // {
+            cargoArtifacts = cargoArtifactsDev;
+            CARGO_PROFILE = "dev";
+            pnameSuffix = "-cargo-shear";
+            nativeBuildInputs = [ pkgs.cargo-shear ];
+            buildPhaseCargoCommand = "cargo shear";
+            installPhase = "mkdir -p $out";
+          }
+        );
+
         unused-lints = toolchains.nightly.mkCargoDerivation (
           commonArgs
           // {
@@ -190,6 +202,7 @@
         lint = pkgs.symlinkJoin {
           name = "lint-checks-${rev}";
           paths = with checks; [
+            cargo-shear
             cargo-sort
             clippy
             doc
