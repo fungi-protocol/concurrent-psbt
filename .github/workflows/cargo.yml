@@ -19,7 +19,16 @@ jobs:
       - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: cargo-nextest
-      - run: cargo nextest run
+      - name: Run tests
+        run: cargo nextest run
+        env:
+          NEXTEST_TRACE_DIR: ${{ runner.temp }}/test-traces
+      - name: Upload test traces
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-traces-${{ matrix.toolchain }}
+          path: ${{ runner.temp }}/test-traces/*.json
       # Warn-only: this toolchain is rolling (not pinned), which may cause
       # unrelated PRs to start failing due to nightly containing new lints.
       # Nix clippy checks in ci.yml, which pins the toolchain via a flake.lock,

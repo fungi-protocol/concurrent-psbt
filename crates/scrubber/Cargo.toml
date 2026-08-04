@@ -3,6 +3,11 @@ name = "scrubber"
 version.workspace = true
 edition = "2024"
 
+# Used only by code that `#[test]` from test-tracing-macros generates,
+# which cargo-shear cannot see.
+[package.metadata.cargo-shear]
+ignored = ["tracing", "tracing-chrome", "tracing-subscriber"]
+
 [features]
 default = ["unit-tests", "prop-tests"]
 prop-tests = []
@@ -13,6 +18,10 @@ psbt-v2 = "0.3.0"
 
 [dev-dependencies]
 proptest = "1"
+test-tracing-macros = { path = "../../test-support/tracing-macros" }
+tracing = "0.1"
+tracing-chrome = "0.7"
+tracing-subscriber = "0.3"
 
 [lints]
 workspace = true

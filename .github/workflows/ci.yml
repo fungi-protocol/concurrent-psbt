@@ -36,18 +36,47 @@ jobs:
           version: v3.0.1
           # Do not upload paths that cache.nixos.org already serves.
           upstream-cache-filter: true
+      - name: Prepare Nix build directory
+        run: sudo install -d -o root -m 0755 /nix/var/nix/ci-builds
       - name: Validate commits
+        env:
+          NIX_CONFIG: |
+            keep-failed = true
+            build-dir = /nix/var/nix/ci-builds
+            # Print complete logs only for failed builds.
+            log-lines = 1000000
         run: |
-          NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --parallel --keep-going --print-build-logs \
+          NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --parallel --keep-going \
             -- "$BASE_SHA..HEAD"
       - name: Link recorded nextest result
+        if: ${{ !cancelled() }}
         run: |
           # The history check already realized this derivation; this only adds an out-link.
-          nix build --no-update-lock-file --out-link result-nextest '.#checks.x86_64-linux.tests-nightly-dev'
+          nix build --option build-dir /nix/var/nix/ci-builds --keep-failed --no-update-lock-file --out-link result-nextest '.#checks.x86_64-linux.tests-nightly-dev'
+      - name: Recover traces from failed Nix builds
+        if: ${{ !cancelled() }}
+        run: |
+          # --keep-failed leaves daemon-owned build directories in this dedicated location.
+          sudo bash -e -c '
+            for build in /nix/var/nix/ci-builds/*; do
+              # Nix versions may place the build files one level deeper.
+              for traces in "$build/nextest-traces" "$build/build/nextest-traces"; do
+                [ -d "$traces" ] || continue
+                destination="$1/$(basename "$build")"
+                mkdir -p "$destination"
+                cp -R "$traces" "$destination/chrome-traces"
+              done
+            done
+            if [ -d "$1" ]; then chmod -R a+rX "$1"; fi
+          ' -- "$PWD/failed-nextest"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
         with:
           name: nextest-nightly-dev-x86_64-linux
-          path: result-nextest/nextest-run.zip
+          path: |
+            result-nextest/nextest-run.zip
+            result-nextest/chrome-traces/*.json
+            failed-nextest/
       # The coverage checks enforce the threshold; this publishes the numbers.
       # Forks cannot upload, so only same-repository pull requests build it.
       - name: Build the coverage report
