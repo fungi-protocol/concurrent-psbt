@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#FBF7EF">
+<title>Tab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;height:100%}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{
+    background:#FBF7EF;
+    font-family:"Inter",ui-sans-serif,system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    overscroll-behavior:none;
+  }
+  a{color:#00A63C;text-decoration:none}
+
+  /* ---------- app shell: full screen on mobile, phone-sized card on desktop ---------- */
+  #app{
+    position:fixed;inset:0;background:#FBF7EF;overflow:hidden;
+    touch-action:manipulation;user-select:none;-webkit-user-select:none;
+  }
+  @media (min-width:560px) and (min-height:700px){
+    body{background:#E7DCC6;display:flex;align-items:center;justify-content:center}
+    #app{
+      position:relative;inset:auto;width:390px;height:min(844px,94vh);
+      border-radius:40px;border:1px solid rgba(40,30,10,.06);
+      box-shadow:0 2px 3px rgba(30,25,15,.05),0 34px 64px -22px rgba(60,45,20,.30);
+    }
+  }
+
+  @keyframes popIn{0%{transform:scale(0);opacity:0}60%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
+  @keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.04)}}
+  @keyframes slideIn{0%{opacity:0;transform:translateX(28px)}100%{opacity:1;transform:translateX(0)}}
+  @keyframes fadeUp{0%{opacity:0;transform:translateY(10px)}100%{opacity:1;transform:translateY(0)}}
+
+  .screen{position:absolute;inset:0;display:none;flex-direction:column;background:#FBF7EF}
+  .screen.active{display:flex}
+  .screen .body{
+    flex:1;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;
+    padding:calc(env(safe-area-inset-top,0px) + 22px) 28px 0;
+  }
+  .screen.active .body{animation:slideIn .3s cubic-bezier(0.22,1,0.36,1) both}
+  .screen.active.back .body{animation:fadeUp .28s cubic-bezier(0.22,1,0.36,1) both}
+  .footer{
+    padding:12px 24px calc(env(safe-area-inset-bottom,0px) + 22px);
+    display:flex;flex-direction:column;gap:13px;flex:none;
+  }
+
+  .btn{
+    display:block;width:100%;height:52px;border:0;border-radius:9999px;cursor:pointer;
+    font:500 16px/52px "Inter",sans-serif;letter-spacing:.005em;text-align:center;
+    transition:transform 120ms cubic-bezier(0.4,0,0.2,1),background 120ms;
+  }
+  .btn:active{transform:scale(.98)}
+  .btn-prominent{background:#00D64F;color:#fff}
+  .btn-prominent:active{background:#00B843}
+  .btn-standard{background:#F0EADF;color:#211E17}
+  .btn-standard:active{background:#ECE3CE}
+  .footnote{text-align:center;font:500 15px/1.35 "Inter";color:#8A8069}
+
+  .pill{display:inline-flex;align-items:center;gap:8px;border-radius:9999px}
+
+  /* ---------- 1 · join ---------- */
+  .scan-badge{align-self:flex-start;font:500 12px/1 "Inter";letter-spacing:.06em;text-transform:uppercase;color:#00A63C;background:#E4F9ED;padding:8px 12px;border-radius:9999px}
+  .merchant{margin-top:24px;display:flex;align-items:center;gap:16px}
+  .merchant .glyph{width:66px;height:66px;border-radius:20px;background:#211E17;display:flex;align-items:center;justify-content:center;flex:none}
+  .merchant .glyph img{filter:brightness(0) invert(1)}
+  .merchant h2{font:500 27px/1.05 "Inter";color:#211E17;letter-spacing:-.01em;margin:0}
+  .merchant .loc{display:flex;align-items:center;gap:4px;margin-top:6px;color:#8A8069;font:400 14px/1 "Inter"}
+  .merchant .loc img{opacity:.5}
+  .bill{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:280px}
+  .bill .label{font:400 14px/1 "Inter";color:#8A8069;margin-bottom:10px}
+  .amount{display:flex;align-items:baseline;justify-content:center}
+  .amount .cur{font:400 40px/1 "Inter";color:#A79A80}
+  .amount .int{font:400 74px/1 "Inter";color:#211E17;letter-spacing:-.02em}
+  .amount .dec{font:400 32px/1 "Inter";color:#A79A80}
+  .btc{margin-top:10px;font:400 15px/1 "IBM Plex Mono";color:#B4855A}
+  .table-pill{margin-top:22px;background:#F0EADF;padding:9px 16px;font:500 14px/1 "Inter";color:#4A4436}
+
+  /* ---------- 2 · invite ---------- */
+  .title{text-align:center;font:500 20px/1.2 "Inter";color:#211E17}
+  .subtitle{text-align:center;font:400 15px/1.4 "Inter";color:#8A8069;margin-top:6px}
+  .qr-card{margin:22px auto 0;width:206px;height:206px;flex:none;background:#fff;border-radius:26px;box-shadow:0 6px 20px rgba(60,45,20,.10);border:1px solid rgba(40,30,10,.05);display:flex;align-items:center;justify-content:center}
+  .tap-pill{border:1.5px solid #E3D9C4;padding:11px 18px;font:500 15px/1 "Inter";color:#4A4436}
+  .tap-pill .phones{display:flex;gap:3px}
+  .tap-pill .phones span{width:11px;height:16px;border:1.5px solid #7A7057;border-radius:3px}
+  .lock-note{display:flex;align-items:center;gap:6px;font:400 12.5px/1.3 "Inter";color:#B4855A;text-align:center;padding:0 8px}
+  .lock-note img{opacity:.6;flex:none}
+  .here-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .here-row .lhs{font:500 15px/1 "Inter";color:#211E17}
+  .here-row .rhs{font:500 14px/1 "Inter";color:#00A63C}
+  .avatars{display:flex;gap:10px}
+  .avatar{width:44px;height:44px;border-radius:50%;color:#fff;font:600 17px/1 "Inter";display:flex;align-items:center;justify-content:center;flex:none}
+  .avatar.in{animation:popIn .5s cubic-bezier(0.22,1,0.36,1) both}
+  .avatar.empty{border:2px dashed #C9BFA8;background:none}
+
+  /* ---------- 3 · live tab ---------- */
+  .live-head{text-align:center;font:400 14px/1 "Inter";color:#8A8069}
+  .sync-pill{align-self:center;margin-top:9px;background:#E4F9ED;padding:6px 13px;font:500 12px/1 "Inter";color:#0A8F3C}
+  .sync-pill .dot{width:7px;height:7px;border-radius:50%;background:#00D64F;box-shadow:0 0 0 3px rgba(0,214,79,.22)}
+  .ring-wrap{position:relative;width:236px;height:236px;margin:14px auto 0;flex:none}
+  .ring-wrap svg{position:absolute;inset:0;transform:rotate(-90deg)}
+  .ring-wrap .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .ring-wrap .center .cap{font:400 13px/1 "Inter";color:#8A8069;margin-bottom:4px}
+  .ring-amt{display:flex;align-items:baseline}
+  .ring-amt .cur{font:400 26px/1 "Inter";color:#8A8069}
+  .ring-amt .val{font:400 46px/1 "Inter";color:#211E17;letter-spacing:-.02em}
+  .ring-wrap .center .of{font:400 14px/1 "Inter";color:#8A8069;margin-top:6px;white-space:nowrap}
+  #ring-fg{transition:stroke-dashoffset 480ms cubic-bezier(0.22,1,0.36,1)}
+  .people{margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .person{display:flex;align-items:center;gap:9px;background:#fff;border:1px solid rgba(40,30,10,.05);border-radius:14px;padding:8px 10px;transition:opacity .5s}
+  .person.out{opacity:.5}
+  .person .face{width:30px;height:30px;border-radius:50%;color:#fff;font:600 13px/1 "Inter";display:flex;align-items:center;justify-content:center;flex:none}
+  .person .who{min-width:0;flex:1}
+  .person .nm{font:500 14px/1 "Inter";color:#211E17}
+  .person .st{font:500 12px/1 "Inter";margin-top:3px;color:#A79A80}
+  .person.in .st{color:#0A8F3C}
+  .settling{display:none;align-items:center;justify-content:center;gap:9px;height:52px;font:500 15px/1 "Inter";color:#0A8F3C;background:#E4F9ED;border-radius:9999px}
+  .settling .dot{width:8px;height:8px;border-radius:50%;background:#00D64F;animation:breathe 1s ease-in-out infinite}
+
+  /* ---------- 4 · chip in ---------- */
+  .segmented{margin:20px auto 0;display:flex;background:#F0EADF;border-radius:9999px;padding:4px;width:100%;max-width:280px;flex:none}
+  .segmented button{flex:1;border:0;background:none;color:#A79A80;font:500 15px/1 "Inter";padding:11px 0;border-radius:9999px;cursor:pointer}
+  .segmented button.on{background:#fff;color:#211E17;box-shadow:0 1px 3px rgba(60,45,20,.12)}
+  .share{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:170px}
+  .share .basis{margin-top:10px;font:400 14px/1 "Inter";color:#8A8069}
+  .breakdown{background:#fff;border:1px solid rgba(40,30,10,.05);border-radius:18px;padding:18px 18px 6px;margin-bottom:6px;flex:none}
+  .breakdown .src{display:flex;justify-content:space-between;align-items:center;padding-bottom:12px;border-bottom:1px solid #F0EADF;margin-bottom:12px}
+  .breakdown .src .lhs{display:flex;align-items:center;gap:8px;font:500 15px/1 "Inter";color:#211E17}
+  .breakdown .src .rhs{font:400 13px/1 "Inter";color:#8A8069}
+  .breakdown .row{display:flex;justify-content:space-between;padding-bottom:12px}
+  .breakdown .row .k{font:400 15px/1 "Inter";color:#8A8069}
+  .breakdown .row .v{font:500 15px/1 "IBM Plex Mono";color:#211E17}
+  .breakdown .total{border-top:1.5px dashed rgba(40,30,10,.16);display:flex;justify-content:space-between;padding:12px 0}
+  .breakdown .total .k{font:500 16px/1 "Inter";color:#211E17}
+  .breakdown .total .v{font:500 16px/1 "IBM Plex Mono";color:#211E17}
+  .changed-note{display:none;align-self:center;margin-top:14px;font:500 13px/1 "Inter";color:#B06C10;background:#FBEFD6;padding:9px 14px;border-radius:9999px}
+
+  /* ---------- 5 · paid ---------- */
+  .paid-hero{display:flex;flex-direction:column;align-items:center;flex:none}
+  .paid-hero .smiley{position:relative;width:92px;height:92px;background:#E4F9ED;border-radius:50%;display:flex;align-items:center;justify-content:center}
+  .paid-hero .check{position:absolute;bottom:-2px;right:-2px;width:34px;height:34px;border-radius:50%;background:#00D64F;border:3px solid #FBF7EF;display:flex;align-items:center;justify-content:center;animation:popIn .5s cubic-bezier(0.22,1,0.36,1) .2s both}
+  .paid-hero .check img{filter:brightness(0) invert(1)}
+  .paid-hero h2{font:500 27px/1.1 "Inter";color:#211E17;margin:14px 0 0}
+  .paid-hero .sub{text-align:center;font:400 15px/1.4 "Inter";color:#8A8069;margin-top:8px}
+  .paid-hero .sub b{color:#211E17}
+  .receipt{background:#fff;border:1px solid rgba(40,30,10,.05);border-radius:18px;padding:6px 16px;margin-top:18px;flex:none}
+  .receipt .line{display:flex;align-items:center;justify-content:space-between;padding:9px 0}
+  .receipt .line + .line{border-top:1px solid #F0EADF}
+  .receipt .line .lhs{display:flex;align-items:center;gap:9px}
+  .receipt .line .face{width:24px;height:24px;border-radius:50%;color:#fff;font:600 11px/1 "Inter";display:flex;align-items:center;justify-content:center}
+  .receipt .line .nm{font:400 15px/1 "Inter";color:#4A4436}
+  .receipt .line .v{font:500 14px/1 "IBM Plex Mono";color:#211E17}
+  .receipt .grand{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-top:1.5px dashed rgba(40,30,10,.16)}
+  .receipt .grand .k{font:500 15px/1 "Inter";color:#211E17}
+  .receipt .grand .v{font:500 15px/1 "IBM Plex Mono";color:#211E17}
+
+  /* ---------- ! mismatch ---------- */
+  .hold-pill{align-self:center;font:500 13px/1 "Inter";color:#B06C10;background:#FBEFD6;padding:9px 14px}
+  .hold-pill img{opacity:.7}
+  .big-print{margin:18px auto 0;width:172px;height:172px;flex:none;border-radius:28px;overflow:hidden;box-shadow:0 8px 26px rgba(120,80,10,.16),0 0 0 5px #fff,0 0 0 7px #FBEFD6}
+  .mm-title{text-align:center;font:500 23px/1.25 "Inter";color:#211E17;margin-top:20px}
+  .mm-sub{text-align:center;font:400 15px/1.45 "Inter";color:#8A8069;margin-top:10px}
+  .tiles{display:flex;justify-content:space-between;padding:18px 4px 10px;margin-top:auto}
+  .tile-col{display:flex;flex-direction:column;align-items:center;gap:6px}
+  .tile-col .t{position:relative;width:44px;height:44px;border-radius:12px;overflow:hidden;box-shadow:0 0 0 2px #E4F9ED}
+  .tile-col .t .badge{position:absolute;bottom:-3px;right:-3px;width:18px;height:18px;border-radius:50%;background:#00D64F;border:2px solid #FBF7EF;display:flex;align-items:center;justify-content:center}
+  .tile-col .t .badge img{filter:brightness(0) invert(1)}
+  .tile-col .lbl{font:500 11px/1 "Inter";color:#8A8069}
+  .tile-col.bad .t{box-shadow:0 0 0 2.5px #E0A020;animation:breathe 1.6s ease-in-out infinite}
+  .tile-col.bad .t .badge{background:#E0A020;color:#fff;font:700 12px/1 "Inter"}
+  .tile-col.bad .lbl{font-weight:600;color:#B06C10}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ 1 JOIN ============ -->
+  <section class="screen" data-screen="join">
+    <div class="body">
+      <div class="scan-badge">Scanned from the receipt</div>
+      <div class="merchant">
+        <div class="glyph"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0ibTIgNyA0LjQxLTQuNDFBMiAyIDAgMCAxIDcuODMgMmg4LjM0YTIgMiAwIDAgMSAxLjQyLjU5TDIyIDciLz48cGF0aCBkPSJNNCAxMnY4YTIgMiAwIDAgMCAyIDJoMTJhMiAyIDAgMCAwIDItMnYtOCIvPjxwYXRoIGQ9Ik0xNSAyMnYtNGEyIDIgMCAwIDAtMi0yaC0yYTIgMiAwIDAgMC0yIDJ2NCIvPjxwYXRoIGQ9Ik0yIDdoMjAiLz48cGF0aCBkPSJNMjIgN3YzYTIgMiAwIDAgMS0yIDIgMi43IDIuNyAwIDAgMS0xLjU5LS42My43LjcgMCAwIDAtLjgyIDBBMi43IDIuNyAwIDAgMSAxNiAxMmEyLjcgMi43IDAgMCAxLTEuNTktLjYzLjcuNyAwIDAgMC0uODIgMEEyLjcgMi43IDAgMCAxIDEyIDEyYTIuNyAyLjcgMCAwIDEtMS41OS0uNjMuNy43IDAgMCAwLS44MiAwQTIuNyAyLjcgMCAwIDEgOCAxMmEyLjcgMi43IDAgMCAxLTEuNTktLjYzLjcuNyAwIDAgMC0uODIgMEEyLjcgMi43IDAgMCAxIDQgMTJhMiAyIDAgMCAxLTItMloiLz48L3N2Zz4=" width="52" height="52"></div>
+        <div>
+          <h2>Osteria Lupa</h2>
+          <div class="loc"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTIwIDEwYzAgNi04IDEyLTggMTJzLTgtNi04LTEyYTggOCAwIDAgMSAxNiAwWiIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTAiIHI9IjMiLz48L3N2Zz4=" width="15" height="15">Grand St · New York</div>
+        </div>
+      </div>
+      <div class="bill">
+        <div class="label">Tonight’s bill</div>
+        <div class="amount"><span class="cur">$</span><span class="int">214</span><span class="dec">.50</span></div>
+        <div class="btc">≈ 0.00318 BTC</div>
+        <div class="pill table-pill">Table of 6 · dinner</div>
+      </div>
+    </div>
+    <div class="footer">
+      <button class="btn btn-prominent" data-go="invite">Start a tab with friends</button>
+      <div class="footnote">Just you? <a href="#" onclick="return false">Pay the whole bill</a></div>
+    </div>
+  </section>
+
+  <!-- ============ 2 INVITE ============ -->
+  <section class="screen" data-screen="invite">
+    <div class="body">
+      <div class="title">Invite the table</div>
+      <div class="subtitle">Everyone scans this to join.<br>The tab opens on their phone, already in sync.</div>
+      <div class="qr-card" id="qr-slot"></div>
+      <div style="margin:18px 0 0;display:flex;flex-direction:column;align-items:center;gap:12px">
+        <div class="pill tap-pill"><span class="phones"><span></span><span></span></span>or tap two phones together</div>
+        <div class="lock-note"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHJlY3Qgd2lkdGg9IjE4IiBoZWlnaHQ9IjExIiB4PSIzIiB5PSIxMSIgcng9IjIiIHJ5PSIyIi8+PHBhdGggZD0iTTcgMTFWN2E1IDUgMCAwIDEgMTAgMHY0Ii8+PC9zdmc+" width="14" height="14">Connects phone-to-phone — nothing goes online until you all pay</div>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;padding:18px 0 10px">
+        <div class="here-row"><span class="lhs">Here now</span><span class="rhs" id="here-count">4 of 6 here</span></div>
+        <div class="avatars" id="avatars"></div>
+      </div>
+    </div>
+    <div class="footer">
+      <button class="btn btn-prominent" data-go="live">Open the tab</button>
+      <div class="footnote" id="waiting-note">Waiting for Dev &amp; Priya…</div>
+    </div>
+  </section>
+
+  <!-- ============ 3 LIVE TAB ============ -->
+  <section class="screen" data-screen="live">
+    <div class="body" style="padding-left:26px;padding-right:26px">
+      <div class="live-head">Osteria Lupa · the tab is live</div>
+      <div class="pill sync-pill"><span class="dot"></span>6 phones in sync</div>
+      <div class="ring-wrap">
+        <svg width="236" height="236" viewBox="0 0 236 236">
+          <circle cx="118" cy="118" r="99" fill="none" stroke="#ECE3CE" stroke-width="15"/>
+          <circle id="ring-fg" cx="118" cy="118" r="99" fill="none" stroke="#00D64F" stroke-width="15" stroke-linecap="round"/>
+        </svg>
+        <div class="center">
+          <div class="cap">chipped in</div>
+          <div class="ring-amt"><span class="cur">$</span><span class="val" id="ring-val">0.00</span></div>
+          <div class="of">of $214.50 · <span id="ring-count">0 of 6</span> in</div>
+        </div>
+      </div>
+      <div class="people" id="people"></div>
+    </div>
+    <div class="footer">
+      <button class="btn btn-prominent" id="chip-cta" data-go="chipin">Chip in your share</button>
+      <div class="settling" id="settling"><span class="dot"></span><span id="settling-txt">You’re in — the tab settles itself</span></div>
+    </div>
+  </section>
+
+  <!-- ============ 4 CHIP IN ============ -->
+  <section class="screen" data-screen="chipin">
+    <div class="body">
+      <div class="title">Your share</div>
+      <div class="segmented">
+        <button class="on" id="seg-even">Even split</button>
+        <button id="seg-custom">Custom</button>
+      </div>
+      <div class="share">
+        <div class="amount"><span class="cur">$</span><span class="int">35</span><span class="dec">.75</span></div>
+        <div class="basis">Even split · $214.50 ÷ 6 people</div>
+      </div>
+      <div class="pill changed-note" id="changed-note">Dev’s share changed — this is the fresh picture</div>
+      <div class="breakdown" style="margin-top:14px">
+        <div class="src">
+          <span class="lhs"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTExLjc2NyAxOS4wODljNC45MjQuODY4IDYuMTQtNi4wMjUgMS4yMTYtNi44OTRtLTEuMjE2IDYuODk0TDUuODYgMTguMDQ3bTUuOTA4IDEuMDQyLS4zNDcgMS45N20xLjU2My04Ljg2NGM0LjkyNC44NjkgNi4xNC02LjAyNSAxLjIxNS02Ljg5M20tMS4yMTUgNi44OTMtMy45NC0uNjk0bTUuMTU1LTYuMkw4LjI5IDQuMjZtNS45MDggMS4wNDIuMzQ4LTEuOTdNNy40OCAyMC4zNjRsMy4xMjYtMTcuNzI3Ii8+PC9zdmc+" width="18" height="18">From your Bitcoin</span>
+          <span class="rhs">$312.40 available</span>
+        </div>
+        <div class="row"><span class="k">Your part of the bill</span><span class="v">$35.68</span></div>
+        <div class="row"><span class="k">Your bit of the network fee</span><span class="v">$0.07</span></div>
+        <div class="total"><span class="k">You pay</span><span class="v">$35.75</span></div>
+      </div>
+    </div>
+    <div class="footer">
+      <button class="btn btn-prominent" id="chipin-cta" data-go="live-settle">Chip in $35.75</button>
+      <div class="footnote" style="font-size:13.5px">Your only tap — the tab settles itself once everyone’s in</div>
+    </div>
+  </section>
+
+  <!-- ============ 5 PAID ============ -->
+  <section class="screen" data-screen="paid">
+    <div class="body" style="padding-left:26px;padding-right:26px">
+      <div class="paid-hero">
+        <div class="smiley">
+          <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDBBNjNDIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTUuOCAxMS4zIDIgMjJsMTAuNy0zLjc5Ii8+PHBhdGggZD0iTTQgM2guMDEiLz48cGF0aCBkPSJNMjIgOGguMDEiLz48cGF0aCBkPSJNMTUgMmguMDEiLz48cGF0aCBkPSJNMjIgMjBoLjAxIi8+PHBhdGggZD0ibTIyIDItMi4yNC43NWEyLjkgMi45IDAgMCAwLTEuOTYgMy4xMmMuMS44Ni0uNTcgMS42My0xLjQ1IDEuNjNoLS4zOGMtLjg2IDAtMS42LjYtMS43NiAxLjQ0TDE0IDEwIi8+PHBhdGggZD0ibTIyIDEzLS44Mi0uMzNjLS44Ni0uMzQtMS44Mi4yLTEuOTggMS4xMWMtLjExLjctLjcyIDEuMjItMS40MyAxLjIySDE3Ii8+PHBhdGggZD0ibTExIDIgLjMzLjgyYy4zNC44Ni0uMiAxLjgyLTEuMTEgMS45OEM5LjUyIDQuOSA5IDUuNTIgOSA2LjIzVjciLz48cGF0aCBkPSJNMTEgMTNjMS45MyAxLjkzIDIuODMgNC4xNyAyIDUtLjgzLjgzLTMuMDctLjA3LTUtMi0xLjkzLTEuOTMtMi44My00LjE3LTItNSAuODMtLjgzIDMuMDcuMDcgNSAyWiIvPjwvc3ZnPg==" width="44" height="44">
+          <div class="check"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTIwIDYgOSAxN2wtNS01Ii8+PC9zdmc+" width="18" height="18"></div>
+        </div>
+        <h2>Paid!</h2>
+        <div class="sub">Osteria Lupa got <b>one</b> payment<br>of $214.50 from the whole table.</div>
+      </div>
+      <div class="receipt" id="receipt"></div>
+    </div>
+    <div class="footer">
+      <button class="btn btn-standard" data-go="join">Back to the group</button>
+    </div>
+  </section>
+
+  <!-- ============ ! MISMATCH (appears only if the tab changes) ============ -->
+  <section class="screen" data-screen="mismatch">
+    <div class="body">
+      <div class="pill hold-pill"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTMgMTJhOSA5IDAgMCAxIDktOSA5Ljc1IDkuNzUgMCAwIDEgNi43NCAyLjc0TDIxIDgiLz48cGF0aCBkPSJNMjEgM3Y1aC01Ii8+PHBhdGggZD0iTTIxIDEyYTkgOSAwIDAgMS05IDkgOS43NSA5Ljc1IDAgMCAxLTYuNzQtMi43NEwzIDE2Ii8+PHBhdGggZD0iTTggMTZIM3Y1Ii8+PC9zdmc+" width="16" height="16">Hold on a sec</div>
+      <div class="big-print" id="bigprint-slot"></div>
+      <div class="mm-title">The tab changed</div>
+      <div class="mm-sub">Dev’s share changed after the others were ready, so his picture no longer matches. Take a fresh look before the tab settles.</div>
+      <div class="tiles" id="tiles"></div>
+    </div>
+    <div class="footer">
+      <button class="btn btn-prominent" data-go="chipin">Take a fresh look</button>
+      <div class="footnote">Nothing’s been paid yet</div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+/* ---------- seeded generators (ported from tab.dc.html so the visuals match) ---------- */
+function hash(str){ let h=2166136261; for(let i=0;i<str.length;i++){ h^=str.charCodeAt(i); h=Math.imul(h,16777619);} return h>>>0; }
+function prng(seed){ let a=seed>>>0; return ()=>{ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+const svgNS="http://www.w3.org/2000/svg";
+function el(tag,attrs){ const n=document.createElementNS(svgNS,tag); for(const k in attrs) n.setAttribute(k,attrs[k]); return n; }
+
+function makeFingerprint(seed){
+  const rnd=prng(hash(seed));
+  const baseHue=Math.floor(rnd()*360);
+  const pal=[0,52,150,295].map(d=>`hsl(${(baseHue+d)%360} 66% 56%)`);
+  const bg=`hsl(${baseHue} 44% 96%)`;
+  const svg=el("svg",{viewBox:"0 0 100 100",width:"100%",height:"100%",preserveAspectRatio:"xMidYMid meet",style:"display:block"});
+  svg.appendChild(el("rect",{x:0,y:0,width:100,height:100,fill:bg}));
+  const N=5, cs=16.5, gap=2.6, span=N*cs+(N-1)*gap, o=(100-span)/2;
+  for(let r=0;r<N;r++) for(let c=0;c<3;c++){
+    if(rnd()>0.46){
+      const col=pal[Math.floor(rnd()*pal.length)];
+      const rx=rnd()>0.5?cs/2:4;
+      const mk=cc=>el("rect",{x:o+cc*(cs+gap),y:o+r*(cs+gap),width:cs,height:cs,rx,fill:col});
+      svg.appendChild(mk(c)); if(c<2) svg.appendChild(mk(4-c));
+    }
+  }
+  return svg;
+}
+
+function makeQR(){
+  const rnd=prng(hash("lupa-7f3-invite"));
+  const N=21, u=4.4, pad=6;
+  const size=pad*2+N*u;
+  const svg=el("svg",{width:164,height:164,viewBox:`0 0 ${size} ${size}`});
+  svg.appendChild(el("rect",{x:0,y:0,width:size,height:size,fill:"#fff"}));
+  for(let r=0;r<N;r++) for(let c=0;c<N;c++){
+    const inFinder=(r<7&&c<7)||(r<7&&c>=N-7)||(r>=N-7&&c<7);
+    if(inFinder) continue;
+    if(rnd()>0.52) svg.appendChild(el("rect",{x:pad+c*u,y:pad+r*u,width:u-0.5,height:u-0.5,rx:1.2,fill:"#211E17"}));
+  }
+  const finder=(gx,gy)=>{
+    svg.appendChild(el("rect",{x:gx,y:gy,width:7*u,height:7*u,rx:3,fill:"#211E17"}));
+    svg.appendChild(el("rect",{x:gx+u,y:gy+u,width:5*u,height:5*u,rx:2,fill:"#fff"}));
+    svg.appendChild(el("rect",{x:gx+2*u,y:gy+2*u,width:3*u,height:3*u,rx:1.5,fill:"#211E17"}));
+  };
+  finder(pad,pad); finder(pad+(N-7)*u,pad); finder(pad,pad+(N-7)*u);
+  return svg;
+}
+
+/* ---------- data ---------- */
+const FRIENDS=[
+  {name:"You",   initial:"A", color:"#F2683C"},
+  {name:"Ben",   initial:"B", color:"#1FA8A0"},
+  {name:"Cira",  initial:"C", color:"#8A63D2"},
+  {name:"Dev",   initial:"D", color:"#E0A020"},
+  {name:"Mateo", initial:"M", color:"#3E7BE0"},
+  {name:"Priya", initial:"P", color:"#12B76A"},
+];
+const SHARE=35.75, BILL=214.50;
+const RING_C=2*Math.PI*99;
+
+/* ---------- state ---------- */
+// chipped-in flags by friend index; Ben, Cira and Mateo land before you do.
+// mismatchShown: the scripted "Dev's share changed" interruption fires once per run.
+let chipped, mismatchShown;
+function resetRun(){ chipped=[false,true,true,false,true,false]; mismatchShown=false; }
+resetRun();
+
+let timers=[];
+function later(fn,ms){ timers.push(setTimeout(fn,ms)); }
+function clearTimers(){ timers.forEach(clearTimeout); timers=[]; }
+
+/* ---------- static slots ---------- */
+document.getElementById("qr-slot").appendChild(makeQR());
+document.getElementById("bigprint-slot").appendChild(makeFingerprint("osteria-lupa-changed-238.00-v9"));
+
+const tilesBox=document.getElementById("tiles");
+FRIENDS.forEach(f=>{
+  const bad=f.name==="Dev";
+  const col=document.createElement("div");
+  col.className="tile-col"+(bad?" bad":"");
+  const t=document.createElement("div"); t.className="t";
+  t.appendChild(makeFingerprint(bad?"osteria-lupa-changed-238.00-v9":"osteria-lupa-final-214.50-v7"));
+  const badge=document.createElement("div"); badge.className="badge";
+  if(bad){ badge.textContent="!"; }
+  else { const img=document.createElement("img"); img.src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDAwIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTIwIDYgOSAxN2wtNS01Ii8+PC9zdmc+"; img.width=11; img.height=11; badge.appendChild(img); }
+  t.appendChild(badge);
+  const lbl=document.createElement("span"); lbl.className="lbl"; lbl.textContent=f.name;
+  col.appendChild(t); col.appendChild(lbl);
+  tilesBox.appendChild(col);
+});
+
+const receipt=document.getElementById("receipt");
+FRIENDS.forEach(f=>{
+  const line=document.createElement("div"); line.className="line";
+  line.innerHTML=`<span class="lhs"><span class="face" style="background:${f.color}">${f.initial}</span><span class="nm">${f.name}</span></span><span class="v">$${SHARE.toFixed(2)}</span>`;
+  receipt.appendChild(line);
+});
+const grand=document.createElement("div"); grand.className="grand";
+grand.innerHTML=`<span class="k">Total to Osteria Lupa</span><span class="v">$${BILL.toFixed(2)}</span>`;
+receipt.appendChild(grand);
+
+/* ---------- invite screen ---------- */
+function renderInvite(){
+  const box=document.getElementById("avatars");
+  box.innerHTML="";
+  const initial=[FRIENDS[0],FRIENDS[1],FRIENDS[2],FRIENDS[4]];
+  initial.forEach((f,i)=>{
+    const a=document.createElement("div");
+    a.className="avatar in"; a.style.background=f.color; a.style.animationDelay=(i*0.1)+"s";
+    a.textContent=f.initial; box.appendChild(a);
+  });
+  for(let i=0;i<2;i++){ const e=document.createElement("div"); e.className="avatar empty"; box.appendChild(e); }
+  document.getElementById("here-count").textContent="4 of 6 here";
+  document.getElementById("waiting-note").textContent="Waiting for Dev & Priya…";
+  const arrive=(f,count)=>{
+    const empty=box.querySelector(".avatar.empty");
+    if(!empty) return;
+    const a=document.createElement("div");
+    a.className="avatar in"; a.style.background=f.color; a.textContent=f.initial;
+    box.replaceChild(a,empty);
+    document.getElementById("here-count").textContent=count+" of 6 here";
+  };
+  later(()=>{ arrive(FRIENDS[3],5); document.getElementById("waiting-note").textContent="Waiting for Priya…"; },1800);
+  later(()=>{ arrive(FRIENDS[5],6); document.getElementById("waiting-note").textContent="Everyone’s here"; },3200);
+}
+
+/* ---------- live screen ---------- */
+function renderPeople(){
+  const box=document.getElementById("people");
+  box.innerHTML="";
+  FRIENDS.forEach((f,i)=>{
+    const isin=chipped[i];
+    const p=document.createElement("div");
+    p.className="person "+(isin?"in":"out");
+    p.innerHTML=`<span class="face" style="background:${f.color}">${f.initial}</span><span class="who"><div class="nm">${f.name}</div><div class="st">${isin?"Chipped in":"Here"}</div></span>`;
+    box.appendChild(p);
+  });
+}
+function renderRing(animate){
+  const n=chipped.filter(Boolean).length;
+  const contributed=Math.min(BILL,n*SHARE);
+  const fg=document.getElementById("ring-fg");
+  if(!animate) fg.style.transition="none";
+  fg.setAttribute("stroke-dasharray",RING_C);
+  fg.setAttribute("stroke-dashoffset",RING_C*(1-contributed/BILL));
+  if(!animate){ fg.getBoundingClientRect(); fg.style.transition=""; }
+  document.getElementById("ring-val").textContent=contributed.toFixed(2);
+  document.getElementById("ring-count").textContent=n+" of 6";
+}
+function land(i){ chipped[i]=true; renderPeople(); renderRing(true); }
+function setSettling(txt){ document.getElementById("settling-txt").textContent=txt; }
+
+function renderLive(settle){
+  const cta=document.getElementById("chip-cta");
+  const settling=document.getElementById("settling");
+  renderPeople(); renderRing(false);
+  if(settle){
+    // your only tap already happened — chips land, then the tab settles itself
+    cta.style.display="none"; settling.style.display="flex";
+    setSettling("You’re in — the tab settles itself");
+    if(!mismatchShown){
+      // first attempt: Priya lands, then Dev edits his share and the pictures stop matching
+      mismatchShown=true;
+      later(()=>land(0),350);
+      later(()=>land(5),1400);
+      later(()=>go("mismatch"),2600);
+    } else {
+      // fresh look confirmed: the last chip lands and it settles for real
+      later(()=>land(0),350);
+      later(()=>{ land(3); setSettling("Everyone’s in — settling…"); },1500);
+      later(()=>go("paid"),2900);
+    }
+  } else if(chipped[0]){
+    cta.style.display="none"; settling.style.display="flex";
+  } else {
+    cta.style.display="block"; settling.style.display="none";
+  }
+}
+
+/* ---------- chip-in screen ---------- */
+const segEven=document.getElementById("seg-even"), segCustom=document.getElementById("seg-custom");
+segEven.onclick=()=>{ segEven.classList.add("on"); segCustom.classList.remove("on"); };
+segCustom.onclick=()=>{ segCustom.classList.add("on"); segEven.classList.remove("on"); };
+
+function renderChipin(){
+  const fresh=mismatchShown&&!chipped[3];
+  document.getElementById("changed-note").style.display=fresh?"inline-flex":"none";
+  document.getElementById("chipin-cta").textContent=fresh?"Looks right — chip in $35.75":"Chip in $35.75";
+  if(fresh) chipped[0]=false; // re-confirming against the new picture
+}
+
+/* ---------- router ---------- */
+function go(name){
+  clearTimers();
+  let target=name, settle=false;
+  if(name==="live-settle"){ target="live"; settle=true; }
+  if(name==="join") resetRun();
+  document.querySelectorAll(".screen").forEach(s=>s.classList.toggle("active",s.dataset.screen===target));
+  if(target==="invite") renderInvite();
+  if(target==="live") renderLive(settle);
+  if(target==="chipin") renderChipin();
+  if(target==="paid") chipped=[true,true,true,true,true,true];
+}
+document.querySelectorAll("[data-go]").forEach(b=>b.addEventListener("click",()=>go(b.dataset.go)));
+
+go("join");
+</script>
+</body>
+</html>
