@@ -546,9 +546,9 @@ if git cat-file -e "$tip_hash:.gitignore" 2>/dev/null; then
   fi
 fi
 
-# Quick pre-check (--quick=first, all-checks mode only)
+# Quick check (--quick=only or the --quick=first pre-check)
 build_failed=()
-if [ "$run_flake_checks" = true ] && [ "$quick" = first ]; then
+if [ "$run_flake_checks" = true ] && { [ "$quick" = first ] || [ "$quick" = only ]; }; then
   if [ "$mode" = parallel ]; then
     quick_targets=()
     for idx in "${quick_ordered[@]}"; do
