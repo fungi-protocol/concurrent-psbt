@@ -106,12 +106,15 @@
             cargoArtifacts = cargoArtifactsDev;
             CARGO_PROFILE = "dev";
             pnameSuffix = "-mutants";
+            NEXTEST_BASELINE = testChecks.tests-nightly-dev;
             nativeBuildInputs = [
               pkgs.cargo-mutants
               pkgs.cargo-nextest
             ];
             buildPhaseCargoCommand = ''
-              cargo mutants --in-place --test-tool nextest
+              test -f "$NEXTEST_BASELINE/nextest-run.zip"
+              cargo mutants --in-place --test-tool nextest --baseline=skip \
+                --in-diff ${pkgs.lib.escapeShellArg inputs.mutants-diff}
             '';
             installPhase = "mkdir -p $out";
           }
