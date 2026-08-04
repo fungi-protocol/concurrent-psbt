@@ -111,7 +111,8 @@
               pkgs.cargo-nextest
             ];
             buildPhaseCargoCommand = ''
-              cargo mutants --in-place --test-tool nextest
+              cargo mutants --in-place --test-tool nextest \
+                --in-diff ${pkgs.lib.escapeShellArg inputs.mutants-diff}
             '';
             installPhase = "mkdir -p $out";
           }

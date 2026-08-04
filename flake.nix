@@ -11,6 +11,11 @@
       url = "github:numtide/treefmt-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # validate-commits overrides this with one parent diff per commit.
+    mutants-diff = {
+      url = "file:/dev/null";
+      flake = false;
+    };
   };
 
   outputs =
