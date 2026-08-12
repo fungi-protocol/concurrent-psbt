@@ -25,7 +25,8 @@ With --check NAME, only that check runs (repeatable for multiple).
 Traversal order (default: --reverse):
   --forward      oldest→newest  (CI: validate full history)
   --reverse      newest→oldest  (development: surface recent failures first)
-  --bisect       midpoint-first (history rewriting: locate breakage in O(log n))
+  --bisect       midpoint levels, prioritizing high-degree commits
+                 (history rewriting: locate breakage in O(log n))
 
 Flake check phase — check selection:
   --check NAME          run only checks.\$system.NAME (repeatable)
@@ -292,19 +293,81 @@ reverse)
   for ((i = 0; i < total; i++)); do ordered+=("$i"); done
   ;;
 bisect)
-  # BFS on midpoints — finds failures in O(log n) for sparse breakage
-  ordered=()
-  queue=("0 $((total - 1))")
+  # Build midpoint levels, then prioritize convergence and fan-out points
+  # within each level.
+  midpoint_order=()
+  midpoint_level=()
+  max_bisect_level=0
+  queue=("0 $((total - 1)) 0")
   while [ ${#queue[@]} -gt 0 ]; do
     pair=${queue[0]}
     queue=("${queue[@]:1}")
-    lo=${pair%% *}
-    hi=${pair##* }
+    read -r lo hi level <<<"$pair"
     if [ "$lo" -gt "$hi" ]; then continue; fi
     mid=$(((lo + hi) / 2))
-    ordered+=("$mid")
-    if [ "$lo" -lt "$mid" ]; then queue+=("$lo $((mid - 1))"); fi
-    if [ "$mid" -lt "$hi" ]; then queue+=("$((mid + 1)) $hi"); fi
+    midpoint_order+=("$mid")
+    midpoint_level[mid]=$level
+    if [ "$level" -gt "$max_bisect_level" ]; then
+      max_bisect_level=$level
+    fi
+    next_level=$((level + 1))
+    if [ "$lo" -lt "$mid" ]; then
+      queue+=("$lo $((mid - 1)) $next_level")
+    fi
+    if [ "$mid" -lt "$hi" ]; then
+      queue+=("$((mid + 1)) $hi $next_level")
+    fi
+  done
+
+  declare -A selected_index parent_count child_count
+  for i in "${!linear[@]}"; do
+    selected_index[${linear[$i]}]=$i
+    parent_count[$i]=0
+    child_count[$i]=0
+  done
+
+  # Query direct parents without walking beyond the selected revset. Count only
+  # edges whose endpoints are both being validated: outside commits cannot help
+  # distinguish failures within this run.
+  if ! graph_output=$(printf '%s\n' "${linear[@]}" |
+    git rev-list --parents --no-walk=unsorted --stdin); then
+    echo "error: git failed to resolve commit graph" >&2
+    exit 1
+  fi
+  while read -r -a graph_line; do
+    [ ${#graph_line[@]} -gt 0 ] || continue
+    child=${graph_line[0]}
+    child_idx=${selected_index[$child]}
+    for parent in "${graph_line[@]:1}"; do
+      if [ -n "${selected_index[$parent]+x}" ]; then
+        parent_idx=${selected_index[$parent]}
+        parent_count[$child_idx]=$((parent_count[$child_idx] + 1))
+        child_count[$parent_idx]=$((child_count[$parent_idx] + 1))
+      fi
+    done
+  done <<<"$graph_output"
+
+  degree=()
+  max_degree=0
+  for i in "${!linear[@]}"; do
+    degree[i]=$((parent_count[$i] + child_count[$i]))
+    if [ "${degree[$i]}" -gt "$max_degree" ]; then
+      max_degree=${degree[$i]}
+    fi
+  done
+
+  # Preserve bisect levels, using degree to prioritize equally deep midpoints.
+  # The original midpoint order remains the final tie-breaker.
+  ordered=()
+  for ((level = 0; level <= max_bisect_level; level++)); do
+    for ((score = max_degree; score >= 0; score--)); do
+      for idx in "${midpoint_order[@]}"; do
+        if [ "${midpoint_level[$idx]}" -eq "$level" ] &&
+          [ "${degree[$idx]}" -eq "$score" ]; then
+          ordered+=("$idx")
+        fi
+      done
+    done
   done
   ;;
 esac
