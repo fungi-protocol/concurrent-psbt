@@ -1,0 +1,17 @@
+diff --git a/Cargo.lock b/Cargo.lock
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -394,5 +394,6 @@ name = "scrubber"
+ version = "0.1.0"
+ dependencies = [
++ "fastrand",
+  "proptest",
+  "psbt-v2",
+ ]
+diff --git a/crates/scrubber/Cargo.toml b/crates/scrubber/Cargo.toml
+--- a/crates/scrubber/Cargo.toml
++++ b/crates/scrubber/Cargo.toml
+@@ -12,2 +12,3 @@ unit-tests = []
+ [dependencies]
++fastrand = "2.5.0"
+ psbt-v2 = "0.3.0"
