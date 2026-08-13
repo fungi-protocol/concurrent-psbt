@@ -34,3 +34,7 @@ coverage:
 validate-commits:
     jj git export
     nix run --no-update-lock-file .#validate-commits
+
+# Replay expected-failure check fixtures onto HEAD
+validate-check-fixtures:
+    nix run --no-update-lock-file .#validate-check-fixtures
