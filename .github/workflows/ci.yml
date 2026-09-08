@@ -33,10 +33,10 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             # HEAD is the pull request's synthetic merge commit:
             # https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request
-            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --parallel --keep-going --print-build-logs \
+            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --parallel --keep-going --print-failed-build-logs \
               -- '${{ github.event.pull_request.base.sha }}..HEAD'
           else
-            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --parallel --keep-going --print-build-logs
+            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --parallel --keep-going --print-failed-build-logs
           fi
       - name: Link recorded nextest result
         run: |
@@ -45,4 +45,6 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: nextest-nightly-dev-x86_64-linux
-          path: result-nextest/nextest-run.zip
+          path: |
+            result-nextest/nextest-run.zip
+            result-nextest/chrome-traces/*.json
