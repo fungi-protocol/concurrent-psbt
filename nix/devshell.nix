@@ -13,6 +13,7 @@
           packages = with pkgs; [
             cargo-llvm-cov
             cargo-nextest
+            cargo-shear
             cargo-sort
             config.packages.validate-commits
             config.treefmt.build.wrapper
