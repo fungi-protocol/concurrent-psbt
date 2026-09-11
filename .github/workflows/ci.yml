@@ -28,6 +28,12 @@ jobs:
           send-statistics: "false"
       - uses: DeterminateSystems/nix-installer-action@33c9ab3ef95cd57c164d9d6eb1f9a46338538d41 # main
       - uses: DeterminateSystems/magic-nix-cache-action@55718cd9ebf1737a061487d5ada21abf31e99a98 # main
+      - name: Fetch check fixtures
+        run: git fetch --no-tags origin check-fixtures:refs/remotes/origin/check-fixtures
+      - name: Validate check fixtures
+        run: |
+          NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-check-fixtures' -- \
+            --target HEAD --registry origin/check-fixtures --print-build-logs
       - name: Validate commits
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
