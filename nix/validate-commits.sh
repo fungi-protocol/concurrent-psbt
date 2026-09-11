@@ -21,6 +21,7 @@ monotonicity check, and a flake check phase.
 The flake check phase builds checks.\$system.NAME for each commit.
 Without --check, all checks run (all-checks mode).
 With --check NAME, only that check runs (repeatable for multiple).
+Flakes with a mutants-diff input receive each commit's first-parent diff.
 
 Traversal order (default: --reverse):
   --forward      oldest→newest  (CI: validate full history)
@@ -47,9 +48,8 @@ Failure handling (default: report all per-commit failures, then continue):
   --keep-going    pass --keep-going to nix (build unrelated targets despite failures)
 
 Batching:
-  --parallel      collect all check targets across commits, build in one nix
-                  invocation (nix schedules across cores); falls back to
-                  sequential on failure to isolate broken commits
+  --parallel      collect check targets across commits and build them in one nix
+                  invocation; mutants with per-commit diffs run separately
                   (best for CI or mostly-passing history)
 
 Output:
@@ -217,8 +217,41 @@ nix_flake_check() {
     nix flake check --no-update-lock-file "${nix_build_args[@]}" "$@"
   fi
 }
+nix_flake_check_for_commit() {
+  local hash=$1
+  shift
+  if commit_has_mutants_diff "$hash"; then
+    nix_flake_check --override-input mutants-diff "$(mutants_diff_input "$hash")" "$@"
+  else
+    nix_flake_check "$@"
+  fi
+}
 check_exists() { nix eval --no-update-lock-file "$1" --apply 'x: true' >/dev/null 2>/dev/null; }
-should_check() { [ "$no_skip_missing" = true ] || check_exists "$1"; }
+nix_build_check() {
+  local hash=$1
+  local check_name=$2
+  shift 2
+  if [ "$check_name" = mutants ] && commit_has_mutants_diff "$hash"; then
+    nix_build --override-input mutants-diff "$(mutants_diff_input "$hash")" "$@"
+  else
+    nix_build "$@"
+  fi
+}
+check_exists_for_commit() {
+  local hash=$1
+  local check_name=$2
+  shift 2
+  if [ "$check_name" = mutants ] && commit_has_mutants_diff "$hash"; then
+    nix eval --no-update-lock-file \
+      --override-input mutants-diff "$(mutants_diff_input "$hash")" \
+      "$1" --apply 'x: true' >/dev/null 2>/dev/null
+  else
+    check_exists "$@"
+  fi
+}
+should_check_for_commit() {
+  [ "$no_skip_missing" = true ] || check_exists_for_commit "$@"
+}
 
 # --everything / --log-revset: validate and expand
 if [ "$everything" = true ]; then
@@ -279,6 +312,27 @@ if [ "$total" -eq 0 ]; then
   echo "No commits in range."
   exit 0
 fi
+
+# Create commit diffs outside the repository, and only when a mutants check
+# needs one. Nix imports and hashes file inputs idempotently.
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+commit_has_mutants_diff() {
+  git grep -q --fixed-strings mutants-diff "$1" -- flake.nix 2>/dev/null
+}
+mutants_diff_input() {
+  local hash=$1
+  local diff_file="$tmpdir/$hash.diff"
+  if [ ! -e "$diff_file" ]; then
+    if parent=$(git rev-parse "$hash^1" 2>/dev/null); then
+      git diff --no-ext-diff "$parent" "$hash" >"$diff_file"
+    else
+      empty_tree=$(git hash-object -t tree /dev/null)
+      git diff --no-ext-diff "$empty_tree" "$hash" >"$diff_file"
+    fi
+  fi
+  printf 'path:%s\n' "$(nix store add "$diff_file")"
+}
 
 # Build index ordering for traversal
 # ordered[] contains indices into linear[] (not hashes)
@@ -370,12 +424,12 @@ check_one_commit() {
   local expect_fail="${expect_fail_check[$hash]:-}"
   if [ -n "$expect_fail" ] && expect_fail_matches_checks "$expect_fail"; then
     local named_target="$flakeref#checks.$system.$expect_fail"
-    if ! nix eval --no-update-lock-file "$named_target" --apply 'x: true' >/dev/null 2>/dev/null; then
+    if ! check_exists_for_commit "$hash" "$expect_fail" "$named_target"; then
       echo "  ✗ $(fmt_commit "$hash") (EXPECT-FAIL: $expect_fail — check not defined)"
       build_failed+=("$hash")
       return 1
     fi
-    if nix_build "$named_target"; then
+    if nix_build_check "$hash" "$expect_fail" "$named_target"; then
       echo "  ✗ $(fmt_commit "$hash") (EXPECT-FAIL: $expect_fail unexpectedly passed)"
       build_failed+=("$hash")
       return 1
@@ -390,7 +444,8 @@ check_one_commit() {
     local failed=false
     for cn in "${check_names[@]}"; do
       local target="$flakeref#checks.$system.$cn"
-      if should_check "$target" && ! nix_build "$target"; then
+      if should_check_for_commit "$hash" "$cn" "$target" &&
+        ! nix_build_check "$hash" "$cn" "$target"; then
         echo "  ✗ $(fmt_commit "$hash") ($cn failed)"
         failed=true
       fi
@@ -403,7 +458,7 @@ check_one_commit() {
     fi
   else
     # All-checks mode: run full nix flake check
-    if nix_flake_check "$flakeref"; then
+    if nix_flake_check_for_commit "$hash" "$flakeref"; then
       echo "  ✓ $(fmt_commit "$hash")"
     else
       echo "  ✗ $(fmt_commit "$hash")"
@@ -507,11 +562,11 @@ fi
 gitignore_failed=()
 tip_hash=${linear[0]}
 if git cat-file -e "$tip_hash:.gitignore" 2>/dev/null; then
-  tmpdir=$(mktemp -d)
-  trap 'rm -rf "$tmpdir"' EXIT
-  git show "$tip_hash:.gitignore" >"$tmpdir/.gitignore"
-  git init -q "$tmpdir/repo"
-  cp "$tmpdir/.gitignore" "$tmpdir/repo/.gitignore"
+  gitignore_tmpdir="$tmpdir/gitignore"
+  mkdir "$gitignore_tmpdir"
+  git show "$tip_hash:.gitignore" >"$gitignore_tmpdir/.gitignore"
+  git init -q "$gitignore_tmpdir/repo"
+  cp "$gitignore_tmpdir/.gitignore" "$gitignore_tmpdir/repo/.gitignore"
 
   echo "Checking gitignore monotonicity..."
   for idx in "${ordered[@]}"; do
@@ -521,7 +576,7 @@ if git cat-file -e "$tip_hash:.gitignore" 2>/dev/null; then
       exit 1
     fi
     if leaked=$(printf '%s\n' "$tree_names" |
-      git -C "$tmpdir/repo" check-ignore --stdin); then
+      git -C "$gitignore_tmpdir/repo" check-ignore --stdin); then
       :
     else
       status=$?
@@ -588,8 +643,10 @@ fi
 if [ "$run_flake_checks" = true ] && [ "$quick" != only ]; then
   if [ "$mode" = parallel ]; then
     echo "Flake check phase: collecting targets for parallel build..."
-    # Categorize commits and collect nix build targets for batching
+    # Preserve the shared batch for every target except mutants that need a
+    # commit-specific input override.
     flake_targets=()
+    mutant_indices=()
     expect_fail_indices=()
     no_checks_indices=()
     for idx in "${flake_ordered[@]}"; do
@@ -602,50 +659,70 @@ if [ "$run_flake_checks" = true ] && [ "$quick" != only ]; then
         continue
       fi
       flakeref="git+file://$repo_root?rev=$hash$shallow_param"
-      n_before=${#flake_targets[@]} # track whether this commit adds any targets
+      n_before=$((${#flake_targets[@]} + ${#mutant_indices[@]}))
       # --check mode: build only the named checks
       if [ ${#check_names[@]} -gt 0 ]; then
         for cn in "${check_names[@]}"; do
           target="$flakeref#checks.$system.$cn"
-          if [ "$no_skip_missing" = true ]; then
-            flake_targets+=("$target")
-          elif nix eval --no-update-lock-file "$target" --apply 'x: true' >/dev/null 2>/dev/null; then
-            flake_targets+=("$target")
+          if [ "$no_skip_missing" = true ] ||
+            check_exists_for_commit "$hash" "$cn" "$target"; then
+            if [ "$cn" = mutants ] && commit_has_mutants_diff "$hash"; then
+              mutant_indices+=("$idx")
+            else
+              flake_targets+=("$target")
+            fi
           fi
         done
       else
         while IFS= read -r attr; do
           [ -n "$attr" ] || continue
-          flake_targets+=("$flakeref#checks.$system.$attr")
-        done < <(nix eval --no-update-lock-file "$flakeref#checks.$system" --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrNames cs) + "\n"' --raw 2>/dev/null || true)
+          if [ "$attr" = mutants ] && commit_has_mutants_diff "$hash"; then
+            mutant_indices+=("$idx")
+          else
+            flake_targets+=("$flakeref#checks.$system.$attr")
+          fi
+        done < <(
+          nix eval --no-update-lock-file "$flakeref#checks.$system" \
+            --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrNames cs) + "\n"' \
+            --raw 2>/dev/null || true
+        )
       fi
-      if [ ${#flake_targets[@]} -eq "$n_before" ]; then
+      if [ $((${#flake_targets[@]} + ${#mutant_indices[@]})) -eq "$n_before" ]; then
         no_checks_indices+=("$idx")
       fi
     done
-    # Batch-build all collected targets; fall back to sequential on failure
+    # Batch-build the original target set. On failure, retain the original
+    # sequential fallback so the broken commit is identified.
     if [ ${#flake_targets[@]} -gt 0 ]; then
       n_commits=$((${#flake_ordered[@]} - ${#expect_fail_indices[@]} - ${#no_checks_indices[@]}))
       echo "Flake check phase: building ${#flake_targets[@]} targets across $n_commits commits..."
       if nix_build "${flake_targets[@]}"; then
-        echo "  ✓ all flake checks passed"
+        echo "  ✓ batched flake checks passed"
       else
         echo "  ✗ parallel build had failures, falling back to sequential..."
         mode=sequential
       fi
     fi
-    # Report skip/EXPECT-FAIL/no-checks only if parallel succeeded
-    # (sequential fallback handles them in its own loop)
     if [ "$mode" = parallel ]; then
+      for idx in "${mutant_indices[@]}"; do
+        hash=${linear[$idx]}
+        target="git+file://$repo_root?rev=$hash$shallow_param#checks.$system.mutants"
+        if nix_build_check "$hash" mutants "$target"; then
+          echo "  ✓ $(fmt_commit "$hash") (mutants)"
+        else
+          echo "  ✗ $(fmt_commit "$hash") (mutants failed)"
+          build_failed+=("$hash")
+        fi
+      done
       for idx in "${expect_fail_indices[@]}"; do
         hash=${linear[$idx]}
         flakeref="git+file://$repo_root?rev=$hash$shallow_param"
         expect_fail="${expect_fail_check[$hash]:-}"
         named_target="$flakeref#checks.$system.$expect_fail"
-        if ! nix eval --no-update-lock-file "$named_target" --apply 'x: true' >/dev/null 2>/dev/null; then
+        if ! check_exists_for_commit "$hash" "$expect_fail" "$named_target"; then
           echo "  ✗ $(fmt_commit "$hash") (EXPECT-FAIL: $expect_fail — check not defined)"
           build_failed+=("$hash")
-        elif nix_build "$named_target"; then
+        elif nix_build_check "$hash" "$expect_fail" "$named_target"; then
           echo "  ✗ $(fmt_commit "$hash") (EXPECT-FAIL: $expect_fail unexpectedly passed)"
           build_failed+=("$hash")
         else
@@ -655,7 +732,7 @@ if [ "$run_flake_checks" = true ] && [ "$quick" != only ]; then
       for idx in "${no_checks_indices[@]}"; do
         hash=${linear[$idx]}
         flakeref="git+file://$repo_root?rev=$hash$shallow_param"
-        if nix_flake_check "$flakeref"; then
+        if nix_flake_check_for_commit "$hash" "$flakeref"; then
           echo "  ✓ $(fmt_commit "$hash") (flake check only)"
         else
           echo "  ✗ $(fmt_commit "$hash")"
