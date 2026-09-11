@@ -3,5 +3,16 @@ name = "scrubber"
 version.workspace = true
 edition = "2024"
 
+[features]
+default = ["unit-tests", "prop-tests"]
+prop-tests = []
+unit-tests = []
+
+[dependencies]
+psbt-v2 = "0.3.0"
+
+[dev-dependencies]
+proptest = "1"
+
 [lints]
 workspace = true
