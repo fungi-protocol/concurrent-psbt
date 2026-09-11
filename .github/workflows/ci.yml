@@ -28,15 +28,23 @@ jobs:
           send-statistics: "false"
       - uses: DeterminateSystems/nix-installer-action@33c9ab3ef95cd57c164d9d6eb1f9a46338538d41 # main
       - uses: DeterminateSystems/magic-nix-cache-action@55718cd9ebf1737a061487d5ada21abf31e99a98 # main
-      - name: Validate commits
+      - name: Validate commits (quick)
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             # HEAD is the pull request's synthetic merge commit:
             # https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request
-            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --parallel --keep-going --print-build-logs \
+            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --quick --parallel --print-build-logs \
               -- '${{ github.event.pull_request.base.sha }}..HEAD'
           else
-            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --parallel --keep-going --print-build-logs
+            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --quick --parallel --print-build-logs
+          fi
+      - name: Validate commits (full)
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --quick=deferred --parallel --keep-going --print-build-logs \
+              -- '${{ github.event.pull_request.base.sha }}..HEAD'
+          else
+            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --quick=deferred --parallel --keep-going --print-build-logs
           fi
       - name: Link recorded nextest result
         run: |
