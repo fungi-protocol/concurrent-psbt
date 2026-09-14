@@ -1,0 +1,29 @@
+name: default branch
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  # Checks use the dev profile; building them on main populates the cache for later PRs.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: DeterminateSystems/nix-installer-action@33c9ab3ef95cd57c164d9d6eb1f9a46338538d41 # main
+      - uses: DeterminateSystems/magic-nix-cache-action@55718cd9ebf1737a061487d5ada21abf31e99a98 # main
+      - name: Build the checks
+        run: nix flake check --no-update-lock-file --print-build-logs '.?shallow=1'
+  # Packages use the release profile; building them on main populates the cache for later PRs.
+  packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: DeterminateSystems/nix-installer-action@33c9ab3ef95cd57c164d9d6eb1f9a46338538d41 # main
+      - uses: DeterminateSystems/magic-nix-cache-action@55718cd9ebf1737a061487d5ada21abf31e99a98 # main
+      - name: Build the packages
+        run: |
+          system=$(nix eval --raw --impure --expr builtins.currentSystem)
+          nix eval --json --no-update-lock-file ".?shallow=1#packages.$system" --apply builtins.attrNames |
+            jq --raw-output --arg system "$system" '.[] | ".?shallow=1#packages.\($system).\(.)"' |
+            xargs nix build --no-link --no-update-lock-file --print-build-logs
