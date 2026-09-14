@@ -1,5 +1,7 @@
 { inputs, ... }:
 {
+  imports = [ ./checks/fetch-validation-history.nix ];
+
   perSystem =
     {
       pkgs,
