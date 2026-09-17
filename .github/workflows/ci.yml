@@ -30,7 +30,12 @@ jobs:
           fail-mode: "true"
           send-statistics: "false"
       - uses: DeterminateSystems/nix-installer-action@9383ce2bf08796b65508822f5982f49151badc4e # main
-      - uses: DeterminateSystems/magic-nix-cache-action@55718cd9ebf1737a061487d5ada21abf31e99a98 # main
+      - uses: Mic92/hestia@f1f4df2801140a36398ed423533c8460618539df # v3.0.1
+        with:
+          # The default, latest, would fetch a newer daemon than the action pin.
+          version: v3.0.1
+          # Do not upload paths that cache.nixos.org already serves.
+          upstream-cache-filter: true
       - name: Validate commits
         run: |
           NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --parallel --keep-going --print-build-logs \
