@@ -4,6 +4,7 @@ on:
   merge_group:
     types: [checks_requested]
 permissions:
+  actions: read # lets hestia detect evicted cache entries upfront
   contents: read
   code-quality: write
 jobs:
@@ -31,7 +32,10 @@ jobs:
           fail-mode: "true"
           send-statistics: "false"
       - uses: DeterminateSystems/nix-installer-action@33c9ab3ef95cd57c164d9d6eb1f9a46338538d41 # main
-      - uses: DeterminateSystems/magic-nix-cache-action@55718cd9ebf1737a061487d5ada21abf31e99a98 # main
+      - uses: Mic92/hestia@f1f4df2801140a36398ed423533c8460618539df # v3.0.1
+        with:
+          # Do not upload paths that cache.nixos.org already serves.
+          upstream-cache-filter: true
       - name: Validate commits
         run: |
           NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --parallel --keep-going --print-build-logs \

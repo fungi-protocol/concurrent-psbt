@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
 permissions:
+  actions: read # lets hestia detect evicted cache entries upfront
   contents: read
   code-quality: write
 jobs:
@@ -12,7 +13,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: DeterminateSystems/nix-installer-action@33c9ab3ef95cd57c164d9d6eb1f9a46338538d41 # main
-      - uses: DeterminateSystems/magic-nix-cache-action@55718cd9ebf1737a061487d5ada21abf31e99a98 # main
+      - uses: Mic92/hestia@f1f4df2801140a36398ed423533c8460618539df # v3.0.1
+        with:
+          # Do not upload paths that cache.nixos.org already serves.
+          upstream-cache-filter: true
       - name: Build the checks
         run: nix flake check --no-update-lock-file --print-build-logs '.?shallow=1'
       - name: Link the coverage report
@@ -31,7 +35,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: DeterminateSystems/nix-installer-action@33c9ab3ef95cd57c164d9d6eb1f9a46338538d41 # main
-      - uses: DeterminateSystems/magic-nix-cache-action@55718cd9ebf1737a061487d5ada21abf31e99a98 # main
+      - uses: Mic92/hestia@f1f4df2801140a36398ed423533c8460618539df # v3.0.1
+        with:
+          # Do not upload paths that cache.nixos.org already serves.
+          upstream-cache-filter: true
       - name: Build the packages
         run: |
           system=$(nix eval --raw --impure --expr builtins.currentSystem)
