@@ -1,5 +1,6 @@
 {
   imports = [
+    ./actionlint.nix
     ./aggregates.nix
     ./args.nix
     ./build.nix
