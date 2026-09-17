@@ -28,8 +28,10 @@
           }
         );
 
+      # A gate enforces a threshold over the tracefile of one report: a
+      # collection, or the merged report.
       mkCoverageGate =
-        suffix: coveragePercent: collections:
+        suffix: coveragePercent: report:
         pkgs.runCommand "concurrent-psbt-coverage${suffix}"
           {
             nativeBuildInputs = [ pkgs.lcov ];
@@ -38,13 +40,37 @@
             bash ${./gate.sh} \
               "$out" \
               '${toString coveragePercent}' \
-              ${pkgs.lib.escapeShellArgs (map (collection: "${collection}/coverage.lcov") collections)}
+              ${report}/coverage.lcov
           '';
+
+      # Line coverage each suite must reach on its own, independently of the
+      # other. They only catch a collapse of one category of test; lower them
+      # deliberately, from measured coverage, never to make a failing change
+      # pass.
+      coverageThresholds = {
+        prop-only = 100;
+        unit-only = 100;
+      };
 
       coverageCollections = {
         coverage-collect-prop-only = mkCoverageCollection "-prop-only" "prop-tests";
         coverage-collect-unit-only = mkCoverageCollection "-unit-only" "unit-tests";
       };
+
+      # One report over every collection, ungated so that it can be published
+      # even when a gate fails.
+      merged =
+        pkgs.runCommand "concurrent-psbt-coverage-report"
+          {
+            nativeBuildInputs = [ pkgs.lcov ];
+          }
+          ''
+            bash ${./merge.sh} "$out" ${
+              pkgs.lib.escapeShellArgs (
+                map (collection: "${collection}/coverage.lcov") (builtins.attrValues coverageCollections)
+              )
+            }
+          '';
     in
     {
       checkTags = pkgs.lib.genAttrs [
@@ -52,17 +78,21 @@
         "coverage-collect-prop-only"
         "coverage-collect-unit-only"
         "coverage-prop-only"
+        "coverage-report"
         "coverage-unit-only"
       ] (_: [ "nightly" ]);
 
       checks = coverageCollections // {
-        coverage = mkCoverageGate "" 100 (builtins.attrValues coverageCollections);
-        coverage-prop-only = mkCoverageGate "-prop-only" 100 [
-          coverageCollections.coverage-collect-prop-only
-        ];
-        coverage-unit-only = mkCoverageGate "-unit-only" 100 [
-          coverageCollections.coverage-collect-unit-only
-        ];
+        coverage-report = merged;
+        # Together the suites must always cover every line, so this threshold
+        # is fixed. Only the per-suite thresholds may be lowered, deliberately.
+        coverage = mkCoverageGate "" 100 merged;
+        coverage-prop-only =
+          mkCoverageGate "-prop-only" coverageThresholds.prop-only
+            coverageCollections.coverage-collect-prop-only;
+        coverage-unit-only =
+          mkCoverageGate "-unit-only" coverageThresholds.unit-only
+            coverageCollections.coverage-collect-unit-only;
       };
     };
 }
