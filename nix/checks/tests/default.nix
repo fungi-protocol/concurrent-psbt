@@ -13,15 +13,14 @@
         release = "release";
       };
 
+      mkDeps = profile: craneLib: craneLib.buildDepsOnly (commonArgs // { CARGO_PROFILE = profile; });
+
       mkTestCheck =
-        profile: craneLib:
-        let
-          deps = craneLib.buildDepsOnly (commonArgs // { CARGO_PROFILE = profile; });
-        in
+        profile: craneLib: cargoArtifacts:
         craneLib.cargoNextest (
           checkArgs
           // {
-            cargoArtifacts = deps;
+            inherit cargoArtifacts;
             CARGO_PROFILE = profile;
             cargoNextestExtraArgs = "--user-config-file ${./nextest-record.toml}";
             nativeBuildInputs = [ pkgs.unzip ];
@@ -40,11 +39,28 @@
           }
         );
 
+      # nextest does not run doctests; cargo test --doc does.
+      mkDocTestCheck =
+        profile: craneLib: cargoArtifacts:
+        craneLib.cargoDocTest (
+          checkArgs
+          // {
+            inherit cargoArtifacts;
+            CARGO_PROFILE = profile;
+          }
+        );
+
       testChecks = pkgs.lib.concatMapAttrs (
         tcName: craneLib:
-        pkgs.lib.mapAttrs' (
+        pkgs.lib.concatMapAttrs (
           profName: profile:
-          pkgs.lib.nameValuePair "tests-${tcName}-${profName}" (mkTestCheck profile craneLib)
+          let
+            cargoArtifacts = mkDeps profile craneLib;
+          in
+          {
+            "tests-${tcName}-${profName}" = mkTestCheck profile craneLib cargoArtifacts;
+            "doctests-${tcName}-${profName}" = mkDocTestCheck profile craneLib cargoArtifacts;
+          }
         ) profiles
       ) toolchains;
     in
@@ -52,7 +68,12 @@
       checks = testChecks;
 
       checkTags = pkgs.lib.mapAttrs (
-        name: _: [ "nightly" ] ++ pkgs.lib.optional (name == "tests-nightly-dev") "quick"
+        name: _:
+        [ "nightly" ]
+        ++ pkgs.lib.optional (builtins.elem name [
+          "tests-nightly-dev"
+          "doctests-nightly-dev"
+        ]) "quick"
       ) testChecks;
     };
 }
