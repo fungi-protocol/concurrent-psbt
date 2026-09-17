@@ -62,7 +62,10 @@
       merged =
         pkgs.runCommand "concurrent-psbt-coverage-report"
           {
-            nativeBuildInputs = [ pkgs.lcov ];
+            nativeBuildInputs = [
+              pkgs.lcov
+              (pkgs.callPackage ./lcov2xml.nix { })
+            ];
           }
           ''
             bash ${./merge.sh} "$out" ${
