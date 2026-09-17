@@ -28,8 +28,10 @@
           }
         );
 
+      # The gate enforces the threshold over one tracefile; merging is the
+      # report's job.
       mkCoverageGate =
-        suffix: coveragePercent: collections:
+        suffix: coveragePercent: collection:
         pkgs.runCommand "concurrent-psbt-coverage${suffix}"
           {
             nativeBuildInputs = [ pkgs.lcov ];
@@ -38,13 +40,28 @@
             bash ${./gate.sh} \
               "$out" \
               '${toString coveragePercent}' \
-              ${pkgs.lib.escapeShellArgs (map (collection: "${collection}/coverage.lcov") collections)}
+              ${collection}/coverage.lcov
           '';
 
       coverageCollections = {
         coverage-collect-prop-only = mkCoverageCollection "-prop-only" "prop-tests";
         coverage-collect-unit-only = mkCoverageCollection "-unit-only" "unit-tests";
       };
+
+      # One report over every collection, for publishing. The gates enforce the
+      # threshold; this merges their native lcov output.
+      merged =
+        pkgs.runCommand "concurrent-psbt-coverage"
+          {
+            nativeBuildInputs = [ pkgs.lcov ];
+          }
+          ''
+            bash ${./merge.sh} "$out" ${
+              pkgs.lib.escapeShellArgs (
+                map (collection: "${collection}/coverage.lcov") (builtins.attrValues coverageCollections)
+              )
+            }
+          '';
     in
     {
       checkTags = pkgs.lib.genAttrs [
@@ -56,13 +73,9 @@
       ] (_: [ "nightly" ]);
 
       checks = coverageCollections // {
-        coverage = mkCoverageGate "" 100 (builtins.attrValues coverageCollections);
-        coverage-prop-only = mkCoverageGate "-prop-only" 100 [
-          coverageCollections.coverage-collect-prop-only
-        ];
-        coverage-unit-only = mkCoverageGate "-unit-only" 100 [
-          coverageCollections.coverage-collect-unit-only
-        ];
+        coverage = merged;
+        coverage-prop-only = mkCoverageGate "-prop-only" 100 coverageCollections.coverage-collect-prop-only;
+        coverage-unit-only = mkCoverageGate "-unit-only" 100 coverageCollections.coverage-collect-unit-only;
       };
     };
 }
