@@ -3,6 +3,9 @@ on:
   pull_request:
   merge_group:
     types: [checks_requested]
+permissions:
+  contents: read
+  code-quality: write
 jobs:
   validate-commits:
     runs-on: ubuntu-latest
@@ -41,3 +44,21 @@ jobs:
         with:
           name: nextest-nightly-dev-x86_64-linux
           path: result-nextest/nextest-run.zip
+      - name: Build the coverage report
+        id: coverage
+        run: |
+          COMMIT_OID="${{ github.event.pull_request.head.sha || github.sha }}"
+          system=$(nix eval --raw --impure --expr builtins.currentSystem)
+          nix build --no-update-lock-file ".?rev=$COMMIT_OID&shallow=1#checks.$system.coverage" --out-link coverage
+          if [[ -f coverage/cobertura.xml ]]; then
+            echo "report=coverage/cobertura.xml" >> "$GITHUB_OUTPUT"
+          fi
+      # The coverage checks enforce the threshold; this publishes the numbers.
+      # Forks cannot upload.
+      - name: Upload the coverage report
+        if: steps.coverage.outputs.report != '' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-code-coverage@1c15be36fc3733ba839b1dd643bd9556e4426dc1 # v1
+        with:
+          file: ${{ steps.coverage.outputs.report }}
+          language: Rust
+          label: code-coverage/cargo-llvm-cov

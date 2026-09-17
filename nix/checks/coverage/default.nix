@@ -53,7 +53,10 @@
       merged =
         pkgs.runCommand "concurrent-psbt-coverage"
           {
-            nativeBuildInputs = [ pkgs.lcov ];
+            nativeBuildInputs = [
+              pkgs.lcov
+              pkgs.python3Packages.lcov-cobertura
+            ];
           }
           ''
             bash ${./merge.sh} "$out" ${
