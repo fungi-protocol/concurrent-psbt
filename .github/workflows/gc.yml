@@ -1,0 +1,24 @@
+name: cache GC
+on:
+  schedule:
+    # Arbitrary time, to avoid GitHub's peak-load scheduling delays.
+    - cron: "53 3 * * *"
+  workflow_dispatch:
+concurrency:
+  group: hestia-gc
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  gc:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # REST cache deletes
+      contents: read
+    steps:
+      - uses: DeterminateSystems/nix-installer-action@33c9ab3ef95cd57c164d9d6eb1f9a46338538d41 # main
+      - uses: Mic92/hestia@f1f4df2801140a36398ed423533c8460618539df # v3.0.1
+      - name: Run garbage collection
+        run: '"$HESTIA_BIN" gc'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
