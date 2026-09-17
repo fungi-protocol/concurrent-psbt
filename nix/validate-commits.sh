@@ -491,7 +491,7 @@ msg_failed=()
 echo "Checking commit messages..."
 for idx in "${ordered[@]}"; do
   hash=${linear[$idx]}
-  if git log -1 --format='%B' "$hash" | grep -qE '^\s*[#\[]*\s*(TODO|FIXME|WIP)\b|\bfixup! |\bsquash! '; then
+  if git log -1 --format='%B' "$hash" | grep -qE '^\s*[#\[]*\s*(TO[D]O|FIX[M]E|WIP)\b|\bfixup! |\bsquash! '; then
     echo "  ✗ $(fmt_commit "$hash")"
     msg_failed+=("$hash")
   fi
