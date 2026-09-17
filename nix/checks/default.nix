@@ -13,6 +13,5 @@
     ./no-todo-comments.nix
     ./registry.nix
     ./tests
-    ./unused-lints.nix
   ];
 }

@@ -17,7 +17,7 @@
         checkArgs
         // {
           cargoArtifacts = cargoArtifactsDev;
-          cargoClippyExtraArgs = "--all-targets --all-features -- -D warnings";
+          cargoClippyExtraArgs = "--all-targets --all-features -- -D warnings -D unused";
         }
       );
     };
