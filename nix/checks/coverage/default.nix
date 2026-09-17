@@ -4,7 +4,6 @@
       checkArgs,
       cargoArtifactsDev,
       pkgs,
-      rev,
       toolchains,
       ...
     }:
@@ -31,7 +30,7 @@
 
       mkCoverageGate =
         suffix: coveragePercent: collections:
-        pkgs.runCommand "concurrent-psbt-coverage${suffix}-${rev}"
+        pkgs.runCommand "concurrent-psbt-coverage${suffix}"
           {
             nativeBuildInputs = [ pkgs.lcov ];
           }

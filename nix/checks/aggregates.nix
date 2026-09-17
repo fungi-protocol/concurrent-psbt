@@ -3,7 +3,6 @@
     {
       config,
       pkgs,
-      rev,
       ...
     }:
     let
@@ -15,7 +14,7 @@
         }) (pkgs.lib.filterAttrs (_: tags: builtins.elem tag tags) config.checkTags);
       # linkFarm, not symlinkJoin: checks that write the same file name (every
       # tests-* check exports nextest-run.zip) must not collide.
-      join = name: paths: pkgs.linkFarm "${name}-checks-${rev}" paths;
+      join = name: paths: pkgs.linkFarm name paths;
     in
     {
       checks = {

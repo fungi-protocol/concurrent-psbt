@@ -3,7 +3,6 @@
     {
       commonArgs,
       pkgs,
-      rev,
       ...
     }:
     {
@@ -13,7 +12,7 @@
       ];
 
       checks.cargo-sort =
-        pkgs.runCommand "cargo-sort-${rev}"
+        pkgs.runCommand "cargo-sort"
           {
             inherit (commonArgs) src;
             nativeBuildInputs = [ pkgs.cargo-sort ];

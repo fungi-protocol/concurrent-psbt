@@ -3,7 +3,6 @@
     {
       commonArgs,
       pkgs,
-      rev,
       ...
     }:
     {
@@ -12,7 +11,7 @@
         "nightly"
       ];
 
-      checks.no-todo-comments = pkgs.runCommand "no-todo-comments-${rev}" { inherit (commonArgs) src; } ''
+      checks.no-todo-comments = pkgs.runCommand "no-todo-comments" { inherit (commonArgs) src; } ''
         if grep -rn --exclude-dir=contrib 'TO[D]O\|FIX[M]E' $src/ 2>/dev/null; then
           echo "FAIL: unresolved work-item markers found"
           exit 1
