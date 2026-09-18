@@ -1,23 +1,28 @@
 name: CI
 on:
-  push:
-    branches: [main]
   pull_request:
+  merge_group:
+    types: [checks_requested]
+permissions:
+  actions: read # lets hestia detect evicted cache entries upfront
+  contents: read
+  code-quality: write
 jobs:
   validate-commits:
     runs-on: ubuntu-latest
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
     steps:
-      - name: Compute fetch depth
+      - name: Compute initial fetch depth
         id: fetch-depth
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "depth=$(( ${{ github.event.pull_request.commits }} + 1 ))" >> "$GITHUB_OUTPUT"
-          else
-            echo "depth=0" >> "$GITHUB_OUTPUT"
-          fi
+        env:
+          PR_COMMITS: ${{ github.event.pull_request.commits || 0 }}
+        run: echo "depth=$((PR_COMMITS + 2))" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: ${{ steps.fetch-depth.outputs.depth }}
+      - name: Fetch validation history
+        run: bash .github/scripts/fetch-validation-history.sh "$BASE_SHA"
       - name: Check Nix flake inputs
         uses: DeterminateSystems/flake-checker-action@de924abd783455e8429c858962b9e43062d19da1 # v13
         with:
@@ -27,17 +32,14 @@ jobs:
           fail-mode: "true"
           send-statistics: "false"
       - uses: DeterminateSystems/nix-installer-action@33c9ab3ef95cd57c164d9d6eb1f9a46338538d41 # main
-      - uses: DeterminateSystems/magic-nix-cache-action@55718cd9ebf1737a061487d5ada21abf31e99a98 # main
+      - uses: Mic92/hestia@f1f4df2801140a36398ed423533c8460618539df # v3.0.1
+        with:
+          # Do not upload paths that cache.nixos.org already serves.
+          upstream-cache-filter: true
       - name: Validate commits
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            # HEAD is the pull request's synthetic merge commit:
-            # https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request
-            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --parallel --keep-going --print-build-logs \
-              -- '${{ github.event.pull_request.base.sha }}..HEAD'
-          else
-            NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --parallel --keep-going --print-build-logs
-          fi
+          NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --parallel --keep-going --print-build-logs \
+            -- "$BASE_SHA..HEAD"
       - name: Link recorded nextest result
         run: |
           # The history check already realized this derivation; this only adds an out-link.
@@ -46,3 +48,21 @@ jobs:
         with:
           name: nextest-nightly-dev-x86_64-linux
           path: result-nextest/nextest-run.zip
+      - name: Build the coverage report
+        id: coverage
+        run: |
+          COMMIT_OID="${{ github.event.pull_request.head.sha || github.sha }}"
+          system=$(nix eval --raw --impure --expr builtins.currentSystem)
+          nix build --no-update-lock-file ".?rev=$COMMIT_OID&shallow=1#checks.$system.coverage" --out-link coverage
+          if [[ -f coverage/cobertura.xml ]]; then
+            echo "report=coverage/cobertura.xml" >> "$GITHUB_OUTPUT"
+          fi
+      # The coverage checks enforce the threshold; this publishes the numbers.
+      # Forks cannot upload.
+      - name: Upload the coverage report
+        if: steps.coverage.outputs.report != '' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-code-coverage@1c15be36fc3733ba839b1dd643bd9556e4426dc1 # v1
+        with:
+          file: ${{ steps.coverage.outputs.report }}
+          language: Rust
+          label: code-coverage/cargo-llvm-cov

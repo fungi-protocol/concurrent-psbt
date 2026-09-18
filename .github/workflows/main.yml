@@ -1,0 +1,47 @@
+name: default branch
+on:
+  push:
+    branches: [main]
+permissions:
+  actions: read # lets hestia detect evicted cache entries upfront
+  contents: read
+  code-quality: write
+jobs:
+  # Checks use the dev profile; building them on main populates the cache for later PRs.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: DeterminateSystems/nix-installer-action@33c9ab3ef95cd57c164d9d6eb1f9a46338538d41 # main
+      - uses: Mic92/hestia@f1f4df2801140a36398ed423533c8460618539df # v3.0.1
+        with:
+          # Do not upload paths that cache.nixos.org already serves.
+          upstream-cache-filter: true
+      - name: Build the checks
+        run: nix flake check --no-update-lock-file --print-build-logs '.?shallow=1'
+      - name: Link the coverage report
+        run: |
+          system=$(nix eval --raw --impure --expr builtins.currentSystem)
+          nix build --no-update-lock-file ".?shallow=1#checks.$system.coverage" --out-link coverage
+      - name: Upload the coverage report
+        uses: actions/upload-code-coverage@1c15be36fc3733ba839b1dd643bd9556e4426dc1 # v1
+        with:
+          file: coverage/cobertura.xml
+          language: Rust
+          label: code-coverage/cargo-llvm-cov
+  # Packages use the release profile; building them on main populates the cache for later PRs.
+  packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: DeterminateSystems/nix-installer-action@33c9ab3ef95cd57c164d9d6eb1f9a46338538d41 # main
+      - uses: Mic92/hestia@f1f4df2801140a36398ed423533c8460618539df # v3.0.1
+        with:
+          # Do not upload paths that cache.nixos.org already serves.
+          upstream-cache-filter: true
+      - name: Build the packages
+        run: |
+          system=$(nix eval --raw --impure --expr builtins.currentSystem)
+          nix eval --json --no-update-lock-file ".?shallow=1#packages.$system" --apply builtins.attrNames |
+            jq --raw-output --arg system "$system" '.[] | ".?shallow=1#packages.\($system).\(.)"' |
+            xargs nix build --no-link --no-update-lock-file --print-build-logs

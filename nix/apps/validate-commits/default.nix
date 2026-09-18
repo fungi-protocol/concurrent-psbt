@@ -9,7 +9,7 @@
           jujutsu
           nix-output-monitor
         ];
-        text = builtins.readFile ../validate-commits.sh;
+        text = builtins.readFile ./validate-commits.sh;
       };
     in
     {
