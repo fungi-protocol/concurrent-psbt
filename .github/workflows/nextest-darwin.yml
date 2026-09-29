@@ -12,9 +12,31 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: DeterminateSystems/nix-installer-action@33c9ab3ef95cd57c164d9d6eb1f9a46338538d41 # main
       - uses: DeterminateSystems/magic-nix-cache-action@55718cd9ebf1737a061487d5ada21abf31e99a98 # main
+      - name: Prepare Nix build directory
+        run: sudo install -d -o root -m 0755 /nix/var/nix/ci-builds
       - name: Run nextest
-        run: nix build --no-update-lock-file --out-link result-nextest '.#checks.aarch64-darwin.tests-nightly-dev'
+        run: nix build --option build-dir /nix/var/nix/ci-builds --keep-failed --no-update-lock-file --out-link result-nextest '.#checks.aarch64-darwin.tests-nightly-dev'
+      - name: Recover traces from failed Nix builds
+        if: ${{ !cancelled() }}
+        run: |
+          # --keep-failed leaves daemon-owned build directories in this dedicated location.
+          sudo bash -e -c '
+            for build in /nix/var/nix/ci-builds/*; do
+              # Nix versions may place the build files one level deeper.
+              for traces in "$build/nextest-traces" "$build/build/nextest-traces"; do
+                [ -d "$traces" ] || continue
+                destination="$1/$(basename "$build")"
+                mkdir -p "$destination"
+                cp -R "$traces" "$destination/chrome-traces"
+              done
+            done
+            if [ -d "$1" ]; then chmod -R a+rX "$1"; fi
+          ' -- "$PWD/failed-nextest"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() }}
         with:
           name: nextest-nightly-dev-aarch64-darwin
-          path: result-nextest/nextest-run.zip
+          path: |
+            result-nextest/nextest-run.zip
+            result-nextest/chrome-traces/*.json
+            failed-nextest/

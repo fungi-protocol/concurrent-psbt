@@ -55,6 +55,8 @@ Batching:
 Output:
   -h, --help              show this help
   -L, --print-build-logs  print nix build logs
+  --print-failed-build-logs
+                          print complete logs only for failed derivations
 
 VCS mode (default: jj if available, else git):
   --log=jj|git    select VCS for revset resolution
@@ -82,6 +84,7 @@ no_skip_missing=false
 all_checks=false
 log_args=()
 nix_build_args=()
+print_failed_build_logs=false
 vcs_mode=auto
 everything=false
 use_log_revset=false
@@ -113,6 +116,7 @@ while [ $# -gt 0 ]; do
   --no-nom) use_nom=false ;;
   --parallel) mode=parallel ;;
   --fail-fast) fail_fast=true ;;
+  --print-failed-build-logs) print_failed_build_logs=true ;;
   --quick) quick=only ;;
   --quick=*) quick="${1#--quick=}" ;;
   -k | --keep-going | -L | --print-build-logs) nix_build_args+=("$1") ;;
@@ -202,6 +206,11 @@ if [ "${use_nom-unset}" = unset ]; then
     use_nom=true
   fi
 fi
+# Failed-log mode parses Nix's native error output to find failed derivations.
+# Keep that output unmodified instead of routing it through nom.
+if [ "$print_failed_build_logs" = true ]; then
+  use_nom=false
+fi
 if [ "$use_nom" = true ]; then
   nix_cmd=(nom)
 else
@@ -209,12 +218,55 @@ else
 fi
 
 # --- Nix helpers ---
-nix_build() { "${nix_cmd[@]}" build --no-update-lock-file "${nix_build_args[@]}" "$@" --no-link; }
+declare -A printed_failed_drvs=()
+
+nix_with_failed_logs() {
+  if [ "$print_failed_build_logs" = false ]; then
+    "$@"
+    return
+  fi
+
+  local error_file status drv
+  local -a failed_drvs
+  error_file=$(mktemp)
+  if "$@" 2>"$error_file"; then
+    cat "$error_file" >&2
+    rm -f "$error_file"
+    return 0
+  else
+    status=$?
+  fi
+
+  cat "$error_file" >&2
+  # Restrict extraction to the explicit commands Nix recommends for failed
+  # derivations, rather than every derivation path mentioned in the error.
+  mapfile -t failed_drvs < <(
+    grep -oE "nix log /nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[^'\"[:space:]]+\.drv" "$error_file" |
+      sed 's/^nix log //' | sort -u
+  )
+  rm -f "$error_file"
+
+  for drv in "${failed_drvs[@]}"; do
+    # Parallel failures are retried sequentially to identify their commits.
+    # Do not print the same complete derivation log again during that fallback.
+    if [ -n "${printed_failed_drvs[$drv]+set}" ]; then
+      continue
+    fi
+    printed_failed_drvs[$drv]=1
+    echo "Build log for $drv:"
+    nix log "$drv" || true
+  done
+  return "$status"
+}
+
+nix_build() {
+  nix_with_failed_logs "${nix_cmd[@]}" build --no-update-lock-file "${nix_build_args[@]}" "$@" --no-link
+}
 nix_flake_check() {
   if [ "$use_nom" = true ]; then
     nix flake check --no-update-lock-file "${nix_build_args[@]}" "$@" --log-format internal-json |& nom --json
   else
-    nix flake check --no-update-lock-file "${nix_build_args[@]}" "$@"
+    nix_with_failed_logs nix flake check --no-update-lock-file "${nix_build_args[@]}" "$@"
   fi
 }
 check_exists() { nix eval --no-update-lock-file "$1" --apply 'x: true' >/dev/null 2>/dev/null; }

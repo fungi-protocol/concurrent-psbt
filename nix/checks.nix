@@ -35,10 +35,15 @@
             cargoArtifacts = deps;
             CARGO_PROFILE = profile;
             cargoNextestExtraArgs = "--user-config-file ${./nextest-record.toml}";
-            nativeBuildInputs = [ pkgs.unzip ];
+            nativeBuildInputs = with pkgs; [
+              jq
+              unzip
+            ];
             preCheck = ''
               export NEXTEST_STATE_DIR="$TMPDIR/nextest-state"
+              export NEXTEST_TRACE_DIR="$TMPDIR/nextest-traces"
               mkdir -p "$NEXTEST_STATE_DIR"
+              mkdir -p "$NEXTEST_TRACE_DIR"
             '';
             postCheck = ''
               cargo nextest store export \
@@ -47,6 +52,18 @@
                 --archive-file "$out/nextest-run.zip" \
                 latest
               unzip -tqq "$out/nextest-run.zip"
+              mkdir -p "$out/chrome-traces"
+              found_trace=false
+              for trace in "$NEXTEST_TRACE_DIR"/*.json; do
+                [ -e "$trace" ] || continue
+                found_trace=true
+                jq empty "$trace"
+                cp "$trace" "$out/chrome-traces/"
+              done
+              if [ "$found_trace" = false ]; then
+                echo "error: nextest produced no Chrome trace files" >&2
+                exit 1
+              fi
             '';
           }
         );
