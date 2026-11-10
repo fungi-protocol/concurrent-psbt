@@ -11,6 +11,7 @@
         craneLib:
         craneLib.devShell {
           packages = with pkgs; [
+            cargo-audit
             cargo-llvm-cov
             cargo-nextest
             cargo-shear
@@ -19,6 +20,7 @@
             config.treefmt.build.wrapper
             just
             rust-analyzer
+            vulnix
           ];
         };
     in

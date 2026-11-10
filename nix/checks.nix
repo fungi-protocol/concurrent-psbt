@@ -100,6 +100,20 @@
       checks = testChecks // {
         build = toolchains.nightly.buildPackage (checkArgs // { cargoArtifacts = cargoArtifactsRelease; });
 
+        cargo-audit =
+          pkgs.runCommand "cargo-audit-${rev}"
+            {
+              inherit src;
+              nativeBuildInputs = [ pkgs.cargo-audit ];
+            }
+            ''
+              cargo-audit audit \
+                --no-fetch \
+                --db ${inputs.rustsec-advisory-db} \
+                --file "$src/Cargo.lock"
+              mkdir -p $out
+            '';
+
         mutants = toolchains.nightly.mkCargoDerivation (
           checkArgs
           // {
