@@ -10,6 +10,7 @@
     ./coverage
     ./doc.nix
     ./fetch-validation-history.nix
+    ./hestia-version.nix
     ./mutants.nix
     ./no-todo-comments.nix
     ./registry.nix
