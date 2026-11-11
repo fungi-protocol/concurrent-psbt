@@ -30,8 +30,7 @@ impl<T: JoinMut> Join for T {
 ///
 /// Generates idempotent, commutative, and associative property tests for
 /// any type implementing [`Join`] + `Clone` + `PartialEq` + `Debug`.
-#[cfg(feature = "prop-tests")]
-#[allow(unused_macros)] // used by downstream commits (partial.rs, collection modules)
+#[cfg(all(test, feature = "prop-tests"))]
 macro_rules! assert_join_laws {
     ($strategy:expr) => {
         proptest! {

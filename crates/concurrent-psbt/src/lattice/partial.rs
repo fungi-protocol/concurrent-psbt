@@ -72,7 +72,6 @@ impl<V: PartialJoin> Conflict<V> {
     }
 
     /// Build from an iterator, deduplicating values.
-    #[allow(dead_code)] // used by downstream commits (collection modules, domain types)
     pub(crate) fn from_values(iter: impl IntoIterator<Item = V>) -> Self {
         let mut vals = Vec::new();
         for v in iter {
@@ -171,8 +170,7 @@ impl<'a, V: PartialJoin> IntoIterator for &'a Conflict<V> {
 ///
 /// The `$arb_clean` strategy produces clean (pre-join) values.
 /// The `$arb_result` strategy produces `JoinResult` values (both Ok and Err).
-#[cfg(feature = "prop-tests")]
-#[allow(unused_macros)] // used by downstream commits (collection modules, domain types)
+#[cfg(all(test, feature = "prop-tests"))]
 macro_rules! assert_partial_join_laws {
     ($arb_clean:expr, $arb_result:expr) => {
         proptest! {
