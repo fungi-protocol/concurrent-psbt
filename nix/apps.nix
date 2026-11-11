@@ -1,5 +1,5 @@
 {
   imports = [
-    ./apps/validate-commits.nix
+    ./apps/validate-commits
   ];
 }

@@ -27,13 +27,13 @@
         programs.mdformat.enable = true;
         programs.taplo = {
           enable = true;
-          priority = 1;
+          priority = 1; # run after cargo-sort
         };
         programs.yamlfmt.enable = true;
 
         settings.formatter.cargo-sort = {
           command = cargo-sort;
-          priority = 0;
+          priority = 0; # run before taplo
           includes = [
             "Cargo.toml"
             "**/Cargo.toml"

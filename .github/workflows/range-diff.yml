@@ -1,0 +1,13 @@
+name: range-diff
+on:
+  pull_request_target:
+    types: [synchronize]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  range-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: fungi-protocol/post-range-diff-comment@b8681c9d0f72170e1049072984971fe0a82e4529 # main
