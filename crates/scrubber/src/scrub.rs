@@ -156,7 +156,6 @@ fn encode_pair(out: &mut Vec<u8>, key: &Key, value: &[u8]) {
 mod tests {
     #[cfg(feature = "unit-tests")]
     mod unit {
-        #![allow(dead_code)]
         use super::super::*;
         use psbt_v2::raw::Key;
 
