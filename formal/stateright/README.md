@@ -51,6 +51,12 @@ conflict and the two replicas disagreed. That was a bug in the crate, which the
 TLA+ model found by a different path. It is fixed earlier in this series by
 "keep only the maximal values in a conflict".
 
+`checks.formal-stateright-rejects-dropped-value` shows the check can fail at
+all. It applies `nix/formal/stateright/dropped-value.patch`, which seeds a bug
+in the crate's own `Join` (`Err ⊔ Ok` forgets the `Ok` value; the model is
+unchanged), and requires the `flat` configuration to report a `convergence`
+violation. `preservation` is violated too, by the same trace.
+
 ## Compared with the TLA+ model (#97)
 
 - **Shared code, not a transcription.** The `JoinResult` and `Join` code is the

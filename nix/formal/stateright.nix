@@ -9,6 +9,9 @@
 #   candidate in a conflict can be refined while another stays.
 #
 # The BFS exhausts each state space with no violation of `preservation` or `convergence`.
+#
+# `formal-stateright-rejects-*` checks apply a seeded bug from ./stateright/ to the crate and
+# require the model to catch it, so a model that checks nothing can't pass silently.
 {
   perSystem =
     {
@@ -56,6 +59,24 @@
           "flat"
           "option"
           "tree"
+        ];
+      };
+
+      # `Err ⊔ Ok` forgets the `Ok` value, so replicas that saw the same updates disagree even
+      # with a flat `try_join`.
+      checks.formal-stateright-rejects-dropped-value = pkgs.testers.testBuildFailure' {
+        drv = stateright {
+          pname = "formal-stateright-dropped-value";
+          src = pkgs.applyPatches {
+            name = "formal-stateright-dropped-value-src";
+            src = commonArgs.src;
+            patches = [ ./stateright/dropped-value.patch ];
+          };
+          configs = [ "flat" ];
+        };
+        expectedBuilderLogEntries = [
+          "Property \"preservation\" violated"
+          "Property \"convergence\" violated"
         ];
       };
     };
