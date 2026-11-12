@@ -21,7 +21,9 @@
           ''
             set -o pipefail
             cp $src/*.lean . && mkdir -p $out
-            lean -o $out/JoinResult.olean JoinResult.lean | tee $out/lean.txt
+            for m in JoinResult Modulo; do
+              lean -o $out/$m.olean $m.lean | tee -a $out/lean.txt
+            done
             LEAN_PATH=$out lean Axioms.lean | tee $out/axioms.txt
             if grep -q -e sorryAx -e "declaration uses 'sorry'" $out/*.txt; then
               echo "a theorem depends on sorry" >&2

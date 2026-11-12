@@ -13,7 +13,8 @@ Results:
 * `assoc_forces_flat`: conversely, if `join` is associative *up to structural equality*
   then `try_join a b = Ok c` implies `a = b`. So any `PartialJoin` with a non-trivial least
   upper bound, which the `try_join` docs explicitly allow ("`Ok(lub)` ... if one exists"),
-  breaks the `Join` laws of `JoinResult` under that equality.
+  breaks the `Join` laws of `JoinResult` under that equality. `Modulo.lean` shows that the
+  laws do hold for every `try_join` once results are compared by what they denote.
 * `option_not_assoc`: a concrete counterexample reachable from `Ok` values only.
 -/
 
