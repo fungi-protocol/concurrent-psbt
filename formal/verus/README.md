@@ -18,6 +18,11 @@ need an explicit spec for `==`. It proves, for all input sizes:
 No bug was found. This backs the treatment of `Conflict` as a set in the TLA+
 (#97) and Lean (#99) models, which assume it.
 
+`checks.formal-verus-rejects-duplicates` applies
+`nix/formal/verus/duplicates.patch`, which drops the `contains` guard so
+`join_mut` pushes every value, and requires Verus to reject the
+`no_duplicates` loop invariant, to show that the proof can fail.
+
 ## Nix
 
 Verus is not in nixpkgs, so `nix/formal/verus.nix` wraps the upstream release

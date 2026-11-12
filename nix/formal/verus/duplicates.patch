@@ -1,0 +1,13 @@
+--- a/conflict.rs
++++ b/conflict.rs
+@@ -60,9 +60,7 @@
+         let x = other[i];
+         let ghost prefix = other@.subrange(0, i as int);
+         let ghost before = this@;
+-        if !contains(this, x) {
+-            this.push(x);
+-        }
++        this.push(x);
+         proof {
+             assert(other@.subrange(0, i + 1) =~= prefix.push(x));
+             assert forall|y: u8|

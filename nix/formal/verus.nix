@@ -92,10 +92,29 @@
           '';
 
       src = ../../formal/verus;
+
+      # `join_mut` pushes every value, so the result can hold duplicates. Verus must reject
+      # the `no_duplicates` loop invariant.
+      rejectsDuplicates = pkgs.testers.testBuildFailure' {
+        drv = verify "formal-verus-duplicates" (
+          pkgs.applyPatches {
+            name = "formal-verus-duplicates-src";
+            inherit src;
+            patches = [ ./verus/duplicates.patch ];
+          }
+        );
+        expectedBuilderLogEntries = [
+          "error: invariant not satisfied at end of loop body"
+          "this@.no_duplicates(),"
+        ];
+      };
     in
     {
       packages = lib.mkIf supported { inherit verus; };
-      checks = lib.mkIf supported { formal-verus = verify "formal-verus" src; };
+      checks = lib.mkIf supported {
+        formal-verus = verify "formal-verus" src;
+        formal-verus-rejects-duplicates = rejectsDuplicates;
+      };
       formal.packages = lib.optionals supported [ verus ];
     };
 }
