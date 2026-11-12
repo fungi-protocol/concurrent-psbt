@@ -1,0 +1,12 @@
+[package]
+name = "concurrent-psbt-fuzz-afl"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+# Keep in step with cargo-afl, which builds the runtime this links against.
+afl = "=0.18.2"
+concurrent-psbt-fuzz-targets = { path = "../targets" }
