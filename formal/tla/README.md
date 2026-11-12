@@ -32,6 +32,12 @@ The model checks safety only. There is no fairness or liveness property, so
 nothing requires updates to reach every replica, and each replica contributes
 once, at the start.
 
+`checks.formal-tla-rejects-dropped-value` shows the check can fail at all. It
+applies `nix/formal/tla/dropped-value.patch`, a wrong `Join` arm in the model
+(`Err ⊔ Ok` forgets the `Ok` value), and requires TLC to report a
+`Preservation` violation under `flat.cfg`. TLC stops at the first invariant
+that fails. The patch changes the model, not the crate.
+
 ## Nix
 
 TLC comes from nixpkgs (`tlaplus18`, a prebuilt jar plus a JVM), so nothing

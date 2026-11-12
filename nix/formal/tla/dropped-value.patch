@@ -1,0 +1,11 @@
+--- a/JoinResult.tla
++++ b/JoinResult.tla
+@@ -44,7 +44,7 @@
+ Join(a, b) ==
+     CASE  a.ok /\  b.ok -> TryJoin(a.v, b.v)
+       [] ~a.ok /\ ~b.ok -> Err(a.c \cup b.c)
+-      [] ~a.ok /\  b.ok -> Err(a.c \cup {b.v})
++      [] ~a.ok /\  b.ok -> Err(a.c)
+       []  a.ok /\ ~b.ok -> Err({a.v} \cup b.c)
+ 
+ VARIABLES state, seen

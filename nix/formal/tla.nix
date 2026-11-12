@@ -7,6 +7,9 @@
 # TLC exhausts both state spaces with no violation of `Preservation` or
 # `Convergence`. Before conflicts kept only their maximal values, option.cfg
 # violated `Convergence`.
+#
+# `formal-tla-rejects-*` checks apply a seeded bug from ./tla/ to the model and
+# require TLC to catch it, so a model that checks nothing can't pass silently.
 {
   perSystem =
     { pkgs, ... }:
@@ -46,6 +49,23 @@
           "flat"
           "option"
         ];
+      };
+
+      # `Err ⊔ Ok` forgets the `Ok` value in the model, so a replica's state loses a value it
+      # has seen, even with a flat `try_join`. TLC reports the first invariant that fails.
+      checks.formal-tla-rejects-dropped-value = pkgs.testers.testBuildFailure' {
+        drv = tlc {
+          name = "formal-tla-dropped-value";
+          src = pkgs.applyPatches {
+            name = "formal-tla-dropped-value-src";
+            inherit src;
+            patches = [ ./tla/dropped-value.patch ];
+          };
+          configs = [ "flat" ];
+        };
+        # TLC's exit code for a safety violation.
+        expectedBuilderExitCode = 12;
+        expectedBuilderLogEntries = [ "Invariant Preservation is violated" ];
       };
     };
 }
