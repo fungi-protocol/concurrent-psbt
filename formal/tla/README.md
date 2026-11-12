@@ -53,3 +53,32 @@ Weak for: tying the model to the code. It is a hand transcription, so
 nothing checks that it still matches the Rust, and a green check says nothing
 about the Rust itself. Explicit-state checking also needs small finite
 constants.
+
+## Keeping the model in step with the code
+
+No tool checks that a TLA+ spec and a Rust codebase agree, or generates a spec
+from Rust. These are the practical options, from loosest to tightest coupling:
+
+- **Hand-maintained transcription (this PoC).** The operators mirror the match
+  arms of `impl Join for JoinResult<V>`, and nothing enforces it. Cheap, but it
+  drifts silently.
+- **Trace validation.** Instrument the Rust to log each state transition, and
+  have TLC check that the logged behaviour is allowed by the spec (Cirstea,
+  Kuppe, Loillier and Merz, "Validating Traces of Distributed Programs Against
+  TLA+ Specifications", 2024; applied to etcd's raft and Microsoft's CCF). It
+  catches drift from the code side, but only on the behaviours the tests
+  exercise.
+- **Model-based testing.** Generate traces from the spec, with Apalache or
+  Quint emitting ITF JSON, and replay them against the Rust, asserting that the
+  states match at every step. The `quint-connect` crate drives this from Rust
+  for Quint specs. It catches drift from the spec side, and the spec stays the
+  source of truth.
+- **Model in Rust ([Stateright](https://github.com/stateright/stateright)).**
+  The model is a Rust program that calls the real `JoinResult::join`, so there
+  is nothing to drift. The cost is explicit-state checking only (no symbolic
+  checking, unlike Apalache) and no separate, readable spec. See #102 for a
+  Stateright model of this crate and a comparison with this one.
+
+Trace validation or model-based testing pay off once there is real protocol
+code (transports, session state) whose spec should stay independent of the
+implementation.
