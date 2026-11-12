@@ -115,10 +115,8 @@ impl OutputInsensitive {
     }
 }
 
-#[cfg(any(test, feature = "unit-tests"))]
+#[cfg(all(test, feature = "unit-tests"))]
 mod tests {
-    // The `#[test]` functions are stripped from non-test builds, leaving the tables unused.
-    #![allow(dead_code)]
     use super::*;
 
     /// The retained key types, listed exhaustively so that dropping a filter entry fails
