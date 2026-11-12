@@ -1,0 +1,13 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -64,9 +64,7 @@
+         proof_assert! { others.subsequence(0, produced.len())
+         .ext_eq(others.subsequence(0, produced.len() - 1).push_back(value.deep_model())) };
+         snapshot! { lemma_push_contains::<T::DeepModelTy> };
+-        if !contains(this, &value) {
+-            this.push(value);
+-        }
++        this.push(value);
+     }
+     proof_assert! { others.subsequence(0, others.len()).ext_eq(*others) };
+ }

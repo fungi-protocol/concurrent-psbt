@@ -41,10 +41,26 @@
             cargo creusot 2>&1 | tee $out/creusot.log
             cp -r verif $out/
           '';
+
+      # `join_mut` pushes every value, so the result can hold duplicates. The `unique` loop
+      # invariant must stop being provable.
+      rejectsDuplicates = pkgs.testers.testBuildFailure' {
+        drv = verify "formal-creusot-duplicates" (
+          pkgs.applyPatches {
+            name = "formal-creusot-duplicates-src";
+            inherit src;
+            patches = [ ./creusot/duplicates.patch ];
+          }
+        );
+        expectedBuilderLogEntries = [ "Goal Coma.vc_join_mut_T: ✘" ];
+      };
     in
     {
       packages = lib.mkIf supported { inherit creusot; };
-      checks = lib.mkIf supported { formal-creusot = verify "formal-creusot" src; };
+      checks = lib.mkIf supported {
+        formal-creusot = verify "formal-creusot" src;
+        formal-creusot-rejects-duplicates = rejectsDuplicates;
+      };
       formal.packages = lib.optionals supported [ creusot ];
     };
 }

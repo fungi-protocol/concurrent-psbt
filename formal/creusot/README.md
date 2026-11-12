@@ -35,6 +35,11 @@ from 1s to 10s. Every goal proves in milliseconds, but on a loaded machine
 the 1s limit made the check flaky. The prover set is alt-ergo-free, z3, cvc5
 and cvc4.
 
+`checks.formal-creusot-rejects-duplicates` applies
+`nix/formal/creusot/duplicates.patch`, which drops the `contains` guard so
+`join_mut` pushes every value, and requires a `join_mut` goal to fail, to
+show that the proof can fail.
+
 ## Nix
 
 Creusot is not in nixpkgs. The upstream flake (`inputs.creusot`, `#free`)
