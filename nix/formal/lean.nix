@@ -37,5 +37,23 @@
       formal.packages = [ lean ];
 
       checks.formal-lean = prove "formal-lean" src;
+
+      # `err ⊔ ok` forgets the `ok` value, so the proofs of `flat_comm` and
+      # `flat_assoc` no longer typecheck. Lean doesn't name the failing theorem,
+      # so the log entries are the error and a goal that mentions the entry
+      # `err ⊔ ok` should have kept; neither depends on line numbers.
+      checks.formal-lean-rejects-dropped-value = pkgs.testers.testBuildFailure' {
+        drv = prove "formal-lean-dropped-value" (
+          pkgs.applyPatches {
+            name = "formal-lean-dropped-value-src";
+            inherit src;
+            patches = [ ./lean/dropped-value.patch ];
+          }
+        );
+        expectedBuilderLogEntries = [
+          "error: unsolved goals"
+          "⊢ Conflict.singleton"
+        ];
+      };
     };
 }

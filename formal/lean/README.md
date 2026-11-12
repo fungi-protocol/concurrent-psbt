@@ -77,6 +77,12 @@ still have none.
 `Axioms.lean` is the audit the check runs: none of the theorems may depend on
 `sorryAx`, and no module may report a `sorry` warning.
 
+`checks.formal-lean-rejects-dropped-value` applies
+`nix/formal/lean/dropped-value.patch`, which makes the `err, ok` arm of `join`
+forget the `ok` value, and requires the build to fail with unsolved goals: the
+`flat_comm` and `flat_assoc` proofs stop typechecking. It shows the theorems
+constrain the transcribed `join`.
+
 ## Nix
 
 `checks.formal-lean` typechecks the modules with a plain `lean` from nixpkgs
