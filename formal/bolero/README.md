@@ -105,14 +105,25 @@ in the way.
   directories, which `cargo test` also replays. Filtering is `.filter` on the
   generator rather than `prop_assume!`.
 
+## Seeded bug
+
+`checks.formal-bolero-rejects-dropped-value` applies
+`nix/formal/bolero/dropped-value.patch` to the crate, which makes `Err ⊔ Ok`
+forget the `Ok` value, and requires `flat_commutative` to fail. It uses the
+random engine, which finds the counterexample at once, and runs that harness
+only. It expects `cargo test`'s exit code 101 and the line
+`bolero_laws::flat_commutative ... FAILED`. It shows the harnesses constrain the
+real `impl Join for JoinResult`.
+
 ## Nix
 
-`nix/formal/bolero.nix` adds one check, with no new tool to package: Bolero is
+`nix/formal/bolero.nix` adds two checks, with no new tool to package: Bolero is
 a dev-dependency of the crate, so Nix only vendors it through `Cargo.lock`.
 
 | check | what it runs |
 | --- | --- |
 | `formal-bolero` | `cargo test` over `bolero_laws::`, with random inputs; defined for every system, run here on aarch64-darwin |
+| `formal-bolero-rejects-dropped-value` | the seeded bug above; `flat_commutative` must fail |
 
 Adding the dependency changes `Cargo.lock`, so every check's dependency build
 is redone once: the first run of `formal-bolero` took 7.5 minutes on a busy

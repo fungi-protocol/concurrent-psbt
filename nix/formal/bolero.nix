@@ -37,10 +37,28 @@
             installPhase = "true";
           }
         );
+
+      # `Err ⊔ Ok` forgets the `Ok` value, which breaks commutativity even for a flat
+      # `try_join`. Random inputs find it at once; only the one harness runs.
+      rejectsDroppedValue = pkgs.testers.testBuildFailure' {
+        drv = boleroCheck {
+          pname = "formal-bolero-dropped-value";
+          src = pkgs.applyPatches {
+            name = "formal-bolero-dropped-value-src";
+            src = commonArgs.src;
+            patches = [ ./bolero/dropped-value.patch ];
+          };
+          testArgs = "-- --exact lattice::bolero_laws::flat_commutative";
+        };
+        # `cargo test` exits 101 when a test fails.
+        expectedBuilderExitCode = 101;
+        expectedBuilderLogEntries = [ "bolero_laws::flat_commutative ... FAILED" ];
+      };
     in
     {
       checks = {
         formal-bolero = boleroCheck { pname = "formal-bolero"; };
+        formal-bolero-rejects-dropped-value = rejectsDroppedValue;
       };
     };
 }
