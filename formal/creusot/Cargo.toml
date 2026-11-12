@@ -1,0 +1,13 @@
+[package]
+name = "conflict-creusot"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone: not a member of the main workspace, so the crate graph there never depends on
+# `creusot-std`.
+[workspace]
+
+[dependencies]
+# `cargo creusot` patches this to the copy shipped with the Creusot build.
+creusot-std = "=0.14.0"
