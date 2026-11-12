@@ -75,9 +75,27 @@
           done
         '';
       supported = bundles ? ${system};
+
+      # Verify `conflict.rs` from `src`, so that a fixture can run it on a patched copy.
+      verify =
+        name: src:
+        pkgs.runCommand name
+          {
+            inherit src;
+            nativeBuildInputs = [ verus ];
+          }
+          ''
+            set -o pipefail
+            export HOME=$TMPDIR
+            mkdir -p $out
+            verus --crate-type=lib $src/conflict.rs 2>&1 | tee $out/verus.log
+          '';
+
+      src = ../../formal/verus;
     in
     {
       packages = lib.mkIf supported { inherit verus; };
+      checks = lib.mkIf supported { formal-verus = verify "formal-verus" src; };
       formal.packages = lib.optionals supported [ verus ];
     };
 }
