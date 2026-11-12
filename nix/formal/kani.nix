@@ -4,12 +4,13 @@
 # exact nightly its kani-compiler links against (librustc_driver is unstable ABI).
 # Upstream publishes bundles for aarch64-darwin, x86_64-darwin, x86_64-linux and
 # aarch64-linux; a system is supported once its bundle hash is listed below.
-{ lib, ... }:
+{ inputs, lib, ... }:
 {
   perSystem =
     {
       pkgs,
       system,
+      commonArgs,
       ...
     }:
     let
@@ -76,7 +77,7 @@
           {
             nativeBuildInputs = [ pkgs.makeWrapper ];
             # For checks that drive `cargo kani` through crane.
-            passthru = { inherit toolchain; };
+            passthru = { inherit toolchain kaniCheck; };
           }
           ''
             mkdir -p $out/bin $out/libexec
@@ -90,9 +91,41 @@
             done
           '';
       supported = bundles ? ${system};
+
+      craneLib = (inputs.crane.mkLib pkgs).overrideToolchain toolchain;
+
+      # Harnesses live in-crate under `cfg(kani)` (they need crate-private constructors such
+      # as `Conflict::from_values`). `cargo kani` exits non-zero if any harness fails.
+      kaniCheck =
+        {
+          pname,
+          src ? commonArgs.src,
+          kaniArgs ? "",
+        }:
+        craneLib.mkCargoDerivation (
+          commonArgs
+          // {
+            inherit pname src;
+            version = "0";
+            cargoArtifacts = null;
+            nativeBuildInputs = [ kani ];
+            buildPhaseCargoCommand = ''
+              set -o pipefail
+              export HOME=$TMPDIR
+              mkdir -p $out
+              # One harness at a time: with several CBMC processes per check, and several
+              # checks per build, a 16 GB GitHub runner was killed mid-verification.
+              cargo kani -p concurrent-psbt \
+                -Z unstable-options --jobs 1 --output-format terse ${kaniArgs} \
+                2>&1 | tee $out/kani.log
+            '';
+            installPhase = "true";
+          }
+        );
     in
     {
       packages = lib.mkIf supported { inherit kani; };
+      checks = lib.mkIf supported { formal-kani = kaniCheck { pname = "formal-kani"; }; };
       formal.packages = lib.optionals supported [ kani ];
     };
 }
