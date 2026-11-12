@@ -42,6 +42,11 @@ Times are for each harness run alone; the check runs them in parallel
   `PartialJoin` itself: a float with a real lattice (e.g. max) would be a
   reasonable `PartialJoin`. No PSBT field is a float.
 
+`checks.formal-kani-rejects-dropped-value` applies
+`nix/formal/kani/dropped-value.patch` to the crate, which makes `Err ⊔ Ok`
+forget the `Ok` value, and requires `flat_commutative` to fail. It shows the
+harnesses constrain the real `impl Join for JoinResult`.
+
 CBMC's cost here is driven by `Vec`, not by value width: comparing two
 2-element conflicts took 18s at `unwind(8)` and 6s at `unwind(3)`. Switching
 `u8` to a 3-valued enum barely helped, and neither did disabling the

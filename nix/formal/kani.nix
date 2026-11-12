@@ -122,10 +122,28 @@
             installPhase = "true";
           }
         );
+
+      # `Err ⊔ Ok` forgets the `Ok` value, which breaks commutativity even for a flat
+      # `try_join`. Kani must find it; only the one harness runs, to keep this cheap.
+      rejectsDroppedValue = pkgs.testers.testBuildFailure' {
+        drv = kaniCheck {
+          pname = "formal-kani-dropped-value";
+          src = pkgs.applyPatches {
+            name = "formal-kani-dropped-value-src";
+            src = commonArgs.src;
+            patches = [ ./kani/dropped-value.patch ];
+          };
+          kaniArgs = "--harness flat_commutative";
+        };
+        expectedBuilderLogEntries = [ "VERIFICATION:- FAILED" ];
+      };
     in
     {
       packages = lib.mkIf supported { inherit kani; };
-      checks = lib.mkIf supported { formal-kani = kaniCheck { pname = "formal-kani"; }; };
+      checks = lib.mkIf supported {
+        formal-kani = kaniCheck { pname = "formal-kani"; };
+        formal-kani-rejects-dropped-value = rejectsDroppedValue;
+      };
       formal.packages = lib.optionals supported [ kani ];
     };
 }
