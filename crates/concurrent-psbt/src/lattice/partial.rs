@@ -81,11 +81,11 @@ impl<V: PartialJoin> Conflict<V> {
         Self(vec![v])
     }
 
-    /// Build from an iterator, deduplicating values. The distinct values must be pairwise
-    /// incomparable, as in the `Err` of [`PartialJoin::try_join`]; this can't be checked here,
-    /// because `try_join` itself builds its conflicts with this function.
-    #[allow(dead_code)] // used by downstream commits (collection modules, domain types)
-    pub(crate) fn from_values(iter: impl IntoIterator<Item = V>) -> Self {
+    /// Build from an iterator, deduplicating values. An empty iterator yields an empty conflict.
+    /// The distinct values must be pairwise incomparable, as in the `Err` of
+    /// [`PartialJoin::try_join`]; this can't be checked here, because `try_join` itself builds
+    /// its conflicts with this function.
+    pub fn from_values(iter: impl IntoIterator<Item = V>) -> Self {
         let mut vals = Vec::new();
         for v in iter {
             if !vals.contains(&v) {
