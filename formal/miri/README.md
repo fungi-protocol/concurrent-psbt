@@ -59,6 +59,25 @@ startup. Expect the lower figure on an idle machine. The 35 `concurrent-psbt`
 tests take 5 to 24s each; all of that crate's tests together finish well
 inside the scrubber's slowest.
 
+## Seeded bug
+
+`checks.formal-miri-rejects-read-past-end` applies
+`nix/formal/miri/read-past-end.patch`. It relaxes `forbid(unsafe_code)` and
+replaces the `contains` in `Conflict`'s `PartialEq` with an `unsafe` loop whose
+bound is off by one, so it reads one element past the end of the slice. That
+element is spare capacity in the same allocation, so a native run reads a
+stale value instead of crashing. The check runs only the one test that
+compares two unequal conflicts (under 10s in Miri, plus compiling), and
+requires Miri to report `Undefined Behavior: trying to retag` in
+`contains_unchecked`. Miri objects as soon as the reference to the extra
+element is created, since it lies outside the borrow of the slice, before
+anything reads it.
+
+`checks.formal-miri-read-past-end-native` runs that same test natively on the
+same patched source (a plain `cargo nextest` in the dev profile), and it
+passes in about a minute. This is the point of the fixture: the test suite
+alone does not see this bug, and Miri does.
+
 ## Nix
 
 `nix/formal/miri.nix` defines the check as a function of its source, and adds

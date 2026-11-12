@@ -12,6 +12,8 @@
     {
       pkgs,
       toolchains,
+      commonArgs,
+      cargoArtifactsDev,
       ...
     }:
     let
@@ -64,12 +66,55 @@
           '';
           installPhase = "true";
         };
+
+      # The patch replaces `Conflict`'s `contains` with an `unsafe` loop that is off by one and
+      # reads an element past the end of the slice, which is spare capacity in the same
+      # allocation. Miri rejects the reference that points past the slice's own borrow. Only the
+      # one test that compares unequal conflicts reaches the loop's end, which is all the
+      # fixtures have to run.
+      readPastEndSrc = pkgs.applyPatches {
+        name = "formal-miri-read-past-end-src";
+        inherit src;
+        patches = [ ./miri/read-past-end.patch ];
+      };
+      readPastEndTest = "different_conflicts_are_not_equal";
+
+      rejectsReadPastEnd = pkgs.testers.testBuildFailure' {
+        drv = miriCheck {
+          pname = "formal-miri-read-past-end";
+          src = readPastEndSrc;
+          testArgs = "-p concurrent-psbt ${readPastEndTest}";
+        };
+        # nextest exits with 100 when a test fails.
+        expectedBuilderExitCode = 100;
+        expectedBuilderLogEntries = [
+          "Undefined Behavior: trying to retag from"
+          "contains_unchecked"
+        ];
+      };
+
+      # The same test on the same patched source, run natively: it passes, which is why Miri is
+      # needed to see the bug.
+      nativeReadPastEnd = toolchains.nightly.cargoNextest (
+        commonArgs
+        // {
+          pname = "formal-miri-read-past-end-native";
+          version = "0";
+          src = readPastEndSrc;
+          cargoArtifacts = cargoArtifactsDev;
+          CARGO_PROFILE = "dev";
+          doInstallCargoArtifacts = false;
+          cargoNextestExtraArgs = "-p concurrent-psbt ${readPastEndTest}";
+        }
+      );
     in
     {
       checks.formal-miri = miriCheck {
         pname = "formal-miri";
         inherit src;
       };
+      checks.formal-miri-rejects-read-past-end = rejectsReadPastEnd;
+      checks.formal-miri-read-past-end-native = nativeReadPastEnd;
       formal.packages = [
         toolchain
         pkgs.cargo-nextest

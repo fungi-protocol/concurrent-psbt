@@ -1,0 +1,39 @@
+diff --git a/crates/concurrent-psbt/src/lattice/partial.rs b/crates/concurrent-psbt/src/lattice/partial.rs
+index 342db3e9ce..b05b88003f 100644
+--- a/crates/concurrent-psbt/src/lattice/partial.rs
++++ b/crates/concurrent-psbt/src/lattice/partial.rs
+@@ -122,8 +122,22 @@ fn eq(&self, other: &Self) -> bool {
+             !has_duplicates(&self.0) && !has_duplicates(&other.0),
+             "Conflict invariant violated: contains duplicate values"
+         );
+-        self.0.len() == other.0.len() && self.iter().all(|v| other.0.contains(v))
+-    }
++        self.0.len() == other.0.len() && self.iter().all(|v| contains_unchecked(&other.0, v))
++    }
++}
++
++/// `slice::contains` without the bounds checks.
++#[allow(unsafe_code)]
++fn contains_unchecked<V: PartialEq>(vals: &[V], needle: &V) -> bool {
++    let mut i = 0;
++    while i <= vals.len() {
++        // SAFETY: none; the bound should be `<`, so the last read is one past the end.
++        if unsafe { &*vals.as_ptr().add(i) } == needle {
++            return true;
++        }
++        i += 1;
++    }
++    false
+ }
+ 
+ /// Check for duplicates in a small slice. $O(n^2)$.
+diff --git a/crates/concurrent-psbt/src/lib.rs b/crates/concurrent-psbt/src/lib.rs
+index c4cc31dff0..e5a761b58b 100644
+--- a/crates/concurrent-psbt/src/lib.rs
++++ b/crates/concurrent-psbt/src/lib.rs
+@@ -1,4 +1,4 @@
+-#![forbid(unsafe_code)]
++#![deny(unsafe_code)]
+ #![allow(unused_features)]
+ #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+ 
