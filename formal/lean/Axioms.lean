@@ -17,3 +17,6 @@ import Modulo
 #print axioms ConcurrentPsbt.Modulo.option_converges
 #print axioms ConcurrentPsbt.Modulo.option_nontrivial
 #print axioms ConcurrentPsbt.Modulo.flat_equiv_members
+#print axioms ConcurrentPsbt.Modulo.above_sup
+#print axioms ConcurrentPsbt.Modulo.above_injective
+#print axioms ConcurrentPsbt.Modulo.gset_sup

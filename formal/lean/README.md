@@ -54,6 +54,12 @@ states be written out literally. Both transcribe the same `partial.rs`.
 - `flat_equiv_members`: for a flat `try_join`, equivalent results have the same
   members, so `Equiv` is no coarser than the set equality `Conflict`'s
   `PartialEq` implements.
+- `above_sup`, `above_injective`, `gset_sup`: every join-semilattice embeds
+  into a powerset under union (`a ↦ {b | ¬ a ≤ b}`), so any join-semilattice
+  can be represented by a grow-only set. The embedding re-encodes each value
+  as a set, which can be infinite, so it says nothing about the crate's finite
+  `Vec` of raw values: there `{a} ∪ {b}` stays `{a, b}` even when `a ⊔ b`
+  exists.
 
 Consequence for the crate: the join laws hold, but only up to `Equiv`. `==` on
 `JoinResult` and `Conflict`'s deduplication are structural, which is finer than

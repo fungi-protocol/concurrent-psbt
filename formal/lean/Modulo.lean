@@ -22,6 +22,9 @@ Results:
 * `flat_equiv_members`: for a flat `try_join`, equivalent results have the same members, so
   there `Equiv` is no coarser than the set equality `Conflict`'s `PartialEq` implements. For
   non-flat joins the Rust `==` is finer than `Equiv`: converged replicas can compare unequal.
+* `above_sup`, `above_injective`, `gset_sup`: every join-semilattice embeds into a powerset
+  under union (`a ↦ {b | ¬ a ≤ b}`), so any lattice can be carried by a grow-only set, and
+  modelling `Conflict` as a set loses no generality.
 
 This file stands alone and transcribes the same `partial.rs` as `JoinResult.lean`, but it
 re-declares `JoinResult`, `join`, `Field` and `optionJoin` with `Conflict` as a `List`, as the
@@ -304,5 +307,51 @@ theorem flat_equiv_members {x y : JoinResult V} (h : Equiv flat x y) :
   exact fun v => congrFun this v
 
 end Flat
+
+section Representation
+
+variable {S : Type} [Semilattice S]
+
+/-- `b` is above `a`: the principal up-set of `a`. -/
+def above (a b : S) : Prop := sup a b = b
+
+theorem above_sup (a c b : S) : above (sup a c) b ↔ above a b ∧ above c b := by
+  unfold above
+  constructor
+  · intro h
+    constructor
+    · calc sup a b = sup a (sup (sup a c) b) := by rw [h]
+        _ = sup (sup (sup a a) c) b := by ac_rfl
+        _ = b := by rw [sup_idem, h]
+    · calc sup c b = sup c (sup (sup a c) b) := by rw [h]
+        _ = sup (sup a (sup c c)) b := by ac_rfl
+        _ = b := by rw [sup_idem, h]
+  · intro ⟨ha, hc⟩
+    calc sup (sup a c) b = sup a (sup c b) := sup_assoc ..
+      _ = sup a b := by rw [hc]
+      _ = b := ha
+
+theorem above_injective {a c : S} (h : ∀ b, above a b ↔ above c b) : a = c := by
+  have h1 : sup a c = c := (h c).2 (sup_idem c)
+  have h2 : sup c a = a := (h a).1 (sup_idem a)
+  calc a = sup c a := h2.symm
+    _ = sup a c := sup_comm ..
+    _ = c := h1
+
+/-- The complement of the up-set turns `sup` into union: a grow-only set of the points a value
+is *not* below carries the whole lattice, and `above_injective` makes it faithful. -/
+theorem gset_sup (a c b : S) : ¬ above (sup a c) b ↔ ¬ above a b ∨ ¬ above c b := by
+  rw [above_sup]
+  constructor
+  · intro h
+    by_cases ha : above a b
+    · exact Or.inr fun hc => h ⟨ha, hc⟩
+    · exact Or.inl ha
+  · intro h ⟨ha, hc⟩
+    cases h with
+    | inl h => exact h ha
+    | inr h => exact h hc
+
+end Representation
 
 end ConcurrentPsbt.Modulo
