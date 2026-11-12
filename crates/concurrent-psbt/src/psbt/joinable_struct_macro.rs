@@ -24,10 +24,6 @@
 /// The field list must name at least one field: `is_ok` is generated as the
 /// conjunction of the per-field checks, which has no expansion for an empty
 /// list.
-#[cfg_attr(
-    not(all(test, feature = "unit-tests")),
-    expect(unused_macros, reason = "expanded by the PSBT field types")
-)]
 macro_rules! joinable_struct {
     // ── Entry point ──────────────────────────────────────────
     (
