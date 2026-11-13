@@ -82,6 +82,19 @@ Aeneas' library has no model of `Iterator::all`, `slice::Iter::all`,
 `split_first` and `MaybeUninit`, which it declares as `axiom`s; `CoreModels`
 models the first two and lacks `split_first`, as described above.
 
+## Fixture
+
+`checks.formal-hax-rejects-dropped-value` applies
+`nix/formal/hax/dropped-value.patch` to the crate, so that `err ⊔ ok`
+forgets the `ok` value (`Err(a)` instead of
+`Err(a.join(Conflict::singleton(b)))`), and requires that the check fails with
+the tactic error "`simp` made no progress". The extraction changes with the
+Rust, the arm of `join_refines` that proved the `singleton` join has nothing
+left to rewrite, and the proof stops there. The failure is a tactic error rather
+than a goal naming the lost value, because the proofs follow the shape of the
+code; a wrong value in the same shape would fail a goal instead. It is the bug
+of the `formal/lean` fixture, this time in the crate's code.
+
 ## Nix
 
 `nix/formal/hax.nix` takes hax and the Aeneas fork commit it pins from their

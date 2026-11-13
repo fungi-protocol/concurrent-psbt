@@ -148,6 +148,20 @@
               { cargo-hax hax --version || true; aeneas -version; charon version; } 2>&1 | tee $out/versions.txt
             '';
         formal-hax = verify "formal-hax" src;
+
+        # `err ⊔ ok` forgets the `ok` value, the same bug as the Lean fixture, now in the
+        # crate's own code. The extracted `join` no longer calls `Join::join` in that arm,
+        # so the proof of `join_refines` stops there.
+        formal-hax-rejects-dropped-value = pkgs.testers.testBuildFailure' {
+          drv = verify "formal-hax-dropped-value" (
+            pkgs.applyPatches {
+              name = "formal-hax-dropped-value-src";
+              inherit src;
+              patches = [ ./hax/dropped-value.patch ];
+            }
+          );
+          expectedBuilderLogEntries = [ "error: `simp` made no progress" ];
+        };
       };
       formal.packages = lib.optionals supported [ hax ];
     };
