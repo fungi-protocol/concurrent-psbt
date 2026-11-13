@@ -1,0 +1,13 @@
+[package]
+name = "concurrent-psbt-fuzz-honggfuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+concurrent-psbt-fuzz-targets = { path = "../targets" }
+# cargo-hfuzz refuses to build against a different version of this crate
+# than its own, so keep the two pinned together.
+honggfuzz = "=0.5.62"
