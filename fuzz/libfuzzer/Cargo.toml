@@ -23,6 +23,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_scrub"
+path = "fuzz_targets/fuzz_scrub.rs"
+test = false
+doc = false
+bench = false
+
 [dependencies]
 concurrent-psbt-fuzz-targets = { path = "../targets" }
 libfuzzer-sys = "0.4"
