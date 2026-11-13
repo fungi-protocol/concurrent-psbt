@@ -1,0 +1,2 @@
+# Kani harnesses only compile under `cfg(kani)`, so tests cannot catch their mutants.
+exclude_globs = ["**/proofs.rs"]

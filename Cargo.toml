@@ -9,4 +9,7 @@ version = "0.1.0"
 name = "concurrent-psbt"
 
 [workspace.lints.rust]
-unexpected_cfgs = { level = "deny", check-cfg = ['cfg(coverage_nightly)'] }
+unexpected_cfgs = { level = "deny", check-cfg = [
+  'cfg(coverage_nightly)',
+  'cfg(kani)',
+] }
