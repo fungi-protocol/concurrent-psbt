@@ -97,13 +97,14 @@
             }
           );
         };
-      };
 
-      checkTags = linuxOnly { fuzz-honggfuzz-verify = [ "nightly" ]; };
-
-      # A fuzzer with broken coverage feedback runs as cleanly as one with
-      # nothing to find, so assert that honggfuzz finds the crash_test panic.
-      checks = linuxOnly {
+        # A fuzzer with broken coverage feedback runs as cleanly as one with
+        # nothing to find, so assert that honggfuzz finds the crash_test panic.
+        #
+        # This is an app rather than a check: whether the fuzzer finds the
+        # crash within the time limit depends on its random choices, and a
+        # check that can fail without a change to its inputs would blame the
+        # wrong commit.
         fuzz-honggfuzz-verify =
           let
             verifyTargets = mkTargets {
@@ -111,21 +112,31 @@
               RUSTFLAGS = "--cfg fuzzer_verify_crash";
             };
           in
-          pkgs.runCommand "fuzz-honggfuzz-verify" { } ''
-            mkdir input
-            # honggfuzz's exit status says nothing useful here; what it left
-            # in its workspace does.
-            ${verifyTargets}/bin/honggfuzz -W workspace -f input -P \
-              --timeout 5 --threads 1 --run_time 60 --exit_upon_crash \
-              -- ${verifyTargets}/bin/hfuzz_crash_test || true
-            crashes=(workspace/*.fuzz)
-            if [ ! -e "''${crashes[0]}" ]; then
-              echo "honggfuzz did not find the crash" >&2
-              exit 1
-            fi
-            mkdir -p $out
-            cp workspace/*.fuzz $out/
-          '';
+          {
+            type = "app";
+            meta.description = "Confirm honggfuzz finds the crash_test panic: nix run .#fuzz-honggfuzz-verify -- [honggfuzz args]";
+            program = lib.getExe (
+              pkgs.writeShellApplication {
+                name = "fuzz-honggfuzz-verify";
+                runtimeInputs = [ pkgs.coreutils ];
+                text = ''
+                  scratch=$(mktemp -d)
+                  trap 'rm -rf "$scratch"' EXIT
+                  mkdir "$scratch/input"
+                  # honggfuzz's exit status says nothing useful here; what it
+                  # left in its workspace does.
+                  ${verifyTargets}/bin/honggfuzz -W "$scratch/workspace" -f "$scratch/input" -P \
+                    --timeout 5 --threads 1 --run_time 600 --exit_upon_crash "$@" \
+                    -- ${verifyTargets}/bin/hfuzz_crash_test || true
+                  crashes=("$scratch"/workspace/*.fuzz)
+                  if [ ! -e "''${crashes[0]}" ]; then
+                    echo "honggfuzz did not find the crash" >&2
+                    exit 1
+                  fi
+                '';
+              }
+            );
+          };
       };
     };
 }
