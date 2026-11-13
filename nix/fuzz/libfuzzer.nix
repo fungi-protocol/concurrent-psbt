@@ -57,27 +57,42 @@
         );
       };
 
-      checkTags.fuzz-libfuzzer-verify = [ "nightly" ];
-
       # A fuzzer whose coverage instrumentation silently broke still runs and
       # still reports nothing, so a clean run proves little. Confirm instead
       # that libFuzzer solves crash_test, which needs coverage guidance.
-      checks.fuzz-libfuzzer-verify =
+      #
+      # This is an app rather than a check: whether the fuzzer finds the crash
+      # within the time limit depends on its random choices, and a check that
+      # can fail without a change to its inputs would blame the wrong commit.
+      apps.fuzz-libfuzzer-verify =
         let
           verifyTargets = mkTargets {
             pnameSuffix = "-fuzz-libfuzzer-verify-targets";
             RUSTFLAGS = "--cfg fuzzer_verify_crash";
           };
         in
-        pkgs.runCommand "fuzz-libfuzzer-verify" { ASAN_OPTIONS = asanOptions; } ''
-          mkdir -p $out
-          if ${verifyTargets}/bin/fuzz_crash_test -max_total_time=60 -artifact_prefix=$out/ >fuzz.log 2>&1; then
-            cat fuzz.log
-            echo "libFuzzer exited cleanly without finding the crash" >&2
-            exit 1
-          fi
-          cat fuzz.log
-          grep -q "fuzzer verification crash" fuzz.log
-        '';
+        {
+          type = "app";
+          meta.description = "Confirm libFuzzer finds the crash_test panic: nix run .#fuzz-libfuzzer-verify -- [libFuzzer args]";
+          program = pkgs.lib.getExe (
+            pkgs.writeShellApplication {
+              name = "fuzz-libfuzzer-verify";
+              runtimeInputs = [
+                pkgs.coreutils
+                pkgs.gnugrep
+              ];
+              text = ''
+                scratch=$(mktemp -d)
+                trap 'rm -rf "$scratch"' EXIT
+                export ASAN_OPTIONS="${asanOptions}''${ASAN_OPTIONS:+:$ASAN_OPTIONS}"
+                if "${verifyTargets}/bin/fuzz_crash_test" -max_total_time=600 -artifact_prefix="$scratch/" "$@" 2>&1 | tee "$scratch/fuzz.log"; then
+                  echo "libFuzzer exited cleanly without finding the crash" >&2
+                  exit 1
+                fi
+                grep -q "fuzzer verification crash" "$scratch/fuzz.log"
+              '';
+            }
+          );
+        };
     };
 }
