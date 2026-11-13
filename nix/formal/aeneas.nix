@@ -14,6 +14,8 @@
       supported = aeneasPkgs ? aeneas;
       aeneas = aeneasPkgs.aeneas;
 
+      crate = ../../crates/concurrent-psbt;
+
       lp = pkgs.leanPackages;
 
       aeneasLean = lp.buildLakePackage {
@@ -94,7 +96,22 @@
         aeneas-lean = aeneasLean;
       };
       checks = lib.mkIf supported {
-        formal-aeneas = verify "formal-aeneas" ../../crates/concurrent-psbt;
+        formal-aeneas = verify "formal-aeneas" crate;
+
+        # `err ⊔ ok` forgets the `ok` value, the same bug as the Lean fixture, now in the
+        # crate's own code. The extracted `join` no longer calls `Join::join` in that arm,
+        # so the proof of `join_refines` stops there. Lean doesn't name the failing
+        # theorem, so the log entry is the tactic error, which doesn't depend on line numbers.
+        formal-aeneas-rejects-dropped-value = pkgs.testers.testBuildFailure' {
+          drv = verify "formal-aeneas-dropped-value" (
+            pkgs.applyPatches {
+              name = "formal-aeneas-dropped-value-src";
+              src = crate;
+              patches = [ ./aeneas/dropped-value.patch ];
+            }
+          );
+          expectedBuilderLogEntries = [ "error: `simp` made no progress" ];
+        };
       };
       formal.packages = lib.optionals supported [ aeneas ];
     };

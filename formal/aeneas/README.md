@@ -55,6 +55,19 @@ Proved in `Proofs.lean`, for every `V` with decidable equality:
   before "keep only the maximal values in a conflict" (in #97, #102 and
   #105). No crate bug beyond the one `formal/lean` documents turned up.
 
+## Fixture
+
+`checks.formal-aeneas-rejects-dropped-value` applies
+`nix/formal/aeneas/dropped-value.patch` to the crate, so that `err ⊔ ok`
+forgets the `ok` value (`Err(a)` instead of
+`Err(a.join(Conflict::singleton(b)))`), and requires that the check fails with
+the tactic error "`simp` made no progress". The extraction changes with the
+Rust, the arm of `join_refines` that proved the `singleton` join has nothing
+left to rewrite, and the proof stops there. The failure is a tactic error rather
+than a goal naming the lost value, because the proofs follow the shape of the
+code; a wrong value in the same shape would fail a goal instead. It is the bug
+of the `formal/lean` fixture, this time in the crate's code.
+
 ## Nix
 
 `nix/formal/aeneas.nix` takes Aeneas from its flake, pinned in `flake.nix` to
