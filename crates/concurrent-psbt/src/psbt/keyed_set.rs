@@ -15,6 +15,7 @@ use std::collections::hash_map::{Entry, IntoValues};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
+use crate::lattice::conflicts::Conflicts;
 use crate::lattice::join::{Join, JoinMut};
 use crate::lattice::lift::{Lift, ResultWrapped};
 use crate::lattice::partial::JoinResult;
@@ -190,6 +191,43 @@ pub(crate) struct ResultKeyedSet<K, V> {
     frozen: Vec<HashSet<K>>,
 }
 
+/// A conflict in the membership of a set or in one of its entries.
+#[derive(Debug)]
+pub enum SetConflict<'a, K, C> {
+    /// The distinct key sets from the frozen memberships and the join, in unspecified order.
+    Membership(Vec<HashSet<&'a K>>),
+    /// A conflict in the entry identified by `key`.
+    Entry { key: &'a K, conflict: C },
+}
+
+impl<K: Hash + Eq, R: Conflicts> Conflicts for ResultKeyedSet<K, R> {
+    type Item<'a>
+        = SetConflict<'a, K, R::Item<'a>>
+    where
+        Self: 'a;
+
+    fn conflicts(&self) -> impl Iterator<Item = Self::Item<'_>> {
+        let membership = (!self.keys_agree()).then(|| {
+            let mut sets: Vec<HashSet<&K>> = self
+                .frozen
+                .iter()
+                .map(|keys| keys.iter().collect())
+                .collect();
+            let joined = self.entries.0.keys().collect();
+            if !sets.contains(&joined) {
+                sets.push(joined);
+            }
+            SetConflict::Membership(sets)
+        });
+        membership.into_iter().chain(
+            self.entries
+                .0
+                .conflicts()
+                .map(|(key, conflict)| SetConflict::Entry { key, conflict }),
+        )
+    }
+}
+
 // Not derived, since the derive would require `K: Default` and `V: Default`.
 impl<K, V> Default for ResultKeyedSet<K, V> {
     fn default() -> Self {
@@ -349,6 +387,22 @@ mod tests {
                 assert!(ResultWrapped::is_ok(&lifted));
                 let conflict = lifted.join(b.wrap());
                 assert!(!ResultWrapped::is_ok(&conflict));
+                let mut conflicts = conflict.conflicts();
+                let Some(SetConflict::Entry {
+                    key: outer_key,
+                    conflict:
+                        SetConflict::Entry {
+                            key: inner_key,
+                            conflict: values,
+                        },
+                }) = conflicts.next()
+                else {
+                    panic!("nested entry conflict");
+                };
+                assert_eq!((*outer_key, *inner_key), (2, 1));
+                assert_eq!(values.into_iter().copied().collect::<Vec<_>>(), [3, 4]);
+                assert!(conflicts.next().is_none());
+                drop(conflicts);
                 assert_eq!(ResultWrapped::try_unwrap(conflict.clone()), Err(conflict));
             }
 
@@ -447,6 +501,33 @@ mod tests {
         assert_join_laws!(arb_set());
 
         proptest! {
+            #[test]
+            fn membership_evidence_is_complete(
+                parts in proptest::collection::vec((arb_keys(), any::<bool>()), 0..=4)
+            ) {
+                let joined = parts.iter().map(|(keys, frozen)| set(keys, *frozen))
+                    .fold(Set::default(), Join::join);
+                let mask = |keys: &[u8]| keys.iter().fold(0u8, |bits, key| bits | (1 << key));
+                let union = parts.iter().fold(0u8, |bits, (keys, _)| bits | mask(keys));
+                let frozen: BTreeSet<_> = parts.iter().filter(|(_, frozen)| *frozen)
+                    .map(|(keys, _)| mask(keys)).collect();
+                let mut expected = frozen;
+                expected.insert(union);
+                let conflicts: Vec<_> = joined.conflicts().collect();
+                prop_assert_eq!(conflicts.len(), usize::from(expected.len() > 1));
+                prop_assert_eq!(conflicts.is_empty(), joined.is_ok());
+                for conflict in conflicts {
+                    let SetConflict::Membership(sets) = conflict else {
+                        unreachable!("each entry holds its own key");
+                    };
+                    let found: BTreeSet<_> = sets.iter().map(|keys| {
+                        keys.iter().fold(0u8, |bits, key| bits | (1 << **key))
+                    }).collect();
+                    prop_assert_eq!(sets.len(), found.len());
+                    prop_assert_eq!(&found, &expected);
+                }
+            }
+
             #[test]
             fn try_from_entries_stops_at_the_first_failure(
                 keys in proptest::collection::hash_set(0u8..8, 1..=4),
@@ -585,11 +666,45 @@ mod tests {
     }
 
     #[cfg(any(feature = "unit-tests", feature = "prop-tests"))]
-    mod unwrap_regressions {
-        use std::collections::HashMap;
+    mod conflict_regressions {
+        use std::collections::{HashMap, HashSet};
 
-        use super::{Freezable, KeyedSet};
-        use crate::{Join, Lift, ResultWrapped};
+        use super::{Freezable, KeyedSet, SetConflict};
+        use crate::lattice::partial::Conflict;
+        use crate::{Conflicts, Join, Lift, ResultWrapped};
+
+        fn check_conflicts<'a>(
+            conflicts: impl Iterator<Item = SetConflict<'a, u8, &'a Conflict<u8>>>,
+            common: u8,
+            extra: u8,
+            values: [u8; 2],
+            membership: bool,
+            entry: bool,
+        ) {
+            let mut membership_count = 0;
+            let mut entry_count = 0;
+            for conflict in conflicts {
+                match conflict {
+                    SetConflict::Membership(evidence) => {
+                        membership_count += 1;
+                        assert_eq!(evidence.len(), 2);
+                        assert!(evidence.contains(&HashSet::from([&common])));
+                        assert!(evidence.contains(&HashSet::from([
+                            &common,
+                            &extra,
+                            &extra.wrapping_add(1),
+                        ])));
+                    }
+                    SetConflict::Entry { key, conflict } => {
+                        entry_count += 1;
+                        assert_eq!(key, &common);
+                        assert_eq!(conflict.into_iter().copied().collect::<Vec<_>>(), values);
+                    }
+                }
+            }
+            assert_eq!(membership_count, usize::from(membership));
+            assert_eq!(entry_count, usize::from(entry));
+        }
 
         fn check_keyed_contract(common: u8, value: u8, outer_key: u8) {
             let extra = common.wrapping_add(1);
@@ -616,9 +731,29 @@ mod tests {
                         Err(joined.clone())
                     };
                     assert_eq!(ResultWrapped::try_unwrap(joined.clone()), expected);
+                    check_conflicts(
+                        Conflicts::conflicts(&joined),
+                        common,
+                        extra,
+                        [value, other],
+                        frozen,
+                        entry_conflict,
+                    );
+
                     let nested = HashMap::from([(outer_key, Some(left))])
                         .wrap()
                         .join(HashMap::from([(outer_key, Some(right.clone()))]).wrap());
+                    check_conflicts(
+                        Conflicts::conflicts(&nested).map(|(key, conflict)| {
+                            assert_eq!(key, &outer_key);
+                            conflict
+                        }),
+                        common,
+                        extra,
+                        [value, other],
+                        frozen,
+                        entry_conflict,
+                    );
                     assert_eq!(ResultWrapped::is_ok(&nested), expected_ok);
                     let expected = if expected_ok {
                         Ok(HashMap::from([(outer_key, Some(right))]))
@@ -632,7 +767,7 @@ mod tests {
 
         #[cfg(feature = "unit-tests")]
         #[test]
-        fn keyed_sets_preserve_failed_unwraps() {
+        fn keyed_conflicts_keep_membership_entries_and_outer_keys() {
             check_keyed_contract(7, 42, 9);
         }
 
@@ -643,7 +778,7 @@ mod tests {
 
             proptest! {
                 #[test]
-                fn keyed_set_unwraps_match_is_ok(
+                fn keyed_conflicts_match_failed_unwraps(
                     common in any::<u8>(), value in any::<u8>(), outer_key in any::<u8>(),
                 ) {
                     check_keyed_contract(common, value, outer_key);
