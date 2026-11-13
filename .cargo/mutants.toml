@@ -1,0 +1,3 @@
+# The Bolero harnesses only compile with the `bolero-tests` feature, which the
+# mutants check does not enable, so tests cannot catch their mutants.
+exclude_globs = ["**/bolero_laws.rs"]

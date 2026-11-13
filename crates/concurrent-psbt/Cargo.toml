@@ -7,8 +7,12 @@ edition = "2024"
 default = ["unit-tests", "prop-tests"]
 unit-tests = []
 prop-tests = []
+# Bolero harnesses (formal/bolero). Off by default, so the regular test, coverage and mutants
+# checks don't run them.
+bolero-tests = []
 
 [dev-dependencies]
+bolero = "0.13"
 proptest = "1"
 
 [lints]
