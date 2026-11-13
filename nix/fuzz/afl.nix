@@ -120,38 +120,46 @@
         );
       };
 
-      checkTags.fuzz-afl-verify = [ "nightly" ];
-
       # A fuzzer with broken coverage feedback runs as cleanly as one with
       # nothing to find, so assert that AFL++ finds the crash_test panic.
-      checks.fuzz-afl-verify =
+      #
+      # This is an app rather than a check: whether the fuzzer finds the crash
+      # within the time limit depends on its random choices, and a check that
+      # can fail without a change to its inputs would blame the wrong commit.
+      apps.fuzz-afl-verify =
         let
           verifyTargets = mkTargets {
             pnameSuffix = "-fuzz-afl-verify-targets";
             RUSTFLAGS = "--cfg fuzzer_verify_crash";
           };
         in
-        pkgs.runCommand "fuzz-afl-verify"
-          (
-            aflEnv
-            // {
-              AFL_NO_UI = "1";
-              AFL_BENCH_UNTIL_CRASH = "1";
+        {
+          type = "app";
+          meta.description = "Confirm AFL++ finds the crash_test panic: nix run .#fuzz-afl-verify -- [afl-fuzz args]";
+          program = lib.getExe (
+            pkgs.writeShellApplication {
+              name = "fuzz-afl-verify";
+              runtimeInputs = [ pkgs.coreutils ];
+              runtimeEnv = aflEnv // {
+                AFL_NO_UI = "1";
+                AFL_BENCH_UNTIL_CRASH = "1";
+              };
+              text = ''
+                scratch=$(mktemp -d)
+                trap 'rm -rf "$scratch"' EXIT
+                mkdir "$scratch/in"
+                printf seed >"$scratch/in/seed"
+                # afl-fuzz's exit status says nothing useful here; what it left
+                # in its output directory does.
+                ${lib.getExe aflplusplus} -i "$scratch/in" -o "$scratch/out" -V 600 "$@" -- ${verifyTargets}/bin/afl_crash_test || true
+                crashes=("$scratch"/out/default/crashes/id:*)
+                if [ ! -e "''${crashes[0]}" ]; then
+                  echo "AFL++ did not find the crash" >&2
+                  exit 1
+                fi
+              '';
             }
-          )
-          ''
-            mkdir in
-            printf seed >in/seed
-            # afl-fuzz's exit status says nothing useful here; what it left
-            # in its output directory does.
-            ${lib.getExe aflplusplus} -i in -o out -V 60 -- ${verifyTargets}/bin/afl_crash_test || true
-            crashes=(out/default/crashes/id:*)
-            if [ ! -e "''${crashes[0]}" ]; then
-              echo "AFL++ did not find the crash" >&2
-              exit 1
-            fi
-            mkdir -p $out
-            cp out/default/crashes/id:* $out/
-          '';
+          );
+        };
     };
 }
