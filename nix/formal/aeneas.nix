@@ -1,4 +1,5 @@
-# Aeneas + Charon: extract the crate's Rust to Lean (formal/aeneas).
+# Aeneas + Charon: extract the crate's Rust to Lean and prove things about the extraction
+# (formal/aeneas).
 #
 # Upstream's flake builds the `aeneas` OCaml binary and Charon (with its pinned nightly
 # toolchain). Its Lean library imports Mathlib, which nixpkgs already packages in
@@ -28,11 +29,73 @@
         # libraries of every dependency.
         env.CI = "1";
       };
+
+      lean = aeneasLean.lean4;
+      leanPath = lib.concatMapStringsSep ":" (p: "${p}/.lake/build/lib/lean") (
+        [ aeneasLean ] ++ aeneasLean.allLeanDeps
+      );
+
+      # Charon extracts the crate to LLBC and Aeneas turns that into Lean. A standalone
+      # manifest would only matter to cargo, which `charon rustc` bypasses, so the crate's own
+      # sources are compiled directly (no dependencies are needed outside the tests).
+      extract =
+        name: crate:
+        pkgs.runCommand name
+          {
+            src = crate;
+            nativeBuildInputs = [ aeneas ];
+          }
+          ''
+            set -o pipefail
+            export HOME=$TMPDIR
+            mkdir -p $out
+            charon rustc --dest-file concurrent_psbt.llbc --preset=aeneas \
+              -- $src/src/lib.rs --crate-name=concurrent_psbt --crate-type=rlib \
+              --edition=2024 --allow=unused 2>&1 | tee $out/charon.log
+            aeneas concurrent_psbt.llbc -backend lean -dest $out \
+              -no-progress-bar -print-error-emitters 2>&1 | tee $out/aeneas.log
+            cp concurrent_psbt.llbc $out/
+          '';
+
+      # Typecheck the extraction and the proofs about it, then audit the axioms of the
+      # theorems listed in Axioms.lean: the extraction declares an `axiom` for each external
+      # function Aeneas has no model of, and no theorem may depend on one, or on `sorry`.
+      verify =
+        name: crate:
+        let
+          extracted = extract "${name}-extract" crate;
+        in
+        pkgs.runCommand name
+          {
+            src = ../../formal/aeneas;
+            model = ../../formal/lean;
+            inherit extracted;
+            nativeBuildInputs = [ lean ];
+          }
+          ''
+            set -o pipefail
+            export LEAN_PATH=${leanPath}:$PWD/build
+            mkdir -p build $out
+            cp $model/JoinResult.lean $extracted/ConcurrentPsbt.lean $src/*.lean .
+            for m in JoinResult ConcurrentPsbt Proofs; do
+              lean -o build/$m.olean $m.lean | tee -a $out/lean.txt
+            done
+            lean Axioms.lean | tee $out/axioms.txt
+            if grep -q -e sorryAx -e "declaration uses 'sorry'" $out/*.txt ||
+              grep -q concurrent_psbt $out/axioms.txt; then
+              echo "a theorem depends on sorry or on an external axiom" >&2
+              exit 1
+            fi
+          '';
     in
     {
       packages = lib.mkIf supported {
         inherit aeneas;
         aeneas-lean = aeneasLean;
       };
+      checks = lib.mkIf supported {
+        formal-aeneas = verify "formal-aeneas" ../../crates/concurrent-psbt;
+      };
+      formal.packages = lib.optionals supported [ aeneas ];
     };
 }
