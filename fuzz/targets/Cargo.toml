@@ -1,0 +1,19 @@
+[package]
+name = "concurrent-psbt-fuzz-targets"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Each fuzzer frontend is a workspace of its own, because the runtimes they
+# link only build under their own cargo wrappers. This crate is one too, so
+# that it can be linted without any of those runtimes.
+[workspace]
+
+[dependencies]
+arbitrary = "1"
+concurrent-psbt = { path = "../../crates/concurrent-psbt", default-features = false }
+psbt-v2 = "0.3.0"
+scrubber = { path = "../../crates/scrubber", default-features = false }
+
+[lints.rust]
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(fuzzer_verify_crash)'] }
