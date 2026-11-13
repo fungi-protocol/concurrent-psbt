@@ -24,19 +24,20 @@ joinable_struct! {
     source: Global,
     /// Result-domain counterpart of [`Global`].
     result: ResultGlobal,
+    conflicts: GlobalConflict, GlobalField,
     v2: psbt_v2::v2::Global,
     fields: {
-        tx_version: transaction::Version,
-        fallback_lock_time: Option<absolute::LockTime>,
-        tx_modifiable_flags: u8,
-        xpubs: BTreeMap<Xpub, KeySource>,
-        proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
-        unknowns: BTreeMap<raw::Key, Vec<u8>>,
+        tx_version: transaction::Version => TxVersion,
+        fallback_lock_time: Option<absolute::LockTime> => FallbackLockTime(absolute::LockTime),
+        tx_modifiable_flags: u8 => TxModifiableFlags,
+        xpubs: BTreeMap<Xpub, KeySource> => Xpub[Xpub](KeySource),
+        proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>> => Proprietary[raw::ProprietaryKey](Vec<u8>),
+        unknowns: BTreeMap<raw::Key, Vec<u8>> => Unknown[raw::Key](Vec<u8>),
     },
     proprietary: {
-        pub(crate) unordered: bool = TxUnorderedField,
-        pub(crate) sort_key_derivation: Option<SortKeyDerivation> = SortKeyDerivationField,
-        pub(crate) sort_seed: Option<SortSeed> = SortSeedField,
+        pub(crate) unordered: bool = TxUnorderedField => Unordered,
+        pub(crate) sort_key_derivation: Option<SortKeyDerivation> = SortKeyDerivationField => SortKeyDerivation(SortKeyDerivation),
+        pub(crate) sort_seed: Option<SortSeed> = SortSeedField => SortSeed(SortSeed),
     },
 }
 
@@ -400,6 +401,10 @@ mod tests {
             let joined = with_version(transaction::Version::ONE)
                 .wrap()
                 .join(with_version(transaction::Version::TWO).wrap());
+            assert_eq!(
+                joined.conflicts().map(|c| c.path()).collect::<Vec<_>>(),
+                [GlobalField::TxVersion]
+            );
             assert_eq!(joined.clone().try_unwrap(), Err(joined));
         }
     }
@@ -547,6 +552,7 @@ mod tests {
 
             #[test]
             fn is_ok_iff_try_unwrap_succeeds(a in arb_result_global()) {
+                prop_assert_eq!(a.conflicts().next().is_none(), a.is_ok());
                 prop_assert_eq!(a.is_ok(), a.try_unwrap().is_ok());
             }
 
