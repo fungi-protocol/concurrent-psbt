@@ -9,6 +9,7 @@
     ./clippy.nix
     ./coverage
     ./doc.nix
+    ./expected-failures
     ./fetch-validation-history.nix
     ./hestia-version.nix
     ./mutants.nix
