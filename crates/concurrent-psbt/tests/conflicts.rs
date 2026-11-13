@@ -14,15 +14,23 @@ use concurrent_psbt::{Conflicts, Join, Lift, ResultWrapped};
 
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn psbt(version: transaction::Version) -> UnorderedPsbt {
-    UnorderedPsbt::try_from_psbt(psbt_v2::v2::Psbt {
+    let mut psbt = psbt_v2::v2::Psbt {
         global: psbt_v2::v2::Global {
             tx_version: version,
             ..Default::default()
         },
         inputs: vec![],
         outputs: vec![],
-    })
-    .unwrap()
+    };
+    psbt.global.proprietaries.insert(
+        psbt_v2::raw::ProprietaryKey {
+            prefix: concurrent_psbt::PROPRIETARY_PREFIX.to_vec(),
+            subtype: concurrent_psbt::global::PSBT_GLOBAL_TX_UNORDERED_SUBTYPE,
+            key: vec![],
+        },
+        vec![0x03],
+    );
+    UnorderedPsbt::try_from_psbt(psbt).unwrap()
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -79,6 +87,7 @@ fn proprietary_sort_fields_keep_their_typed_paths() {
     use concurrent_psbt::output::OutputField;
 
     let mut global = Global::default();
+    global.clear_unordered();
     global.set_sort_seed(SortSeed::try_from(vec![1; 16]).unwrap());
     global.set_sort_key_derivation(SortKeyDerivation::Explicit);
     let mut other = global.clone();
