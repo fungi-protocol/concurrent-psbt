@@ -1,0 +1,11 @@
+[package]
+name = "psbt-stateright"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+concurrent-psbt = { path = "../../crates/concurrent-psbt", default-features = false }
+stateright = "0.31"

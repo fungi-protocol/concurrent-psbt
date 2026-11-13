@@ -2,7 +2,7 @@
 //! [`PartialJoin::try_join`] captures this.
 //!
 //! It returns [`JoinResult<V>`], an alias for `Result<V, Conflict<V>>`, where [`Conflict<V>`],
-//! collects all the distinct values that couldn't be merged.
+//! collects the maximal values that couldn't be merged.
 //!
 //! [`JoinResult<V>`] implements [`Join`], which is an infallible join operation (the free
 //! semilattice over `V`, more or less), in terms of [`Conflict<V>`]'s [`Join`] implementation.
@@ -13,19 +13,28 @@ use crate::lattice::join::{Join, JoinMut};
 ///
 /// Containers should not implement this, instead they should implement [`Join`] by wrapping
 /// contained values in [`JoinResult`].
-pub trait PartialJoin: Sized + PartialEq {
+pub trait PartialJoin: Sized + PartialEq + Clone {
     /// Attempt to join two values.
     ///
-    /// Returns `Ok(lub)` where `lub` is the least upper bound if one exists, or `Err(Conflict)`
-    /// containing both values.
+    /// Returns `Ok` with the greater operand if the two are comparable, or `Err(Conflict)`
+    /// containing both values if they aren't. The order must be a partial order, antisymmetric
+    /// with respect to `==` (so `try_join(a, a)` is `Ok(a)`), and two values with a common upper
+    /// bound must be comparable. Equality joins (only equal values join) satisfy this, and so
+    /// does absence below any present value.
+    ///
+    /// Under these rules a conflict's maximal values determine it, which is what [`Conflict`]
+    /// stores, so [`JoinResult`]'s join is a lattice join under `==`. A `try_join` that returns
+    /// anything else, such as a merge of two values, makes that join a lattice join only up to
+    /// the identifications its merges make, and `==` then tells equivalent results apart.
     ///
     /// Although `Conflict<V>` has set semantics (equality treats it as an unordered collection),
     /// insertion order is preserved during iteration: when two `Ok` values are joined and produce
     /// a binary conflict, the first value is the left operand and the second is the right.
     ///
     /// Provenance is only reliable when both operands were `Ok` before the join. When an existing
-    /// `Conflict` is joined with another value, new entries are appended, so a multi-way fold does
-    /// not preserve per-operand attribution.
+    /// `Conflict` is joined with another value, the value replaces the entry it is above, or is
+    /// appended if it isn't comparable to any, so a multi-way fold does not preserve per-operand
+    /// attribution.
     fn try_join(self, other: Self) -> JoinResult<Self>;
 
     /// Lift a value into the result domain as `Ok(self)`.
@@ -60,8 +69,9 @@ where
 /// losing information. `Conflict` preserves the set of distinct conflicting values allowing the
 /// caller to inspect or resolve the disagreement.
 ///
-/// The inner values are [`PartialJoin`] with equality based on [`PartialEq`]. Duplicate values
-/// are omitted.
+/// The inner values are [`PartialJoin`] values, none comparable to another: a value below an
+/// existing one (including an equal one) is omitted, and a value above an existing one replaces
+/// it.
 #[derive(Debug, Clone)]
 pub struct Conflict<V: PartialJoin>(Vec<V>);
 
@@ -71,9 +81,11 @@ impl<V: PartialJoin> Conflict<V> {
         Self(vec![v])
     }
 
-    /// Build from an iterator, deduplicating values.
-    #[allow(dead_code)] // used by downstream commits (collection modules, domain types)
-    pub(crate) fn from_values(iter: impl IntoIterator<Item = V>) -> Self {
+    /// Build from an iterator, deduplicating values. An empty iterator yields an empty conflict.
+    /// The distinct values must be pairwise incomparable, as in the `Err` of
+    /// [`PartialJoin::try_join`]; this can't be checked here, because `try_join` itself builds
+    /// its conflicts with this function.
+    pub fn from_values(iter: impl IntoIterator<Item = V>) -> Self {
         let mut vals = Vec::new();
         for v in iter {
             if !vals.contains(&v) {
@@ -81,6 +93,19 @@ impl<V: PartialJoin> Conflict<V> {
             }
         }
         Self(vals)
+    }
+
+    /// Add a value, keeping only the maximal values. The first comparable entry decides: a value
+    /// below it adds nothing, and a value above it is comparable to no other entry, since that
+    /// entry would then share an upper bound with this one or lie below it.
+    fn insert(&mut self, value: V) {
+        for entry in &mut self.0 {
+            if let Ok(lub) = entry.clone().try_join(value.clone()) {
+                *entry = lub;
+                return;
+            }
+        }
+        self.0.push(value);
     }
 
     /// Iterates over references to the conflicted values.
@@ -103,17 +128,15 @@ impl<V: PartialJoin> Conflict<V> {
 impl<V: PartialJoin> JoinMut for Conflict<V> {
     fn join_mut(&mut self, other: Self) {
         for value in other.0 {
-            if !self.0.contains(&value) {
-                self.0.push(value)
-            }
+            self.insert(value);
         }
     }
 }
 
 /// Set equality: same elements, regardless of order.
 ///
-/// Relies on the no-duplicate invariant maintained by `Conflict::from_values`:
-/// each value in `self.0` is distinct (deduplicated on construction).
+/// Relies on the invariant that `Conflict::insert` maintains and `Conflict::from_values`
+/// requires: the values in `self.0` are pairwise incomparable, so in particular distinct.
 /// Given no duplicates, same-length + subset → set equality. $O(n^2)$ but
 /// $n$ is tiny in practice (typically 2).
 impl<V: PartialJoin> PartialEq for Conflict<V> {
@@ -355,6 +378,52 @@ mod tests {
         }
 
         assert_partial_join_laws!(arb_foo(), arb_join_result());
+
+        /// The prefix order on bit strings of length at most 2: a tree, so two strings with a
+        /// common extension are comparable, and `try_join` returns an operand without being an
+        /// equality join. It covers both shapes beyond equality:
+        /// - absence below every value (the empty string): before conflicts kept only their
+        ///   maximal values, `(ε ⊔ 0) ⊔ 1` was `{0, 1}` but `ε ⊔ (0 ⊔ 1)` was `{ε, 0, 1}`;
+        /// - refinement inside a conflict: `{0, 1} ⊔ 01` must be `{01, 1}`.
+        mod prefix_order {
+            use super::*;
+
+            #[derive(Debug, Clone, PartialEq)]
+            struct Bits(Vec<bool>);
+
+            impl PartialJoin for Bits {
+                fn try_join(self, other: Self) -> JoinResult<Self> {
+                    if other.0.starts_with(&self.0) {
+                        Ok(other)
+                    } else if self.0.starts_with(&other.0) {
+                        Ok(self)
+                    } else {
+                        Err(Conflict::from_values([self, other]))
+                    }
+                }
+            }
+
+            fn arb_bits() -> impl Strategy<Value = Bits> {
+                proptest::collection::vec(any::<bool>(), 0..=2).prop_map(Bits)
+            }
+
+            /// `Ok(v)`, or a conflict reached by joining values into the empty one, since
+            /// `from_values` needs incomparable values.
+            fn arb_bits_result() -> impl Strategy<Value = JoinResult<Bits>> {
+                prop_oneof![
+                    arb_bits().prop_map(Ok),
+                    proptest::collection::vec(arb_bits(), 0..=4).prop_map(|vs| {
+                        let mut acc = Err(Conflict::from_values([]));
+                        for v in vs {
+                            acc = acc.join(Ok(v));
+                        }
+                        acc
+                    }),
+                ]
+            }
+
+            assert_partial_join_laws!(arb_bits(), arb_bits_result());
+        }
 
         proptest! {
             #[test]
