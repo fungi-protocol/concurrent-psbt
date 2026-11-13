@@ -1,0 +1,35 @@
+[package]
+name = "concurrent-psbt-fuzz-libfuzzer"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[[bin]]
+name = "fuzz_crash_test"
+path = "fuzz_targets/fuzz_crash_test.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_lattice_laws"
+path = "fuzz_targets/fuzz_lattice_laws.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_scrub"
+path = "fuzz_targets/fuzz_scrub.rs"
+test = false
+doc = false
+bench = false
+
+[dependencies]
+concurrent-psbt-fuzz-targets = { path = "../targets" }
+libfuzzer-sys = "0.4"
