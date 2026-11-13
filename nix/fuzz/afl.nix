@@ -112,9 +112,11 @@
             text = ''
               target="''${1:?usage: nix run .#fuzz-afl -- <target> [afl-fuzz args...]}"
               shift
-              mkdir -p fuzz/afl/in
+              # afl-fuzz creates the output directory, but not its parents.
+              mkdir -p fuzz/afl/in fuzz/afl/out
               [ -n "$(ls -A fuzz/afl/in)" ] || printf seed >fuzz/afl/in/seed
-              exec ${lib.getExe aflplusplus} -i fuzz/afl/in -o fuzz/afl/out "$@" -- "${targets}/bin/$target"
+              # One output directory per target, so targets never share a queue.
+              exec ${lib.getExe aflplusplus} -i fuzz/afl/in -o "fuzz/afl/out/$target" "$@" -- "${targets}/bin/$target"
             '';
           }
         );
