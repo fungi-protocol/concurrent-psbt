@@ -101,6 +101,14 @@ impl<M: Modifiable, S: SortMode> Constructor<M, S> {
         Ok(Constructor::from_unordered(psbt))
     }
 
+    /// Move on to the [`Sorter`] while inputs and outputs stay as modifiable
+    /// as they are. Sorting then hands the PSBT to the BIP 370
+    /// [`Constructor`](psbt_v2::v2::Constructor) of the same modifiability,
+    /// which adds further inputs and outputs after the sorted ones.
+    pub fn into_sorter(self) -> Sorter<M, S> {
+        Sorter::from_unordered(self.0)
+    }
+
     /// Join with a PSBT that shares this one's global fields and holds only
     /// the given inputs and outputs.
     fn join_with(self, inputs: InputSet, outputs: OutputSet) -> Result<Self, ConstructorError> {
@@ -552,6 +560,93 @@ mod tests {
             for (name, got, want) in cases {
                 assert_eq!(got, Some(want), "{name}");
             }
+        }
+
+        fn txids(psbt: &Psbt) -> Vec<bitcoin::Txid> {
+            psbt.inputs
+                .iter()
+                .map(|input| input.previous_txid)
+                .collect()
+        }
+
+        #[test]
+        fn a_sorted_psbt_is_handed_to_a_bip370_constructor_that_appends_after_it() {
+            let constructor = || {
+                Constructor::<BothModifiable, Mixed>::try_from_psbt(psbt_with_mode(0x03, 1))
+                    .unwrap()
+                    .input(test_input(1))
+                    .unwrap()
+                    .input(test_input(2))
+                    .unwrap()
+                    .input(test_input(3))
+                    .unwrap()
+            };
+            let mut expected = txids(&constructor().into_sorter().try_into_ordered_psbt().unwrap());
+            expected.push(test_input(4).previous_txid);
+
+            let appended = constructor()
+                .into_sorter()
+                .try_sort()
+                .expect("a seeded PSBT can be sorted")
+                .input(test_input(4).into())
+                .psbt()
+                .expect("inputs carry no lock time requirements");
+            assert!(
+                !Global::try_from(appended.global.clone())
+                    .expect("well-formed sort fields")
+                    .is_unordered()
+            );
+            assert_eq!(appended.global.tx_modifiable_flags & 0x03, 0x03);
+            assert_eq!(txids(&appended), expected);
+        }
+
+        #[test]
+        fn a_sorted_psbt_stays_as_modifiable_as_it_was() {
+            let inputs =
+                Constructor::<InputsModifiable, Mixed>::try_from_psbt(psbt_with_mode(0x01, 1))
+                    .unwrap()
+                    .input(test_input(1))
+                    .unwrap()
+                    .into_sorter()
+                    .try_sort()
+                    .unwrap()
+                    .input(test_input(2).into())
+                    .psbt()
+                    .unwrap();
+            assert_eq!(inputs.global.tx_modifiable_flags & 0x03, 0x01);
+            assert_eq!(
+                txids(&inputs),
+                [1, 2].map(|tag| test_input(tag).previous_txid)
+            );
+
+            let outputs =
+                Constructor::<OutputsModifiable, Mixed>::try_from_psbt(psbt_with_mode(0x02, 1))
+                    .unwrap()
+                    .output(test_output(1))
+                    .unwrap()
+                    .into_sorter()
+                    .try_sort()
+                    .unwrap()
+                    .output(test_output(2).into())
+                    .psbt()
+                    .unwrap();
+            assert_eq!(outputs.global.tx_modifiable_flags & 0x03, 0x02);
+            assert_eq!(outputs.outputs.len(), 2);
+        }
+
+        #[test]
+        fn an_explicit_only_psbt_needs_sort_keys_to_be_sorted() {
+            let unsorted =
+                Constructor::<BothModifiable, ExplicitOnly>::try_from_psbt(psbt_with_mode(0x03, 4))
+                    .unwrap()
+                    .input(test_input(1))
+                    .unwrap()
+                    .into_sorter()
+                    .try_sort();
+            assert!(matches!(
+                unsorted,
+                Err(crate::sorter::SortError::MissingInputSortKey(missing)) if missing == outpoint(1)
+            ));
         }
 
         #[test]
