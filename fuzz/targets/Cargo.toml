@@ -12,6 +12,8 @@ publish = false
 [dependencies]
 arbitrary = "1"
 concurrent-psbt = { path = "../../crates/concurrent-psbt", default-features = false }
+psbt-v2 = "0.3.0"
+scrubber = { path = "../../crates/scrubber", default-features = false }
 
 [lints.rust]
 unexpected_cfgs = { level = "deny", check-cfg = ['cfg(fuzzer_verify_crash)'] }

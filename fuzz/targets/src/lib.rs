@@ -9,6 +9,9 @@ use std::fmt::Debug;
 use arbitrary::{Result, Unstructured};
 use concurrent_psbt::{Join, JoinResult, PartialJoin};
 
+mod scrub;
+pub use scrub::scrub;
+
 /// Check that [`Join`] is idempotent, commutative and associative on the
 /// result-domain collections the crate provides joins for.
 ///
