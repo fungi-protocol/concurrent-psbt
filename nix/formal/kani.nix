@@ -96,9 +96,11 @@
 
       # Harnesses live in-crate under `cfg(kani)` (they need crate-private constructors such
       # as `Conflict::from_values`). `cargo kani` exits non-zero if any harness fails.
+      # `package` is the crate whose harnesses run.
       kaniCheck =
         {
           pname,
+          package ? "concurrent-psbt",
           src ? commonArgs.src,
           kaniArgs ? "",
         }:
@@ -115,7 +117,7 @@
               mkdir -p $out
               # One harness at a time: with several CBMC processes per check, and several
               # checks per build, a 16 GB GitHub runner was killed mid-verification.
-              cargo kani -p concurrent-psbt \
+              cargo kani -p ${package} \
                 -Z unstable-options --jobs 1 --output-format terse ${kaniArgs} \
                 2>&1 | tee $out/kani.log
             '';

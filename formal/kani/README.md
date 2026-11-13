@@ -55,6 +55,31 @@ associativity over any `Err` inputs, didn't finish within 8 minutes. That is
 why the scopes above are narrow. The Lean proofs (#99) cover the general
 case.
 
+## Scrubber
+
+`checks.formal-kani-scrubber` runs two harnesses over the real code of the
+scrubber crate, in `crates/scrubber/src/scrub/proofs.rs`:
+
+- `decode_encode_roundtrip`: `Pair::decode` never panics on up to 6 symbolic
+  bytes, and whatever it accepts re-encodes to the bytes it consumed.
+- `scrub_input_map`: on a concrete v2 global map (one input, no outputs)
+  followed by up to 6 symbolic input-map bytes, `scrub` never panics, keeps
+  no sensitive input field, and is idempotent.
+
+No run has finished yet, so there are no results and no timing. CBMC has to
+unwind bitcoin's `io::Read`-based decoders and `BTreeMap`. An ad hoc run did
+not finish in 6 minutes, even with 4 symbolic bytes instead of 6, and a run
+of the check as it is here did not finish within 4h37m on a loaded 24 GB
+MacBook Air; it was stopped when the machine ran out of swap. The check
+is separate from `formal-kani` so that it doesn't hold up the harnesses that
+do finish. Making these tractable might mean stubbing (`#[kani::stub]`) the
+consensus decoders, but then the parts checked would no longer be the real
+code.
+
+There is no seeded-bug fixture for it yet. The check isn't known to
+terminate, so a fixture requiring it to fail could not tell a caught bug from
+a timeout. One can be added once a run completes.
+
 ## Nix
 
 `nix/formal/kani.nix` wraps the upstream Kani release bundle (CBMC, goto-cc,
@@ -64,7 +89,8 @@ kani-compiler links against, as `packages.<system>.kani`. The check,
 It runs on aarch64-darwin only: the module is guarded by `supported`, which
 holds only for systems with a bundle hash, and elsewhere adds no package,
 check or dev-shell entry. The closure is about 3.7 GiB, which a cold build has
-to fetch; the check itself takes about 6 minutes.
+to fetch; `formal-kani` takes about 6 minutes. `formal-kani-scrubber`
+reuses the same check function for the scrubber crate.
 
 Good for: panic freedom and properties of the real code over small,
 heap-light inputs, with concrete counterexamples. Weak for: collection-heavy
