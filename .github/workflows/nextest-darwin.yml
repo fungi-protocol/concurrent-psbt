@@ -17,9 +17,31 @@ jobs:
           version: v3.0.1
           # Do not upload paths that cache.nixos.org already serves.
           upstream-cache-filter: true
+      - name: Prepare Nix build directory
+        run: sudo install -d -o root -m 0755 /nix/var/nix/ci-builds
       - name: Run nextest
-        run: nix build --no-update-lock-file --out-link result-nextest '.#checks.aarch64-darwin.tests-nightly-dev'
+        run: nix build --option build-dir /nix/var/nix/ci-builds --keep-failed --no-update-lock-file --out-link result-nextest '.#checks.aarch64-darwin.tests-nightly-dev'
+      - name: Recover traces from failed Nix builds
+        if: ${{ !cancelled() }}
+        run: |
+          # --keep-failed leaves daemon-owned build directories in this dedicated location.
+          sudo bash -e -c '
+            for build in /nix/var/nix/ci-builds/*; do
+              # Nix versions may place the build files one level deeper.
+              for traces in "$build/nextest-traces" "$build/build/nextest-traces"; do
+                [ -d "$traces" ] || continue
+                destination="$1/$(basename "$build")"
+                mkdir -p "$destination"
+                cp -R "$traces" "$destination/chrome-traces"
+              done
+            done
+            if [ -d "$1" ]; then chmod -R a+rX "$1"; fi
+          ' -- "$PWD/failed-nextest"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
         with:
           name: nextest-nightly-dev-aarch64-darwin
-          path: result-nextest/nextest-run.zip
+          path: |
+            result-nextest/nextest-run.zip
+            result-nextest/chrome-traces/*.json
+            failed-nextest/

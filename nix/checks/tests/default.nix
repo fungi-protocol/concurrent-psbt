@@ -23,10 +23,15 @@
             inherit cargoArtifacts;
             CARGO_PROFILE = profile;
             cargoNextestExtraArgs = "--user-config-file ${./nextest-record.toml}";
-            nativeBuildInputs = [ pkgs.unzip ];
+            nativeBuildInputs = with pkgs; [
+              jq
+              unzip
+            ];
             preCheck = ''
               export NEXTEST_STATE_DIR="$TMPDIR/nextest-state"
+              export NEXTEST_TRACE_DIR="$TMPDIR/nextest-traces"
               mkdir -p "$NEXTEST_STATE_DIR"
+              mkdir -p "$NEXTEST_TRACE_DIR"
             '';
             postCheck = ''
               cargo nextest store export \
@@ -35,6 +40,9 @@
                 --archive-file "$out/nextest-run.zip" \
                 latest
               unzip -tqq "$out/nextest-run.zip"
+              mkdir -p "$out/chrome-traces"
+              jq empty "$NEXTEST_TRACE_DIR"/*.json
+              cp "$NEXTEST_TRACE_DIR"/*.json "$out/chrome-traces/"
             '';
           }
         );
