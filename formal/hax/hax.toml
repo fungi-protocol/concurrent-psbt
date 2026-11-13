@@ -1,0 +1,5 @@
+# Proof scenario for `cargo hax extract` (formal/hax). The check appends the `[tools]` table
+# that points hax at the Nix-built charon and aeneas.
+[scenario.concurrent-psbt]
+backend = "lean"
+package = "concurrent-psbt"
