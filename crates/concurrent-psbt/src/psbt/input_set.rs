@@ -2,12 +2,13 @@
 
 use bitcoin::OutPoint;
 
+use crate::lattice::conflicts::Conflicts;
 use crate::lattice::join::Join;
 use crate::lattice::partial::JoinResult;
 use crate::{Lift, ResultWrapped};
 
-use super::input::{Input, ResultInput, out_point};
-use super::keyed_set::{Freezable, KeyedSet, ResultKeyedSet};
+use super::input::{Input, InputConflict, ResultInput, out_point};
+use super::keyed_set::{Freezable, KeyedSet, ResultKeyedSet, SetConflict};
 
 /// PSBT inputs keyed by the [`OutPoint`] each input spends.
 ///
@@ -96,6 +97,12 @@ impl Join for ResultInputSet {
 }
 
 impl ResultInputSet {
+    /// Borrow membership conflicts and input conflicts keyed by outpoint.
+    /// Iteration order between entries is unspecified.
+    pub fn conflicts(&self) -> impl Iterator<Item = SetConflict<'_, OutPoint, InputConflict<'_>>> {
+        self.0.conflicts()
+    }
+
     /// Count the distinct outpoints in the joined set. If a frozen set has fewer
     /// outpoints, return the joined and frozen counts as a conflict.
     pub fn len(&self) -> JoinResult<usize> {
@@ -137,6 +144,14 @@ impl ResultWrapped for ResultInputSet {
 
     fn try_unwrap(self) -> Result<Self::Clean, Self> {
         Self::try_unwrap(self)
+    }
+}
+
+impl Conflicts for ResultInputSet {
+    type Item<'a> = SetConflict<'a, OutPoint, InputConflict<'a>>;
+
+    fn conflicts(&self) -> impl Iterator<Item = Self::Item<'_>> {
+        Self::conflicts(self)
     }
 }
 

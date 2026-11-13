@@ -27,37 +27,38 @@ joinable_struct! {
     /// [`Input`] into this type, and [`ResultInput::try_unwrap`] returns it if
     /// no field conflicts.
     result: ResultInput,
+    conflicts: InputConflict, InputField,
     v2: psbt_v2::v2::Input,
     fields: {
-        previous_txid: Txid,
-        spent_output_index: u32,
-        sequence: Option<Sequence>,
-        min_time: Option<absolute::Time>,
-        min_height: Option<absolute::Height>,
-        non_witness_utxo: Option<Transaction>,
-        witness_utxo: Option<TxOut>,
-        partial_sigs: BTreeMap<PublicKey, ecdsa::Signature>,
-        sighash_type: Option<PsbtSighashType>,
-        redeem_script: Option<ScriptBuf>,
-        witness_script: Option<ScriptBuf>,
-        bip32_derivations: BTreeMap<PublicKey, KeySource>,
-        final_script_sig: Option<ScriptBuf>,
-        final_script_witness: Option<Witness>,
-        ripemd160_preimages: BTreeMap<ripemd160::Hash, Vec<u8>>,
-        sha256_preimages: BTreeMap<sha256::Hash, Vec<u8>>,
-        hash160_preimages: BTreeMap<hash160::Hash, Vec<u8>>,
-        hash256_preimages: BTreeMap<sha256d::Hash, Vec<u8>>,
-        tap_key_sig: Option<taproot::Signature>,
-        tap_script_sigs: BTreeMap<(XOnlyPublicKey, TapLeafHash), taproot::Signature>,
-        tap_scripts: BTreeMap<ControlBlock, (ScriptBuf, LeafVersion)>,
-        tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
-        tap_internal_key: Option<XOnlyPublicKey>,
-        tap_merkle_root: Option<TapNodeHash>,
-        proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
-        unknowns: BTreeMap<raw::Key, Vec<u8>>,
+        previous_txid: Txid => PreviousTxid,
+        spent_output_index: u32 => SpentOutputIndex,
+        sequence: Option<Sequence> => Sequence(Sequence),
+        min_time: Option<absolute::Time> => MinTime(absolute::Time),
+        min_height: Option<absolute::Height> => MinHeight(absolute::Height),
+        non_witness_utxo: Option<Transaction> => NonWitnessUtxo(Transaction),
+        witness_utxo: Option<TxOut> => WitnessUtxo(TxOut),
+        partial_sigs: BTreeMap<PublicKey, ecdsa::Signature> => PartialSig[PublicKey](ecdsa::Signature),
+        sighash_type: Option<PsbtSighashType> => SighashType(PsbtSighashType),
+        redeem_script: Option<ScriptBuf> => RedeemScript(ScriptBuf),
+        witness_script: Option<ScriptBuf> => WitnessScript(ScriptBuf),
+        bip32_derivations: BTreeMap<PublicKey, KeySource> => Bip32Derivation[PublicKey](KeySource),
+        final_script_sig: Option<ScriptBuf> => FinalScriptSig(ScriptBuf),
+        final_script_witness: Option<Witness> => FinalScriptWitness(Witness),
+        ripemd160_preimages: BTreeMap<ripemd160::Hash, Vec<u8>> => Ripemd160Preimage[ripemd160::Hash](Vec<u8>),
+        sha256_preimages: BTreeMap<sha256::Hash, Vec<u8>> => Sha256Preimage[sha256::Hash](Vec<u8>),
+        hash160_preimages: BTreeMap<hash160::Hash, Vec<u8>> => Hash160Preimage[hash160::Hash](Vec<u8>),
+        hash256_preimages: BTreeMap<sha256d::Hash, Vec<u8>> => Hash256Preimage[sha256d::Hash](Vec<u8>),
+        tap_key_sig: Option<taproot::Signature> => TapKeySig(taproot::Signature),
+        tap_script_sigs: BTreeMap<(XOnlyPublicKey, TapLeafHash), taproot::Signature> => TapScriptSig[(XOnlyPublicKey, TapLeafHash)](taproot::Signature),
+        tap_scripts: BTreeMap<ControlBlock, (ScriptBuf, LeafVersion)> => TapScript[ControlBlock]((ScriptBuf, LeafVersion)),
+        tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)> => TapKeyOrigin[XOnlyPublicKey]((Vec<TapLeafHash>, KeySource)),
+        tap_internal_key: Option<XOnlyPublicKey> => TapInternalKey(XOnlyPublicKey),
+        tap_merkle_root: Option<TapNodeHash> => TapMerkleRoot(TapNodeHash),
+        proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>> => Proprietary[raw::ProprietaryKey](Vec<u8>),
+        unknowns: BTreeMap<raw::Key, Vec<u8>> => Unknown[raw::Key](Vec<u8>),
     },
     proprietary: {
-        pub(crate) sort_key: Option<SortKey> = SortKeyField<PSBT_IN_SORT_KEY_SUBTYPE>,
+        pub(crate) sort_key: Option<SortKey> = SortKeyField<PSBT_IN_SORT_KEY_SUBTYPE> => SortKey(SortKey),
     },
 }
 
@@ -206,6 +207,10 @@ pub(crate) mod tests {
         #[test]
         fn inputs_spending_different_outpoints_conflict() {
             let joined = make_input(1, 0).wrap().join(make_input(2, 0).wrap());
+            assert_eq!(
+                joined.conflicts().map(|c| c.path()).collect::<Vec<_>>(),
+                [InputField::PreviousTxid]
+            );
             assert_eq!(joined.clone().try_unwrap(), Err(joined));
         }
 
@@ -290,6 +295,49 @@ pub(crate) mod tests {
                 )]),
                 ..make_input(19, 20)
             }
+        }
+
+        #[test]
+        fn compound_and_proprietary_keydata_identify_conflicts() {
+            let input = populated_input();
+            let mut other = input.clone();
+            let tap_key = *input.tap_script_sigs.keys().next().unwrap();
+            other
+                .tap_script_sigs
+                .get_mut(&tap_key)
+                .unwrap()
+                .sighash_type = TapSighashType::All;
+            let proprietary_key = input.proprietaries.keys().next().unwrap().clone();
+            other
+                .proprietaries
+                .get_mut(&proprietary_key)
+                .unwrap()
+                .push(99);
+            let joined = input.clone().wrap().join(other.wrap());
+            let conflicts: Vec<_> = joined.conflicts().collect();
+            assert_eq!(
+                conflicts.iter().map(|c| c.path()).collect::<Vec<_>>(),
+                [
+                    InputField::TapScriptSig(&tap_key),
+                    InputField::Proprietary(&proprietary_key),
+                ]
+            );
+            let InputConflict::TapScriptSig { key, values } = conflicts[0] else {
+                panic!("taproot signature");
+            };
+            assert_eq!(key, &tap_key);
+            assert_eq!(
+                values
+                    .into_iter()
+                    .map(|signature| signature.sighash_type)
+                    .collect::<Vec<_>>(),
+                [TapSighashType::Default, TapSighashType::All]
+            );
+            let InputConflict::Proprietary { key, values } = conflicts[1] else {
+                panic!("proprietary field");
+            };
+            assert_eq!(key, &proprietary_key);
+            assert_eq!(values.into_iter().next(), input.proprietaries.get(key));
         }
 
         #[test]
@@ -437,6 +485,7 @@ pub(crate) mod tests {
 
             #[test]
             fn is_ok_iff_try_unwrap_succeeds(r in arb_result_input()) {
+                prop_assert_eq!(r.conflicts().next().is_none(), r.is_ok());
                 prop_assert_eq!(r.is_ok(), r.try_unwrap().is_ok());
             }
         }

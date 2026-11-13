@@ -2,12 +2,13 @@
 
 use bitcoin::hex::DisplayHex;
 
+use crate::lattice::conflicts::Conflicts;
 use crate::lattice::join::Join;
 use crate::lattice::partial::JoinResult;
 use crate::{Lift, ResultWrapped};
 
-use super::keyed_set::{Freezable, KeyedSet, ResultKeyedSet};
-use super::output::{Output, ResultOutput, UniqueId};
+use super::keyed_set::{Freezable, KeyedSet, ResultKeyedSet, SetConflict};
+use super::output::{Output, OutputConflict, ResultOutput, UniqueId};
 
 /// PSBT outputs keyed by each output's [`UniqueId`].
 ///
@@ -94,6 +95,12 @@ impl Join for ResultOutputSet {
 }
 
 impl ResultOutputSet {
+    /// Borrow membership conflicts and output conflicts keyed by output ID.
+    /// Iteration order between entries is unspecified.
+    pub fn conflicts(&self) -> impl Iterator<Item = SetConflict<'_, UniqueId, OutputConflict<'_>>> {
+        self.0.conflicts()
+    }
+
     /// Count the distinct output IDs in the joined set. If a frozen set has fewer
     /// IDs, return the joined and frozen counts as a conflict.
     pub fn len(&self) -> JoinResult<usize> {
@@ -132,6 +139,14 @@ impl ResultWrapped for ResultOutputSet {
 
     fn try_unwrap(self) -> Result<Self::Clean, Self> {
         Self::try_unwrap(self)
+    }
+}
+
+impl Conflicts for ResultOutputSet {
+    type Item<'a> = SetConflict<'a, UniqueId, OutputConflict<'a>>;
+
+    fn conflicts(&self) -> impl Iterator<Item = Self::Item<'_>> {
+        Self::conflicts(self)
     }
 }
 
