@@ -1,15 +1,19 @@
 #![allow(clippy::result_large_err)]
 
+//! PSBT output fields.
+//!
+//! [`ResultOutput`] joins fields independently, retaining incompatible values
+//! as conflicts.
+
 use std::collections::BTreeMap;
 
 use bitcoin::bip32::KeySource;
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
-use bitcoin::taproot::{TapLeafHash, TapTree};
-use bitcoin::{Amount, ScriptBuf};
+use bitcoin::taproot::TapTree;
+use bitcoin::{Amount, ScriptBuf, TapLeafHash};
 use psbt_v2::raw;
 
 use super::proprietary::ProprietaryField;
-
 joinable_struct! {
     /// A PSBT output, mirroring the BIP 370 per-output map, identified by its
     /// [`UniqueId`].
@@ -99,13 +103,13 @@ impl From<Output> for psbt_v2::v2::Output {
 
 /// Opaque byte-vector identifier for a PSBT output.
 ///
-/// Computed from the `PSBT_OUT_UNIQUE_ID` proprietary field, keyed by subtype
-/// [`PSBT_OUT_UNIQUE_ID_SUBTYPE`]. Used as the map key in `OutputSet`
-/// so that outputs can be merged in an order-independent way.
+/// Stored in the `PSBT_OUT_UNIQUE_ID` proprietary field, subtype
+/// [`PSBT_OUT_UNIQUE_ID_SUBTYPE`]. Identifies an output independently of its
+/// position in a transaction.
 ///
-/// Built with [`TryFrom`], a unique ID is 1 to [`UniqueId::MAX_LEN`] bytes
-/// long, as is one read from a BIP 370 output. An empty ID would make
-/// unrelated outputs join as one.
+/// A unique ID built with [`TryFrom`] or read from a BIP 370 output is 1 to
+/// [`UniqueId::MAX_LEN`] bytes long. An empty ID would make unrelated outputs
+/// join as one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UniqueId(Vec<u8>);
 
