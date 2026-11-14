@@ -1,6 +1,4 @@
 #[macro_use]
-mod conflict_macro;
-#[macro_use]
 mod joinable_struct_macro;
 pub mod global;
 pub mod input;

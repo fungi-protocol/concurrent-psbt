@@ -7,40 +7,51 @@ use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::taproot::{TapLeafHash, TapTree};
 use bitcoin::{Amount, ScriptBuf};
 use psbt_v2::raw;
-use psbt_v2::v2::Output;
 
 joinable_struct! {
-    /// Result-domain representation of a PSBT output.
-    ///
-    /// Each field mirrors its counterpart in [`psbt_v2::v2::Output`] but is
-    /// represented in the internal result domain, recording either a clean value
-    /// or an accumulated conflict.
+    /// A PSBT output, mirroring the BIP 370 per-output map.
     source: Output,
+    /// Result-domain counterpart of [`Output`].
+    ///
+    /// Each field holds a clean value or a conflict.
     result: ResultOutput,
-    conflicts: OutputConflict, OutputField {
-        Amount => amount: Amount,
-        ScriptPubkey => script_pubkey: ScriptBuf,
-        RedeemScript => redeem_script: ScriptBuf,
-        WitnessScript => witness_script: ScriptBuf,
-        Bip32Derivation => bip32_derivations[PublicKey]: KeySource,
-        TapInternalKey => tap_internal_key: XOnlyPublicKey,
-        TapTree => tap_tree: TapTree,
-        TapKeyOrigin => tap_key_origins[XOnlyPublicKey]: (Vec<TapLeafHash>, KeySource),
-        Proprietary => proprietaries[raw::ProprietaryKey]: Vec<u8>,
-        Unknown => unknowns[raw::Key]: Vec<u8>,
-    },
-    ext: OutputExt,
+    conflicts: OutputConflict, OutputField,
+    v2: psbt_v2::v2::Output,
     fields: {
-        amount: Amount,
-        script_pubkey: ScriptBuf,
-        redeem_script: Option<ScriptBuf>,
-        witness_script: Option<ScriptBuf>,
-        bip32_derivations: BTreeMap<PublicKey, KeySource>,
-        tap_internal_key: Option<XOnlyPublicKey>,
-        tap_tree: Option<TapTree>,
-        tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
-        proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
-        unknowns: BTreeMap<raw::Key, Vec<u8>>,
+        amount: Amount => Amount,
+        script_pubkey: ScriptBuf => ScriptPubkey,
+        redeem_script: Option<ScriptBuf> => RedeemScript(ScriptBuf),
+        witness_script: Option<ScriptBuf> => WitnessScript(ScriptBuf),
+        bip32_derivations: BTreeMap<PublicKey, KeySource> => Bip32Derivation[PublicKey](KeySource),
+        tap_internal_key: Option<XOnlyPublicKey> => TapInternalKey(XOnlyPublicKey),
+        tap_tree: Option<TapTree> => TapTree(TapTree),
+        tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)> => TapKeyOrigin[XOnlyPublicKey]((Vec<TapLeafHash>, KeySource)),
+        proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>> => Proprietary[raw::ProprietaryKey](Vec<u8>),
+        unknowns: BTreeMap<raw::Key, Vec<u8>> => Unknown[raw::Key](Vec<u8>),
+    },
+}
+
+impl Output {
+    /// Create an output paying `amount` to `script_pubkey`, with every other
+    /// field unset.
+    pub fn new(amount: Amount, script_pubkey: ScriptBuf) -> Self {
+        Self::from_v2_fields(psbt_v2::v2::Output {
+            amount,
+            script_pubkey,
+            ..psbt_v2::v2::Output::default()
+        })
+    }
+}
+
+impl From<psbt_v2::v2::Output> for Output {
+    fn from(output: psbt_v2::v2::Output) -> Self {
+        Self::from_v2_fields(output)
+    }
+}
+
+impl From<Output> for psbt_v2::v2::Output {
+    fn from(output: Output) -> Self {
+        output.encode_v2(psbt_v2::v2::Output::default())
     }
 }
 
@@ -126,7 +137,7 @@ impl std::error::Error for InvalidUniqueId {}
 
 pub const PSBT_OUT_UNIQUE_ID_SUBTYPE: u8 = 0x01;
 
-/// Extension trait on [`psbt_v2::v2::Output`] for accessing the unique-ID proprietary field.
+/// Extension trait on [`Output`] for accessing the unique-ID proprietary field.
 pub trait OutputUniqueIdExt {
     /// Return the [`UniqueId`] stored in the `PSBT_OUT_UNIQUE_ID` proprietary field, if present.
     fn unique_id(&self) -> Option<UniqueId>;
@@ -165,20 +176,80 @@ mod tests {
     use super::*;
     use crate::lattice::join::Join;
 
+    /// An output with every field unset.
+    fn output() -> Output {
+        Output::new(Amount::ZERO, ScriptBuf::new())
+    }
+
     #[cfg(feature = "unit-tests")]
     mod unit {
         use super::*;
+        use bitcoin::bip32::{DerivationPath, Fingerprint};
+        use bitcoin::hashes::Hash;
+        use bitcoin::secp256k1::{Secp256k1, SecretKey};
+        use bitcoin::taproot::TaprootBuilder;
+        use std::collections::BTreeMap;
 
         #[test]
         fn outputs_with_different_amounts_conflict() {
             let with_amount = |sats| Output {
                 amount: Amount::from_sat(sats),
-                ..Output::default()
+                ..output()
             };
             let joined = with_amount(100).wrap().join(with_amount(200).wrap());
             let fields: Vec<_> = joined.conflicts().map(|c| c.path()).collect();
             assert_eq!(fields, [OutputField::Amount]);
             assert_eq!(joined.clone().try_unwrap(), Err(joined));
+        }
+
+        /// An output with every field set, so a conversion that drops one
+        /// changes the output.
+        fn populated_output() -> Output {
+            let secret_key = SecretKey::from_slice(&[1; 32]).expect("valid secret key");
+            let public_key = PublicKey::new(secret_key.public_key(&Secp256k1::new()));
+            let (x_only_public_key, _) = public_key.inner.x_only_public_key();
+            let source = (Fingerprint::from([2; 4]), DerivationPath::master());
+            let script = ScriptBuf::from_bytes(vec![3]);
+            let tap_tree = TaprootBuilder::new()
+                .add_leaf(0, script.clone())
+                .expect("valid leaf");
+            Output {
+                amount: bitcoin::Amount::from_sat(4),
+                script_pubkey: script.clone(),
+                redeem_script: Some(script.clone()),
+                witness_script: Some(script),
+                bip32_derivations: BTreeMap::from([(public_key, source.clone())]),
+                tap_internal_key: Some(x_only_public_key),
+                tap_tree: Some(TapTree::try_from(tap_tree).expect("complete tree")),
+                tap_key_origins: BTreeMap::from([(
+                    x_only_public_key,
+                    (vec![TapLeafHash::from_byte_array([5; 32])], source),
+                )]),
+                proprietaries: BTreeMap::from([(
+                    raw::ProprietaryKey {
+                        prefix: vec![6],
+                        subtype: 7,
+                        key: vec![],
+                    },
+                    vec![8],
+                )]),
+                unknowns: BTreeMap::from([(
+                    raw::Key {
+                        type_value: 0xfe,
+                        key: vec![9],
+                    },
+                    vec![10],
+                )]),
+            }
+        }
+
+        #[test]
+        fn v2_conversion_keeps_every_field() {
+            let output = populated_output();
+            assert_eq!(
+                Output::from(psbt_v2::v2::Output::from(output.clone())),
+                output
+            );
         }
     }
 
@@ -198,7 +269,7 @@ mod tests {
                     script_pubkey: ScriptBuf::new(),
                     redeem_script: redeem.map(ScriptBuf::from_bytes),
                     witness_script: witness.map(ScriptBuf::from_bytes),
-                    ..Output::default()
+                    ..output()
                 })
         }
 
@@ -214,12 +285,23 @@ mod tests {
         proptest! {
             #[test]
             fn wrap_try_unwrap_roundtrip(o in arb_output()) {
-                prop_assert_eq!(o.clone().wrap().try_unwrap(), Ok(o));
+                prop_assert_eq!(o.clone().wrap().try_unwrap(), Ok(o.clone()));
+                prop_assert_eq!(Output::from(psbt_v2::v2::Output::from(o.clone())), o);
             }
 
             #[test]
             fn is_ok_iff_try_unwrap_succeeds(r in arb_result_output()) {
                 prop_assert_eq!(r.is_ok(), r.try_unwrap().is_ok());
+            }
+
+            #[test]
+            fn a_set_field_reads_back(
+                mut o in arb_output(),
+                redeem in proptest::option::of(proptest::collection::vec(0u8..255, 0..=8)),
+            ) {
+                let redeem = redeem.map(ScriptBuf::from_bytes);
+                o.set_redeem_script(redeem.clone());
+                prop_assert_eq!(o.redeem_script(), &redeem);
             }
 
         }
@@ -232,7 +314,7 @@ mod tests {
 
         proptest! {
             #[test]
-            fn unique_id_roundtrip(uid in proptest::collection::vec(0u8..=255, 1..=40)) {
+            fn unique_id_roundtrip(uid in proptest::collection::vec(0u8..=255, 0..=40)) {
                 let Ok(id) = UniqueId::try_from(uid.clone()) else {
                     prop_assert!(uid.len() > UniqueId::MAX_LEN);
                     let error = InvalidUniqueId(uid.clone());
@@ -243,7 +325,7 @@ mod tests {
                 prop_assert_eq!(&id, &UniqueId::new(uid.clone()));
                 prop_assert_eq!(id.as_bytes(), uid.as_slice());
 
-                let mut output = Output::default();
+                let mut output = output();
                 prop_assert!(!output.has_unique_id());
                 output.set_unique_id(id);
                 prop_assert!(output.has_unique_id());
@@ -257,7 +339,7 @@ mod tests {
         use super::*;
 
         fn output_with_uid(uid: &[u8]) -> Output {
-            let mut output = Output::default();
+            let mut output = output();
             let key = psbt_v2::raw::ProprietaryKey {
                 prefix: b"concurrent-psbt".to_vec(),
                 subtype: PSBT_OUT_UNIQUE_ID_SUBTYPE,
@@ -276,7 +358,7 @@ mod tests {
 
         #[test]
         fn unique_id_absent() {
-            let output = Output::default();
+            let output = output();
             assert!(!output.has_unique_id());
             assert!(output.unique_id().is_none());
         }
@@ -289,7 +371,7 @@ mod tests {
             let generated = UniqueId::generate();
             assert_eq!(generated.as_bytes().len(), 16);
 
-            let mut output = Output::default();
+            let mut output = output();
             output.set_unique_id(id);
             assert_eq!(output.unique_id().unwrap().into_bytes(), vec![1, 2, 3]);
         }
