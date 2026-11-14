@@ -1,7 +1,6 @@
 //! [`IdempotentValue`](crate::values::IdempotentValue) implementations for
 //! bitcoin and psbt-v2 types used as PSBT fields.
 
-use crate::lattice::partial::{Conflict, JoinResult, PartialJoin};
 use crate::values::IdempotentValue;
 
 impl IdempotentValue for bitcoin::absolute::Height {}
@@ -30,27 +29,7 @@ impl IdempotentValue for psbt_v2::Version {}
 
 impl IdempotentValue for (bitcoin::ScriptBuf, bitcoin::taproot::LeafVersion) {}
 
-/// BIP 371 taproot BIP 32 derivation values: `(Vec<TapLeafHash>, KeySource)`.
-///
-/// The leaf-hash list is the set of tap leaves the key participates in; BIP 371
-/// imposes no ordering on it, so join equality is order-insensitive: two values
-/// join iff the key sources match and the leaf lists are equal as multisets.
-/// `self`'s representation (its leaf order) is kept on `Ok`.
-impl PartialJoin for (Vec<bitcoin::TapLeafHash>, bitcoin::bip32::KeySource) {
-    fn try_join(self, other: Self) -> JoinResult<Self> {
-        fn sorted(leaves: &[bitcoin::TapLeafHash]) -> Vec<bitcoin::TapLeafHash> {
-            let mut copy = leaves.to_vec();
-            copy.sort_unstable();
-            copy
-        }
-
-        if self.1 == other.1 && sorted(&self.0) == sorted(&other.0) {
-            Ok(self)
-        } else {
-            Err(Conflict::from_values([self, other]))
-        }
-    }
-}
+impl IdempotentValue for (Vec<bitcoin::TapLeafHash>, bitcoin::bip32::KeySource) {}
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -72,11 +51,13 @@ mod tests {
         }
 
         #[test]
-        fn reordered_tap_leaf_hashes_join_ok() {
+        fn reordered_tap_leaf_hashes_conflict() {
             let a = (vec![leaf(1), leaf(2)], key_source());
             let b = (vec![leaf(2), leaf(1)], key_source());
-            // Same leaves as a multiset: joins Ok, keeping self's representation.
-            assert_eq!(a.clone().try_join(b), Ok(a));
+            assert_eq!(
+                a.clone().try_join(b.clone()),
+                Err(Conflict::from_values([a, b]))
+            );
         }
 
         #[test]
@@ -97,7 +78,7 @@ mod tests {
         use bitcoin::hashes::Hash;
         use proptest::prelude::*;
 
-        use crate::lattice::partial::PartialJoin;
+        use crate::lattice::partial::{Conflict, PartialJoin};
 
         fn key_source(byte: u8) -> KeySource {
             (Fingerprint::from([byte; 4]), DerivationPath::master())
@@ -111,6 +92,32 @@ mod tests {
         }
 
         proptest! {
+            #[test]
+            fn tap_key_origins_use_structural_equality(
+                a in proptest::collection::vec(0u8..3, 0..5),
+                b in proptest::collection::vec(0u8..3, 0..5),
+                source_a in 0u8..2,
+                source_b in 0u8..2,
+            ) {
+                let a = (leaves(&a), key_source(source_a));
+                let b = (leaves(&b), key_source(source_b));
+                prop_assert_eq!(a.clone().try_join(a.clone()), Ok(a.clone()));
+                let expected = if a == b {
+                    Ok(a.clone())
+                } else {
+                    Err(Conflict::from_values([a.clone(), b.clone()]))
+                };
+                prop_assert_eq!(a.try_join(b), expected);
+            }
+
+            #[test]
+            fn repeated_tap_leaf_hashes_conflict(bytes in proptest::collection::vec(any::<u8>(), 1..8)) {
+                let a = (leaves(&bytes), key_source(0));
+                let mut b = a.clone();
+                b.0.push(b.0[0]);
+                prop_assert_eq!(a.clone().try_join(b.clone()), Err(Conflict::from_values([a, b])));
+            }
+
             #[test]
             fn different_key_sources_conflict(bytes in proptest::collection::vec(any::<u8>(), 0..8)) {
                 let a = (leaves(&bytes), key_source(0));

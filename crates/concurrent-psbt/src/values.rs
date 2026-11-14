@@ -49,6 +49,7 @@ mod tests {
     #[cfg(feature = "prop-tests")]
     mod prop {
         use super::*;
+        use crate::Lift;
         use crate::lattice::join::Join;
         use proptest::prelude::*;
 

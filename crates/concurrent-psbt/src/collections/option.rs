@@ -1,5 +1,6 @@
+use crate::lattice::conflicts::Conflicts;
 use crate::lattice::join::Join;
-use crate::lattice::partial::{Conflict, JoinResult, PartialJoin};
+use crate::lattice::lift::{Lift, ResultWrapped};
 
 /// [`Join`] for `Option<V>`: `None` is the identity element.
 ///
@@ -19,42 +20,36 @@ where
     }
 }
 
-/// Extension trait for lifting `Option<V>` into the result domain.
-pub(crate) trait OptionExt {
-    type Item: PartialJoin;
-    /// Lift each inner value to `Ok`, preserving `None`.
-    fn wrap(self) -> Option<JoinResult<Self::Item>>;
-}
+/// `None` lifts to `None`, and `Some` lifts its value.
+impl<V: Lift> Lift for Option<V> {
+    type Result = Option<V::Result>;
 
-impl<V: PartialJoin> OptionExt for Option<V> {
-    type Item = V;
-    fn wrap(self) -> Option<JoinResult<V>> {
-        self.map(|v| v.wrap())
+    fn wrap(self) -> Self::Result {
+        self.map(Lift::wrap)
     }
 }
 
-/// Extension trait for `Option<JoinResult<V>>` — conflict detection and extraction.
-pub(crate) trait ResultOptionExt {
-    type Value: PartialJoin;
-    /// Returns `true` if the option is `None` or contains `Ok`.
-    fn is_ok(&self) -> bool;
-    /// Extract the inner value, or return the conflict.
-    ///
-    /// Unlike keyed result containers, which return `Err(Self)` because
-    /// multiple entries may conflict, this returns `Err(Conflict<V>)`
-    /// directly via `Option::transpose`.
-    fn try_unwrap(self) -> Result<Option<Self::Value>, Conflict<Self::Value>>;
-}
-
-impl<V: PartialJoin> ResultOptionExt for Option<JoinResult<V>> {
-    type Value = V;
+/// `None` has no conflicts.
+impl<R: ResultWrapped> ResultWrapped for Option<R> {
+    type Clean = Option<R::Clean>;
 
     fn is_ok(&self) -> bool {
-        !matches!(self, Some(Err(_)))
+        self.as_ref().is_none_or(R::is_ok)
     }
 
-    fn try_unwrap(self) -> Result<Option<V>, Conflict<V>> {
-        self.transpose()
+    fn try_unwrap(self) -> Result<Self::Clean, Self> {
+        self.map(R::try_unwrap).transpose().map_err(Some)
+    }
+}
+
+impl<R: Conflicts> Conflicts for Option<R> {
+    type Item<'a>
+        = R::Item<'a>
+    where
+        Self: 'a;
+
+    fn conflicts(&self) -> impl Iterator<Item = Self::Item<'_>> {
+        self.iter().flat_map(Conflicts::conflicts)
     }
 }
 
@@ -62,6 +57,7 @@ impl<V: PartialJoin> ResultOptionExt for Option<JoinResult<V>> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+    use crate::lattice::partial::{Conflict, JoinResult, PartialJoin};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     struct Foo(u8);
@@ -81,12 +77,12 @@ mod tests {
         use super::*;
 
         #[test]
-        fn wrap_none() {
+        fn lift_none() {
             assert_eq!(None::<Foo>.wrap(), None);
         }
 
         #[test]
-        fn wrap_some() {
+        fn lift_some() {
             assert_eq!(Some(Foo(0)).wrap(), Some(Ok(Foo(0))));
         }
 
@@ -96,7 +92,7 @@ mod tests {
         }
 
         #[test]
-        fn wrapped_conflict_join() {
+        fn lifted_conflict_join() {
             assert_eq!(
                 Some(Foo(0)).wrap().join(Some(Foo(1)).wrap()),
                 Some(Err(Conflict::from_values([Foo(0), Foo(1)])))
@@ -105,10 +101,8 @@ mod tests {
 
         #[test]
         fn try_unwrap_conflict() {
-            assert_eq!(
-                Some(Foo(0)).wrap().join(Some(Foo(1)).wrap()).try_unwrap(),
-                Err(Conflict::from_values([Foo(0), Foo(1)]))
-            );
+            let conflict = Some(Foo(0)).wrap().join(Some(Foo(1)).wrap());
+            assert_eq!(conflict.clone().try_unwrap(), Err(conflict));
         }
     }
 
@@ -144,6 +138,12 @@ mod tests {
             #[test]
             fn is_ok_consistent_with_try_unwrap(a in arb_option_join_result()) {
                 prop_assert_eq!(a.clone().is_ok(), a.try_unwrap().is_ok());
+            }
+
+            #[test]
+            fn visits_the_conflict_inside_some(a in arb_option_join_result()) {
+                let expected = a.as_ref().and_then(|value| value.as_ref().err());
+                prop_assert_eq!(a.conflicts().collect::<Vec<_>>(), expected.into_iter().collect::<Vec<_>>());
             }
         }
     }
