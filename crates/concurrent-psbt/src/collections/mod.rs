@@ -1,8 +1,7 @@
 //! Join implementations for standard library collection types.
 //!
-//! Each collection type provides crate-internal joins for the result domain,
-//! plus helper traits for lifting (`wrap`) and lowering (`try_unwrap`) between
-//! clean and result representations.
+//! Collections lift and unwrap their contents recursively. Conflict iterators
+//! preserve the keys at each level.
 
 pub(crate) mod btreemap;
 pub(crate) mod hashmap;

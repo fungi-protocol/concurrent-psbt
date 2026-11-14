@@ -14,3 +14,7 @@ pub use lattice::join::{Join, JoinMut};
 pub use lattice::partial::{Conflict, JoinResult, PartialJoin};
 pub use psbt::input;
 pub use psbt::output;
+
+pub use lattice::conflicts::Conflicts;
+pub use lattice::lift::{Lift, ResultWrapped};
+pub use psbt::global;
