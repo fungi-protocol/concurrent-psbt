@@ -7,8 +7,8 @@ use psbt_v2::v2::Psbt;
 
 use crate::lattice::join::Join;
 
-use super::global::{Global, InvalidGlobal, ResultGlobal, SortSeed};
-use super::input::{DuplicateInput, Input, InputSet, ResultInputSet, SortKey};
+use super::global::{Global, InvalidGlobal, ResultGlobal, SortKeyDerivation, SortSeed};
+use super::input::{DuplicateInput, Input, InputSet, ResultInputSet, SortKey, out_point};
 use super::output::{DuplicateOutput, InvalidOutput, Output, OutputSet, ResultOutputSet, UniqueId};
 
 /// A BIP 370 PSBT decomposed into [`Global`], [`InputSet`], and [`OutputSet`], without ordering.
@@ -71,6 +71,23 @@ pub enum UnorderedPsbtError {
     DuplicateInput(OutPoint),
     /// Two outputs carry the same `PSBT_OUT_UNIQUE_ID`.
     DuplicateOutputUniqueId(UniqueId),
+    /// `PSBT_GLOBAL_TX_UNORDERED` is absent, so the PSBT is ordered. Reading
+    /// it as unordered would discard its order.
+    NotUnordered,
+    /// The PSBT is unordered but `tx_modifiable_flags` has the
+    /// `Has SIGHASH_SINGLE` bit set.
+    UnorderedSighashSingle,
+    /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` is `0x00`, so sort keys are never
+    /// derived, but `PSBT_GLOBAL_SORT_SEED` is set.
+    UnexpectedSortSeed,
+    /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` is `0x01`, so every sort key is
+    /// derived, but the input spending this outpoint has a `PSBT_IN_SORT_KEY`.
+    UnexpectedInputSortKey(OutPoint),
+    /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` is `0x01`, so every sort key is
+    /// derived, but the output at this position has a `PSBT_OUT_SORT_KEY`.
+    UnexpectedOutputSortKey(usize),
+    /// Two inputs, or two outputs, have this explicit sort key.
+    DuplicateSortKey(Vec<u8>),
 }
 
 impl From<DuplicateInput> for UnorderedPsbtError {
@@ -149,6 +166,23 @@ impl fmt::Display for UnorderedPsbtError {
             Self::DuplicateOutputUniqueId(_) => {
                 write!(f, "two outputs share a PSBT_OUT_UNIQUE_ID")
             }
+            Self::NotUnordered => write!(f, "PSBT is not marked unordered"),
+            Self::UnorderedSighashSingle => {
+                write!(f, "unordered PSBT has the SIGHASH_SINGLE flag set")
+            }
+            Self::UnexpectedSortSeed => write!(
+                f,
+                "PSBT_GLOBAL_SORT_SEED is set but PSBT_GLOBAL_SORT_KEY_DERIVATION is 0x00"
+            ),
+            Self::UnexpectedInputSortKey(outpoint) => write!(
+                f,
+                "the input spending {outpoint} has a sort key but PSBT_GLOBAL_SORT_KEY_DERIVATION is 0x01"
+            ),
+            Self::UnexpectedOutputSortKey(index) => write!(
+                f,
+                "output {index} has a sort key but PSBT_GLOBAL_SORT_KEY_DERIVATION is 0x01"
+            ),
+            Self::DuplicateSortKey(key) => write!(f, "duplicate sort key {key:02x?}"),
         }
     }
 }
@@ -159,6 +193,53 @@ impl std::error::Error for UnorderedPsbtError {}
 const INPUTS_MODIFIABLE: u8 = 0x01;
 /// `tx_modifiable_flags` bit that allows outputs to be added (BIP 370).
 const OUTPUTS_MODIFIABLE: u8 = 0x02;
+/// `tx_modifiable_flags` bit marking a `SIGHASH_SINGLE` signature (BIP 370).
+const HAS_SIGHASH_SINGLE: u8 = 0x04;
+
+/// Check that a PSBT can be read as unordered: it is marked unordered, it does
+/// not use `SIGHASH_SINGLE`, the sort fields present agree with
+/// `PSBT_GLOBAL_SORT_KEY_DERIVATION`, and no two inputs or two outputs share an
+/// explicit sort key.
+fn validate_unordered(
+    global: &Global,
+    inputs: &[Input],
+    outputs: &[Output],
+) -> Result<(), UnorderedPsbtError> {
+    if !global.is_unordered() {
+        return Err(UnorderedPsbtError::NotUnordered);
+    }
+    if global.tx_modifiable_flags & HAS_SIGHASH_SINGLE != 0 {
+        return Err(UnorderedPsbtError::UnorderedSighashSingle);
+    }
+    match global.sort_key_derivation() {
+        Some(SortKeyDerivation::Explicit) if global.sort_seed().is_some() => {
+            return Err(UnorderedPsbtError::UnexpectedSortSeed);
+        }
+        Some(SortKeyDerivation::Derived) => {
+            if let Some(input) = inputs.iter().find(|input| input.sort_key().is_some()) {
+                return Err(UnorderedPsbtError::UnexpectedInputSortKey(out_point(input)));
+            }
+            if let Some(index) = outputs
+                .iter()
+                .position(|output| output.sort_key().is_some())
+            {
+                return Err(UnorderedPsbtError::UnexpectedOutputSortKey(index));
+            }
+        }
+        _ => {}
+    }
+    duplicate_sort_key(inputs.iter().filter_map(|input| input.sort_key()))
+        .or_else(|| duplicate_sort_key(outputs.iter().filter_map(|output| output.sort_key())))
+        .map_or(Ok(()), |key| {
+            Err(UnorderedPsbtError::DuplicateSortKey(key.to_vec()))
+        })
+}
+
+/// The first sort key that repeats, if any.
+fn duplicate_sort_key<'a>(mut keys: impl Iterator<Item = &'a [u8]>) -> Option<&'a [u8]> {
+    let mut seen = std::collections::HashSet::new();
+    keys.find(|key| !seen.insert(*key))
+}
 
 impl UnorderedPsbt {
     /// Parse a v2 PSBT into unordered representation.
@@ -168,15 +249,28 @@ impl UnorderedPsbt {
     /// joining the duplicates would hide the problem unless their fields
     /// conflicted.
     ///
+    /// The PSBT must be marked unordered, since reading an ordered PSBT as
+    /// unordered would discard its order.
+    ///
     /// # Errors
     /// Returns a count mismatch if the declared input or output count is not
     /// the number of inputs or outputs, which only a `Psbt` assembled by hand
     /// can have. Otherwise returns a malformed global sort field, then the
     /// first input whose sort key is longer than [`SortKey::MAX_LEN`] bytes,
-    /// then the first input whose outpoint repeats, then the first output
-    /// whose `PSBT_OUT_UNIQUE_ID` is missing, empty or longer than
-    /// [`UniqueId::MAX_LEN`] bytes, or whose sort key is longer than
-    /// [`SortKey::MAX_LEN`] bytes, then the first unique ID that repeats.
+    /// then the first output whose `PSBT_OUT_UNIQUE_ID` is missing, empty or
+    /// longer than [`UniqueId::MAX_LEN`] bytes, or whose sort key is longer
+    /// than [`SortKey::MAX_LEN`] bytes.
+    ///
+    /// Then returns [`UnorderedPsbtError::NotUnordered`] for an ordered PSBT,
+    /// [`UnorderedPsbtError::UnorderedSighashSingle`] if the `SIGHASH_SINGLE`
+    /// flag is set, [`UnorderedPsbtError::UnexpectedSortSeed`],
+    /// [`UnorderedPsbtError::UnexpectedInputSortKey`] or
+    /// [`UnorderedPsbtError::UnexpectedOutputSortKey`] for a sort field that
+    /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` rules out, and
+    /// [`UnorderedPsbtError::DuplicateSortKey`] for the first sort key that
+    /// repeats among the inputs, then among the outputs. Finally returns the
+    /// first input whose outpoint repeats, then the first unique ID that
+    /// repeats.
     pub fn try_from_psbt(psbt: Psbt) -> Result<Self, UnorderedPsbtError> {
         let Psbt {
             global,
@@ -208,12 +302,6 @@ impl UnorderedPsbt {
                     .map_err(|_| UnorderedPsbtError::InputSortKeyTooLong(outpoint))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let inputs = InputSet::try_from_inputs(inputs)?;
-        let inputs = if global.tx_modifiable_flags & INPUTS_MODIFIABLE == 0 {
-            inputs.freeze()
-        } else {
-            inputs
-        };
         let outputs = outputs
             .into_iter()
             .enumerate()
@@ -222,6 +310,14 @@ impl UnorderedPsbt {
                     .map_err(|error| UnorderedPsbtError::invalid_output(index, error))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        validate_unordered(&global, &inputs, &outputs)?;
+
+        let inputs = InputSet::try_from_inputs(inputs)?;
+        let inputs = if global.tx_modifiable_flags & INPUTS_MODIFIABLE == 0 {
+            inputs.freeze()
+        } else {
+            inputs
+        };
         let outputs = OutputSet::try_from_outputs(outputs)?;
         let outputs = if global.tx_modifiable_flags & OUTPUTS_MODIFIABLE == 0 {
             outputs.freeze()
@@ -325,13 +421,30 @@ mod tests {
         output
     }
 
-    /// A BIP 370 PSBT with these inputs and outputs, and consistent counts.
-    fn v2_psbt(inputs: Vec<psbt_v2::v2::Input>, outputs: Vec<psbt_v2::v2::Output>) -> Psbt {
+    /// A default [`Global`] marked unordered.
+    fn unordered_global() -> Global {
+        let mut global = Global::default();
+        global.set_unordered();
+        global
+    }
+
+    /// A BIP 370 PSBT with this global map, inputs and outputs, and
+    /// consistent counts.
+    fn v2_psbt_with(
+        global: Global,
+        inputs: Vec<psbt_v2::v2::Input>,
+        outputs: Vec<psbt_v2::v2::Output>,
+    ) -> Psbt {
         Psbt {
-            global: Global::default().into_v2(inputs.len(), outputs.len()),
+            global: global.into_v2(inputs.len(), outputs.len()),
             inputs,
             outputs,
         }
+    }
+
+    /// An unordered BIP 370 PSBT with these inputs and outputs.
+    fn v2_psbt(inputs: Vec<psbt_v2::v2::Input>, outputs: Vec<psbt_v2::v2::Output>) -> Psbt {
+        v2_psbt_with(unordered_global(), inputs, outputs)
     }
 
     #[cfg(feature = "unit-tests")]
@@ -358,7 +471,7 @@ mod tests {
             UnorderedPsbt {
                 global: Global {
                     tx_modifiable_flags: INPUTS_MODIFIABLE | OUTPUTS_MODIFIABLE,
-                    ..Global::default()
+                    ..unordered_global()
                 },
                 inputs: InputSet::try_from_inputs([input]).unwrap(),
                 outputs: OutputSet::try_from_outputs([output]).unwrap(),
@@ -438,6 +551,35 @@ mod tests {
                 (
                     UnorderedPsbtError::OutputSortKeyTooLong(1),
                     "sort key of output 1 is longer than 32 bytes".to_string(),
+                ),
+                (
+                    UnorderedPsbtError::NotUnordered,
+                    "PSBT is not marked unordered".to_string(),
+                ),
+                (
+                    UnorderedPsbtError::UnorderedSighashSingle,
+                    "unordered PSBT has the SIGHASH_SINGLE flag set".to_string(),
+                ),
+                (
+                    UnorderedPsbtError::UnexpectedSortSeed,
+                    "PSBT_GLOBAL_SORT_SEED is set but PSBT_GLOBAL_SORT_KEY_DERIVATION is 0x00"
+                        .to_string(),
+                ),
+                (
+                    UnorderedPsbtError::UnexpectedInputSortKey(outpoint(1)),
+                    format!(
+                        "the input spending {} has a sort key but PSBT_GLOBAL_SORT_KEY_DERIVATION is 0x01",
+                        outpoint(1)
+                    ),
+                ),
+                (
+                    UnorderedPsbtError::UnexpectedOutputSortKey(1),
+                    "output 1 has a sort key but PSBT_GLOBAL_SORT_KEY_DERIVATION is 0x01"
+                        .to_string(),
+                ),
+                (
+                    UnorderedPsbtError::DuplicateSortKey(vec![0xab]),
+                    "duplicate sort key [ab]".to_string(),
                 ),
             ];
             for (error, message) in cases {
@@ -532,6 +674,108 @@ mod tests {
         }
 
         #[test]
+        fn psbts_that_break_the_sort_rules_are_rejected() {
+            use SortKeyDerivation::{Derived, Explicit};
+
+            let global = |derivation: Option<SortKeyDerivation>, seeded: bool| {
+                let mut global = unordered_global();
+                if let Some(derivation) = derivation {
+                    global.set_sort_key_derivation(derivation);
+                }
+                if seeded {
+                    global.set_sort_seed(SortSeed::try_from(vec![0; 16]).unwrap());
+                }
+                global
+            };
+            let input = |txid_byte, sort_key: Option<u8>| {
+                let mut input = Input::new(&outpoint(txid_byte));
+                if let Some(key) = sort_key {
+                    input.set_sort_key(SortKey::try_from(vec![key]).unwrap());
+                }
+                psbt_v2::v2::Input::from(input)
+            };
+            let output = |uid, sort_key: Option<u8>| {
+                let mut output =
+                    Output::new(UniqueId::new(vec![uid]), Amount::ZERO, ScriptBuf::new());
+                if let Some(key) = sort_key {
+                    output.set_sort_key(SortKey::try_from(vec![key]).unwrap());
+                }
+                psbt_v2::v2::Output::from(output)
+            };
+            let sighash_single = Global {
+                tx_modifiable_flags: HAS_SIGHASH_SINGLE,
+                ..unordered_global()
+            };
+            let cases = [
+                (
+                    v2_psbt_with(Global::default(), vec![], vec![]),
+                    Err(UnorderedPsbtError::NotUnordered),
+                ),
+                (
+                    v2_psbt_with(sighash_single, vec![], vec![]),
+                    Err(UnorderedPsbtError::UnorderedSighashSingle),
+                ),
+                (
+                    v2_psbt_with(global(Some(Explicit), true), vec![], vec![]),
+                    Err(UnorderedPsbtError::UnexpectedSortSeed),
+                ),
+                (
+                    v2_psbt_with(
+                        global(Some(Derived), true),
+                        vec![input(1, None), input(2, Some(0))],
+                        vec![],
+                    ),
+                    Err(UnorderedPsbtError::UnexpectedInputSortKey(outpoint(2))),
+                ),
+                (
+                    v2_psbt_with(
+                        global(Some(Derived), true),
+                        vec![],
+                        vec![output(1, None), output(2, Some(0))],
+                    ),
+                    Err(UnorderedPsbtError::UnexpectedOutputSortKey(1)),
+                ),
+                (
+                    v2_psbt_with(
+                        global(Some(Explicit), false),
+                        vec![input(1, Some(0)), input(2, Some(0))],
+                        vec![],
+                    ),
+                    Err(UnorderedPsbtError::DuplicateSortKey(vec![0])),
+                ),
+                (
+                    v2_psbt_with(
+                        global(Some(Explicit), false),
+                        vec![],
+                        vec![output(1, Some(0)), output(2, Some(0))],
+                    ),
+                    Err(UnorderedPsbtError::DuplicateSortKey(vec![0])),
+                ),
+                // Seeded derivation accepts entries without explicit keys.
+                (
+                    v2_psbt_with(
+                        global(Some(Derived), true),
+                        vec![input(1, None)],
+                        vec![output(1, None)],
+                    ),
+                    Ok(()),
+                ),
+                // An input and an output may share a sort key.
+                (
+                    v2_psbt_with(
+                        global(Some(Explicit), false),
+                        vec![input(1, Some(0))],
+                        vec![output(1, Some(0))],
+                    ),
+                    Ok(()),
+                ),
+            ];
+            for (psbt, expected) in cases {
+                assert_eq!(UnorderedPsbt::try_from_psbt(psbt).map(|_| ()), expected);
+            }
+        }
+
+        #[test]
         fn serialized_psbts_with_disjoint_entries_join_into_their_union() {
             let joined = (1..=3)
                 .map(|byte| {
@@ -604,7 +848,7 @@ mod tests {
                                 transaction::Version::TWO
                             },
                             tx_modifiable_flags: flags,
-                            ..Global::default()
+                            ..unordered_global()
                         },
                         inputs,
                         outputs,
@@ -712,13 +956,19 @@ mod tests {
                         Some(format!("{len} outputs but has {index}")),
                     ),
                     (UnorderedPsbtError::InvalidUnorderedFlag(value.clone()), Some(bytes.clone())),
-                    (UnorderedPsbtError::InvalidSortKeyDerivation(value.clone()), Some(bytes)),
+                    (UnorderedPsbtError::InvalidSortKeyDerivation(value.clone()), Some(bytes.clone())),
                     (UnorderedPsbtError::SortSeedTooShort(len), Some(len.to_string())),
                     (UnorderedPsbtError::InputSortKeyTooLong(outpoint), Some(outpoint.to_string())),
                     (UnorderedPsbtError::MissingOutputUniqueId(index), Some(index.to_string())),
                     (UnorderedPsbtError::InvalidOutputUniqueId(index), Some(index.to_string())),
                     (UnorderedPsbtError::OutputSortKeyTooLong(index), Some(index.to_string())),
                     (UnorderedPsbtError::DuplicateInput(outpoint), Some(outpoint.to_string())),
+                    (UnorderedPsbtError::NotUnordered, None),
+                    (UnorderedPsbtError::UnorderedSighashSingle, None),
+                    (UnorderedPsbtError::UnexpectedSortSeed, None),
+                    (UnorderedPsbtError::UnexpectedInputSortKey(outpoint), Some(outpoint.to_string())),
+                    (UnorderedPsbtError::UnexpectedOutputSortKey(index), Some(index.to_string())),
+                    (UnorderedPsbtError::DuplicateSortKey(value.clone()), Some(format!("{value:02x?}"))),
                     // The unique ID is opaque bytes, so the message leaves it out.
                     (UnorderedPsbtError::DuplicateOutputUniqueId(UniqueId::new(value)), None),
                 ];
@@ -791,6 +1041,70 @@ mod tests {
                     .map_or(Ok(uid_lens.len()), Err);
                 let psbt = v2_psbt(vec![], outputs);
                 prop_assert_eq!(UnorderedPsbt::try_from_psbt(psbt).map(|u| u.outputs.len()), expected);
+            }
+
+            #[test]
+            fn try_from_psbt_requires_unordered_without_sighash_single(
+                flags in 0u8..8,
+                unordered in proptest::bool::ANY,
+            ) {
+                let mut global = Global {
+                    tx_modifiable_flags: flags,
+                    ..Global::default()
+                };
+                if unordered {
+                    global.set_unordered();
+                }
+                let psbt = v2_psbt_with(global, vec![], vec![]);
+                let expected = if !unordered {
+                    Err(UnorderedPsbtError::NotUnordered)
+                } else if flags & HAS_SIGHASH_SINGLE != 0 {
+                    Err(UnorderedPsbtError::UnorderedSighashSingle)
+                } else {
+                    Ok(())
+                };
+                prop_assert_eq!(ResultUnorderedPsbt::try_from_psbt(psbt).map(|_| ()), expected);
+            }
+
+            #[test]
+            fn try_from_psbt_rejects_the_first_repeated_sort_key(
+                distinct in proptest::collection::hash_set(any::<u8>(), 1..=3),
+                repeat in any::<proptest::sample::Index>(),
+                tail in proptest::collection::vec(any::<u8>(), 0..=2),
+                on_outputs in proptest::bool::ANY,
+            ) {
+                let distinct: Vec<u8> = distinct.into_iter().collect();
+                let repeated = distinct[repeat.index(distinct.len())];
+                let keys: Vec<u8> = distinct.iter().copied().chain([repeated]).chain(tail).collect();
+                let sort_key = |key| SortKey::try_from(vec![key]).expect("one byte");
+                let entries = (0u8..).zip(keys);
+                let psbt = if on_outputs {
+                    let outputs = entries
+                        .map(|(uid, key)| {
+                            let mut output = Output::new(
+                                UniqueId::new(vec![uid]),
+                                bitcoin::Amount::ZERO,
+                                bitcoin::ScriptBuf::new(),
+                            );
+                            output.set_sort_key(sort_key(key));
+                            output.into()
+                        })
+                        .collect();
+                    v2_psbt(vec![], outputs)
+                } else {
+                    let inputs = entries
+                        .map(|(vout, key)| {
+                            let mut input = Input::new(&OutPoint { vout: vout.into(), ..OutPoint::null() });
+                            input.set_sort_key(sort_key(key));
+                            input.into()
+                        })
+                        .collect();
+                    v2_psbt(inputs, vec![])
+                };
+                prop_assert_eq!(
+                    UnorderedPsbt::try_from_psbt(psbt).map(|_| ()),
+                    Err(UnorderedPsbtError::DuplicateSortKey(vec![repeated]))
+                );
             }
 
             #[test]
