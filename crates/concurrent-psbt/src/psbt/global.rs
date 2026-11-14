@@ -34,6 +34,7 @@ joinable_struct! {
     /// Use [`ResultGlobal::is_ok`] to check for conflicts and
     /// [`ResultGlobal::try_unwrap`] to extract.
     result: ResultGlobal,
+    v2: psbt_v2::v2::Global,
     fields: {
         pub tx_version: transaction::Version,
         pub fallback_lock_time: Option<absolute::LockTime>,
@@ -41,58 +42,34 @@ joinable_struct! {
         pub xpubs: BTreeMap<Xpub, KeySource>,
         pub proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
         pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
-    }
+    },
+    proprietary: {},
 }
 
 impl Default for Global {
     fn default() -> Self {
-        psbt_v2::v2::Global::default().into()
+        Self::from_v2_fields(psbt_v2::v2::Global::default())
     }
 }
 
 /// Drops the version and the input and output counts.
 impl From<psbt_v2::v2::Global> for Global {
     fn from(global: psbt_v2::v2::Global) -> Self {
-        let psbt_v2::v2::Global {
-            tx_version,
-            fallback_lock_time,
-            tx_modifiable_flags,
-            xpubs,
-            proprietaries,
-            unknowns,
-            ..
-        } = global;
-        Self {
-            tx_version,
-            fallback_lock_time,
-            tx_modifiable_flags,
-            xpubs,
-            proprietaries,
-            unknowns,
-        }
+        let Ok(global) = Self::decode_v2::<std::convert::Infallible>(global);
+        global
     }
 }
 
 impl Global {
     /// Convert to a BIP 370 global map for a PSBT with `input_count` inputs
     /// and `output_count` outputs.
-    #[expect(
-        clippy::needless_update,
-        reason = "psbt-v2's silent-payments feature adds fields this crate does not support yet"
-    )]
     pub(crate) fn into_v2(self, input_count: usize, output_count: usize) -> psbt_v2::v2::Global {
-        psbt_v2::v2::Global {
+        self.encode_v2(psbt_v2::v2::Global {
             version: psbt_v2::Version::TWO,
-            tx_version: self.tx_version,
-            fallback_lock_time: self.fallback_lock_time,
-            tx_modifiable_flags: self.tx_modifiable_flags,
             input_count,
             output_count,
-            xpubs: self.xpubs,
-            proprietaries: self.proprietaries,
-            unknowns: self.unknowns,
             ..psbt_v2::v2::Global::default()
-        }
+        })
     }
 }
 

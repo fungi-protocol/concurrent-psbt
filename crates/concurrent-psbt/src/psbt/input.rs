@@ -11,7 +11,7 @@ use bitcoin::{OutPoint, ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness, 
 use psbt_v2::PsbtSighashType;
 use psbt_v2::raw;
 
-use super::tap_leaf_hashes::{TapLeafHashes, tap_key_origins_from_v2, tap_key_origins_into_v2};
+use super::tap_leaf_hashes::{TapKeyOrigins, TapLeafHashes};
 
 joinable_struct! {
     /// A PSBT input, mirroring the BIP 370 per-input map.
@@ -22,6 +22,7 @@ joinable_struct! {
     /// [`Input`] into this type, and [`ResultInput::try_unwrap`] returns it if
     /// no field conflicts.
     result: ResultInput,
+    v2: psbt_v2::v2::Input,
     fields: {
         pub previous_txid: Txid,
         pub spent_output_index: u32,
@@ -44,119 +45,33 @@ joinable_struct! {
         pub tap_key_sig: Option<taproot::Signature>,
         pub tap_script_sigs: BTreeMap<(XOnlyPublicKey, TapLeafHash), taproot::Signature>,
         pub tap_scripts: BTreeMap<ControlBlock, (ScriptBuf, LeafVersion)>,
-        pub tap_key_origins: BTreeMap<XOnlyPublicKey, (TapLeafHashes, KeySource)>,
+        pub tap_key_origins: BTreeMap<XOnlyPublicKey, (TapLeafHashes, KeySource)> = TapKeyOrigins,
         pub tap_internal_key: Option<XOnlyPublicKey>,
         pub tap_merkle_root: Option<TapNodeHash>,
         pub proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
         pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
-    }
+    },
+    proprietary: {},
 }
 
 impl Input {
     /// Create an input spending `outpoint`, with every other field unset.
     pub fn new(outpoint: &OutPoint) -> Self {
-        psbt_v2::v2::Input::new(outpoint).into()
+        Self::from_v2_fields(psbt_v2::v2::Input::new(outpoint))
     }
 }
 
 impl From<psbt_v2::v2::Input> for Input {
     fn from(input: psbt_v2::v2::Input) -> Self {
-        let psbt_v2::v2::Input {
-            previous_txid,
-            spent_output_index,
-            sequence,
-            min_time,
-            min_height,
-            non_witness_utxo,
-            witness_utxo,
-            partial_sigs,
-            sighash_type,
-            redeem_script,
-            witness_script,
-            bip32_derivations,
-            final_script_sig,
-            final_script_witness,
-            ripemd160_preimages,
-            sha256_preimages,
-            hash160_preimages,
-            hash256_preimages,
-            tap_key_sig,
-            tap_script_sigs,
-            tap_scripts,
-            tap_key_origins,
-            tap_internal_key,
-            tap_merkle_root,
-            proprietaries,
-            unknowns,
-            ..
-        } = input;
-        Self {
-            previous_txid,
-            spent_output_index,
-            sequence,
-            min_time,
-            min_height,
-            non_witness_utxo,
-            witness_utxo,
-            partial_sigs,
-            sighash_type,
-            redeem_script,
-            witness_script,
-            bip32_derivations,
-            final_script_sig,
-            final_script_witness,
-            ripemd160_preimages,
-            sha256_preimages,
-            hash160_preimages,
-            hash256_preimages,
-            tap_key_sig,
-            tap_script_sigs,
-            tap_scripts,
-            tap_key_origins: tap_key_origins_from_v2(tap_key_origins),
-            tap_internal_key,
-            tap_merkle_root,
-            proprietaries,
-            unknowns,
-        }
+        let Ok(input) = Self::decode_v2::<std::convert::Infallible>(input);
+        input
     }
 }
 
 impl From<Input> for psbt_v2::v2::Input {
-    #[expect(
-        clippy::needless_update,
-        reason = "keeps building if psbt-v2 adds fields this crate does not support yet"
-    )]
     fn from(input: Input) -> Self {
-        let outpoint = out_point(&input);
-        Self {
-            previous_txid: input.previous_txid,
-            spent_output_index: input.spent_output_index,
-            sequence: input.sequence,
-            min_time: input.min_time,
-            min_height: input.min_height,
-            non_witness_utxo: input.non_witness_utxo,
-            witness_utxo: input.witness_utxo,
-            partial_sigs: input.partial_sigs,
-            sighash_type: input.sighash_type,
-            redeem_script: input.redeem_script,
-            witness_script: input.witness_script,
-            bip32_derivations: input.bip32_derivations,
-            final_script_sig: input.final_script_sig,
-            final_script_witness: input.final_script_witness,
-            ripemd160_preimages: input.ripemd160_preimages,
-            sha256_preimages: input.sha256_preimages,
-            hash160_preimages: input.hash160_preimages,
-            hash256_preimages: input.hash256_preimages,
-            tap_key_sig: input.tap_key_sig,
-            tap_script_sigs: input.tap_script_sigs,
-            tap_scripts: input.tap_scripts,
-            tap_key_origins: tap_key_origins_into_v2(input.tap_key_origins),
-            tap_internal_key: input.tap_internal_key,
-            tap_merkle_root: input.tap_merkle_root,
-            proprietaries: input.proprietaries,
-            unknowns: input.unknowns,
-            ..psbt_v2::v2::Input::new(&outpoint)
-        }
+        let base = psbt_v2::v2::Input::new(&out_point(&input));
+        input.encode_v2(base)
     }
 }
 

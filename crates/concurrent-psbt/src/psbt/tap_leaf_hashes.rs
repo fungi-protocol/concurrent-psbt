@@ -6,6 +6,7 @@ use bitcoin::TapLeafHash;
 use bitcoin::bip32::KeySource;
 use bitcoin::secp256k1::XOnlyPublicKey;
 
+use super::joinable_struct_macro::MirroredField;
 use crate::values::IdempotentValue;
 
 /// The leaf hashes of a taproot key in `PSBT_{IN,OUT}_TAP_BIP32_DERIVATION`.
@@ -54,21 +55,27 @@ impl IdempotentValue for (TapLeafHashes, KeySource) {}
 /// `PSBT_{IN,OUT}_TAP_BIP32_DERIVATION` as psbt-v2 stores it.
 type V2TapKeyOrigins = BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>;
 
-/// `PSBT_{IN,OUT}_TAP_BIP32_DERIVATION` with set equality on the leaf hashes.
-type TapKeyOrigins = BTreeMap<XOnlyPublicKey, (TapLeafHashes, KeySource)>;
+/// Converts `tap_key_origins` between psbt-v2's leaf hash lists and
+/// [`TapLeafHashes`].
+pub(crate) enum TapKeyOrigins {}
 
-pub(crate) fn tap_key_origins_from_v2(origins: V2TapKeyOrigins) -> TapKeyOrigins {
-    origins
-        .into_iter()
-        .map(|(key, (leaves, source))| (key, (leaves.into(), source)))
-        .collect()
-}
+impl MirroredField for TapKeyOrigins {
+    type V2 = V2TapKeyOrigins;
+    type Value = BTreeMap<XOnlyPublicKey, (TapLeafHashes, KeySource)>;
 
-pub(crate) fn tap_key_origins_into_v2(origins: TapKeyOrigins) -> V2TapKeyOrigins {
-    origins
-        .into_iter()
-        .map(|(key, (leaves, source))| (key, (leaves.into(), source)))
-        .collect()
+    fn from_v2(origins: Self::V2) -> Self::Value {
+        origins
+            .into_iter()
+            .map(|(key, (leaves, source))| (key, (leaves.into(), source)))
+            .collect()
+    }
+
+    fn into_v2(origins: Self::Value) -> Self::V2 {
+        origins
+            .into_iter()
+            .map(|(key, (leaves, source))| (key, (leaves.into(), source)))
+            .collect()
+    }
 }
 
 #[cfg(all(test, feature = "prop-tests"))]
@@ -150,7 +157,7 @@ mod tests {
 
         #[test]
         fn v2_round_trip_keeps_the_lists(origins in arb_v2_tap_key_origins()) {
-            prop_assert_eq!(tap_key_origins_into_v2(tap_key_origins_from_v2(origins.clone())), origins);
+            prop_assert_eq!(TapKeyOrigins::into_v2(TapKeyOrigins::from_v2(origins.clone())), origins);
         }
     }
 }

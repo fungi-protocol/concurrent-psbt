@@ -8,7 +8,8 @@ use bitcoin::taproot::TapTree;
 use bitcoin::{Amount, ScriptBuf};
 use psbt_v2::raw;
 
-use super::tap_leaf_hashes::{TapLeafHashes, tap_key_origins_from_v2, tap_key_origins_into_v2};
+use super::proprietary::ProprietaryField;
+use super::tap_leaf_hashes::{TapKeyOrigins, TapLeafHashes};
 
 joinable_struct! {
     /// A PSBT output, mirroring the BIP 370 per-output map, identified by its
@@ -22,8 +23,8 @@ joinable_struct! {
     ///
     /// Each field holds a clean value or a conflict.
     result: ResultOutput,
+    v2: psbt_v2::v2::Output,
     fields: {
-        unique_id: UniqueId,
         pub amount: Amount,
         pub script_pubkey: ScriptBuf,
         pub redeem_script: Option<ScriptBuf>,
@@ -31,17 +32,20 @@ joinable_struct! {
         pub bip32_derivations: BTreeMap<PublicKey, KeySource>,
         pub tap_internal_key: Option<XOnlyPublicKey>,
         pub tap_tree: Option<TapTree>,
-        pub tap_key_origins: BTreeMap<XOnlyPublicKey, (TapLeafHashes, KeySource)>,
+        pub tap_key_origins: BTreeMap<XOnlyPublicKey, (TapLeafHashes, KeySource)> = TapKeyOrigins,
         pub proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
         pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
-    }
+    },
+    proprietary: {
+        unique_id: UniqueId = UniqueIdField,
+    },
 }
 
 impl Output {
     /// Create an output paying `amount` to `script_pubkey`, identified by
     /// `unique_id`, with every other field unset.
     pub fn new(unique_id: UniqueId, amount: Amount, script_pubkey: ScriptBuf) -> Self {
-        Self::with_unique_id(
+        Self::from_v2_fields(
             psbt_v2::v2::Output {
                 amount,
                 script_pubkey,
@@ -54,37 +58,6 @@ impl Output {
     /// The [`UniqueId`] identifying this output.
     pub fn unique_id(&self) -> &UniqueId {
         &self.unique_id
-    }
-
-    /// Take the fields of `output`, other than its `PSBT_OUT_UNIQUE_ID`.
-    fn with_unique_id(output: psbt_v2::v2::Output, unique_id: UniqueId) -> Self {
-        let psbt_v2::v2::Output {
-            amount,
-            script_pubkey,
-            redeem_script,
-            witness_script,
-            bip32_derivations,
-            tap_internal_key,
-            tap_tree,
-            tap_key_origins,
-            mut proprietaries,
-            unknowns,
-            ..
-        } = output;
-        proprietaries.remove(&unique_id_key());
-        Self {
-            unique_id,
-            amount,
-            script_pubkey,
-            redeem_script,
-            witness_script,
-            bip32_derivations,
-            tap_internal_key,
-            tap_tree,
-            tap_key_origins: tap_key_origins_from_v2(tap_key_origins),
-            proprietaries,
-            unknowns,
-        }
     }
 }
 
@@ -114,38 +87,14 @@ impl TryFrom<psbt_v2::v2::Output> for Output {
     type Error = InvalidOutput;
 
     fn try_from(output: psbt_v2::v2::Output) -> Result<Self, InvalidOutput> {
-        let bytes = output
-            .proprietaries
-            .get(&unique_id_key())
-            .ok_or(InvalidOutput::MissingUniqueId)?;
-        let unique_id =
-            UniqueId::try_from(bytes.clone()).map_err(InvalidOutput::InvalidUniqueId)?;
-        Ok(Self::with_unique_id(output, unique_id))
+        Self::decode_v2(output)
     }
 }
 
 /// Writes the unique ID to `PSBT_OUT_UNIQUE_ID`.
 impl From<Output> for psbt_v2::v2::Output {
-    #[expect(
-        clippy::needless_update,
-        reason = "psbt-v2's silent-payments feature adds fields this crate does not support yet"
-    )]
     fn from(output: Output) -> Self {
-        let mut proprietaries = output.proprietaries;
-        proprietaries.insert(unique_id_key(), output.unique_id.into_bytes());
-        Self {
-            amount: output.amount,
-            script_pubkey: output.script_pubkey,
-            redeem_script: output.redeem_script,
-            witness_script: output.witness_script,
-            bip32_derivations: output.bip32_derivations,
-            tap_internal_key: output.tap_internal_key,
-            tap_tree: output.tap_tree,
-            tap_key_origins: tap_key_origins_into_v2(output.tap_key_origins),
-            proprietaries,
-            unknowns: output.unknowns,
-            ..psbt_v2::v2::Output::default()
-        }
+        output.encode_v2(psbt_v2::v2::Output::default())
     }
 }
 
@@ -233,11 +182,21 @@ impl std::error::Error for InvalidUniqueId {}
 
 pub const PSBT_OUT_UNIQUE_ID_SUBTYPE: u8 = 0x01;
 
-fn unique_id_key() -> raw::ProprietaryKey {
-    raw::ProprietaryKey {
-        prefix: b"concurrent-psbt".to_vec(),
-        subtype: PSBT_OUT_UNIQUE_ID_SUBTYPE,
-        key: vec![],
+/// Stores an output's unique ID in `PSBT_OUT_UNIQUE_ID`.
+struct UniqueIdField;
+
+impl ProprietaryField for UniqueIdField {
+    const SUBTYPE: u8 = PSBT_OUT_UNIQUE_ID_SUBTYPE;
+    type Value = UniqueId;
+    type Error = InvalidOutput;
+
+    fn decode(value: Option<Vec<u8>>) -> Result<UniqueId, InvalidOutput> {
+        let bytes = value.ok_or(InvalidOutput::MissingUniqueId)?;
+        UniqueId::try_from(bytes).map_err(InvalidOutput::InvalidUniqueId)
+    }
+
+    fn encode(unique_id: UniqueId) -> Option<Vec<u8>> {
+        Some(unique_id.into_bytes())
     }
 }
 
@@ -252,7 +211,10 @@ pub(crate) trait OutputUniqueIdExt {
 #[cfg(test)]
 impl OutputUniqueIdExt for psbt_v2::v2::Output {
     fn set_unique_id(&mut self, id: UniqueId) {
-        self.proprietaries.insert(unique_id_key(), id.into_bytes());
+        self.proprietaries.insert(
+            super::proprietary::key(PSBT_OUT_UNIQUE_ID_SUBTYPE),
+            id.into_bytes(),
+        );
     }
 }
 

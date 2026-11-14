@@ -3,6 +3,7 @@ mod joinable_struct_macro;
 pub(crate) mod global;
 pub mod input;
 pub mod output;
+pub(crate) mod proprietary;
 mod tap_leaf_hashes;
 mod values;
 
