@@ -242,6 +242,22 @@ fn duplicate_sort_key<'a>(mut keys: impl Iterator<Item = &'a [u8]>) -> Option<&'
 }
 
 impl UnorderedPsbt {
+    /// Clear the inputs' `tx_modifiable_flags` bit and freeze the inputs.
+    pub(crate) fn no_more_inputs(mut self) -> Self {
+        self.global.tx_modifiable_flags &= !INPUTS_MODIFIABLE;
+        self.inputs = self.inputs.freeze();
+        self
+    }
+
+    /// Clear the outputs' `tx_modifiable_flags` bit and freeze the outputs.
+    pub(crate) fn no_more_outputs(mut self) -> Self {
+        self.global.tx_modifiable_flags &= !OUTPUTS_MODIFIABLE;
+        self.outputs = self.outputs.freeze();
+        self
+    }
+}
+
+impl UnorderedPsbt {
     /// Parse a v2 PSBT into unordered representation.
     ///
     /// Two inputs spending the same outpoint, or two outputs sharing a unique
