@@ -22,10 +22,17 @@
 /// `v2` type. The field itself is private: its visibility
 /// applies to a getter of the same name and a `set_` setter, so the
 /// representation can change, and invariants can be added, without breaking
-/// callers. The struct then has private conversions:
+/// callers. Each entry in `proprietary` is written
+/// `name: Type = Codec`, and is stored in a proprietary key of `v2` by the
+/// [`ProprietaryField`](crate::psbt::proprietary::ProprietaryField) impl
+/// `Codec`. The struct then has private conversions:
 ///
-/// - `from_v2_fields(v2)` moves the mirrored fields out of `v2`;
-/// - `encode_v2(self, base)` moves the mirrored fields into `base`. Fields of
+/// - `from_v2_fields(v2, proprietary...)` moves the mirrored fields out of
+///   `v2` and takes the proprietary fields as given;
+/// - `decode_v2(v2)` decodes the proprietary fields in order, removing their
+///   keys, then moves the mirrored fields;
+/// - `encode_v2(self, base)` moves the mirrored fields into `base` and
+///   encodes the proprietary fields into its proprietary keys. Fields of
 ///   `base` that are not mirrored are kept.
 macro_rules! joinable_struct {
     (
@@ -39,6 +46,12 @@ macro_rules! joinable_struct {
                 $(#[$field_meta:meta])* $vis:vis
                 $field:ident : $T:ty
             ),+ $(,)?
+        },
+        proprietary: {
+            $(
+                $(#[$proprietary_meta:meta])* $proprietary_vis:vis
+                $proprietary:ident : $P:ty = $Codec:ty
+            ),* $(,)?
         } $(,)?
     ) => {
         joinable_struct! {
@@ -48,6 +61,7 @@ macro_rules! joinable_struct {
             result: $Result,
             fields: {
                 $( $(#[$field_meta])* $field: $T, )+
+                $( $(#[$proprietary_meta])* $proprietary_vis $proprietary: $P, )*
             }
         }
 
@@ -68,20 +82,67 @@ macro_rules! joinable_struct {
         }
 
         impl $Source {
-            /// The mirrored fields of `v2`.
-            fn from_v2_fields(v2: $V2) -> Self {
+            /// The mirrored fields of `v2`, with these proprietary fields.
+            fn from_v2_fields(v2: $V2, $( $proprietary: $P ),*) -> Self {
                 Self {
                     $( $field: v2.$field, )+
+                    $( $proprietary, )*
                 }
             }
 
-            /// Move the mirrored fields into `base`.
+            /// Decode the proprietary fields of `v2`, removing their keys, and
+            /// move its mirrored fields.
+            ///
+            /// # Errors
+            /// Returns the error of the first proprietary field that does not
+            /// decode.
+            fn decode_v2<E>(v2: $V2) -> Result<Self, E>
+            where
+                $( E: From<<$Codec as $crate::psbt::proprietary::ProprietaryField>::Error>, )*
+            {
+                joinable_struct!(@decode v2 [ $( $proprietary $Codec ),* ])
+            }
+
+            /// Move the mirrored fields into `base`, and encode the proprietary
+            /// fields into its proprietary keys.
+            ///
+            /// If a proprietary field encodes to `None`, its key is removed from
+            /// `base`, even if `self.proprietaries` has it.
             fn encode_v2(self, mut base: $V2) -> $V2 {
                 $( base.$field = self.$field; )+
+                $(
+                    let key = $crate::psbt::proprietary::key(
+                        <$Codec as $crate::psbt::proprietary::ProprietaryField>::SUBTYPE,
+                    );
+                    base.proprietaries.remove(&key);
+                    base.proprietaries.extend(
+                        <$Codec as $crate::psbt::proprietary::ProprietaryField>::encode(
+                            self.$proprietary,
+                        )
+                        .map(|value| (key, value)),
+                    );
+                )*
                 base
             }
         }
     };
+
+    (@decode $v2:ident []) => {
+        Ok(Self::from_v2_fields($v2))
+    };
+
+    (@decode $v2:ident [ $( $proprietary:ident $Codec:ty ),+ ]) => {{
+        let mut $v2 = $v2;
+        $(
+            let $proprietary =
+                <$Codec as $crate::psbt::proprietary::ProprietaryField>::decode(
+                    $v2.proprietaries.remove(&$crate::psbt::proprietary::key(
+                        <$Codec as $crate::psbt::proprietary::ProprietaryField>::SUBTYPE,
+                    )),
+                )?;
+        )+
+        Ok(Self::from_v2_fields($v2, $( $proprietary ),+))
+    }};
 
     (
         $(#[$source_meta:meta])*

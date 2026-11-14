@@ -49,6 +49,7 @@ joinable_struct! {
         pub proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
         pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
     },
+    proprietary: {},
 }
 
 impl Input {
@@ -60,7 +61,8 @@ impl Input {
 
 impl From<psbt_v2::v2::Input> for Input {
     fn from(input: psbt_v2::v2::Input) -> Self {
-        Self::from_v2_fields(input)
+        let Ok(input) = Self::decode_v2::<std::convert::Infallible>(input);
+        input
     }
 }
 
