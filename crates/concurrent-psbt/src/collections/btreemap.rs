@@ -1,55 +1,52 @@
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 
 use crate::lattice::join::{Join, JoinMut};
-use crate::lattice::partial::{JoinResult, PartialJoin};
+use crate::lattice::lift::{ConflictVisitor, Lift, ResultValue, VisitConflicts};
 
-/// Extension trait for lifting `BTreeMap<K, V>` values to `Ok`, entering the result domain.
-pub(crate) trait BTreeMapExt {
-    type Key;
-    type Value: PartialJoin;
-    /// Lift each value to `Ok`, preserving keys.
-    fn wrap(self) -> BTreeMap<Self::Key, JoinResult<Self::Value>>;
-}
+/// Each value lifts, keeping its key.
+impl<K: Ord, V: Lift> Lift for BTreeMap<K, V> {
+    type Result = BTreeMap<K, V::Result>;
 
-impl<K: Ord, V: PartialJoin> BTreeMapExt for BTreeMap<K, V> {
-    type Key = K;
-    type Value = V;
-    fn wrap(self) -> BTreeMap<K, JoinResult<V>> {
-        self.into_iter().map(|(k, v)| (k, v.wrap())).collect()
+    fn lift(self) -> Self::Result {
+        self.into_iter().map(|(k, v)| (k, v.lift())).collect()
     }
 }
 
-/// Extension trait for `BTreeMap<K, JoinResult<V>>` — `is_ok` checks all values,
-/// `try_unwrap` extracts the plain map or returns `self` on conflict.
-pub(crate) trait ResultBTreeMapExt: Sized {
-    type Key;
-    type Value: PartialJoin;
-    /// Returns `true` if every value in the map is `Ok` (no conflicts).
-    fn is_ok(&self) -> bool;
-    /// Extract the plain `BTreeMap<K, V>`, or return `self` if any value is a conflict.
-    fn try_unwrap(self) -> Result<BTreeMap<Self::Key, Self::Value>, Self>;
-}
-
-impl<K: Ord, V: PartialJoin> ResultBTreeMapExt for BTreeMap<K, JoinResult<V>> {
-    type Key = K;
-    type Value = V;
+/// A map has no conflicts if none of its values have any. Otherwise
+/// `try_unwrap` returns the whole map.
+impl<K: Ord, R: ResultValue> ResultValue for BTreeMap<K, R> {
+    type Clean = BTreeMap<K, R::Clean>;
 
     fn is_ok(&self) -> bool {
-        self.values().all(|v| v.is_ok())
+        self.values().all(R::is_ok)
     }
 
-    fn try_unwrap(self) -> Result<BTreeMap<K, V>, Self> {
+    fn try_unwrap(self) -> Result<Self::Clean, Self> {
         if !self.is_ok() {
             return Err(self);
         }
-        self.into_iter()
-            .map(|(k, v)| v.map(|v| (k, v)))
-            .collect::<Result<_, _>>()
-            .map_err(
-                // .expect() needs V : Debug
-                #[cfg_attr(coverage_nightly, coverage(off))]
-                |_| unreachable!("all entries verified Ok"),
-            )
+        Ok(self
+            .into_iter()
+            .map(|(k, v)| (k, unwrap_after_is_ok(v)))
+            .collect())
+    }
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn unwrap_after_is_ok<R: ResultValue>(value: R) -> R::Clean {
+    match value.try_unwrap() {
+        Ok(value) => value,
+        Err(_) => unreachable!("is_ok() guard verified all entries"),
+    }
+}
+
+/// Reports each conflict with the key of the value holding it.
+impl<K: Debug, R: VisitConflicts> VisitConflicts for BTreeMap<K, R> {
+    fn visit_conflicts(&self, f: &mut ConflictVisitor<'_>) {
+        for (key, value) in self {
+            value.visit_conflicts(&mut |_, conflict| f(Some(key), conflict));
+        }
     }
 }
 
@@ -70,7 +67,7 @@ impl<K: Ord, V: Join> JoinMut for BTreeMap<K, V> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::lattice::partial::Conflict;
+    use crate::lattice::partial::{Conflict, JoinResult, PartialJoin};
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct Val(u8);
@@ -90,17 +87,17 @@ mod tests {
         use super::*;
 
         #[test]
-        fn wrap_lifts() {
+        fn lift_lifts_each_value() {
             let a: BTreeMap<u8, Val> = [(0, Val(0))].into();
-            assert_eq!(a.wrap(), [(0, Ok(Val(0)))].into());
+            assert_eq!(a.lift(), [(0, Ok(Val(0)))].into());
         }
 
         #[test]
-        fn wrapped_disjoint() {
+        fn lifted_disjoint() {
             let a: BTreeMap<u8, Val> = [(0, Val(0))].into();
             let b: BTreeMap<u8, Val> = [(1, Val(0))].into();
             assert_eq!(
-                a.wrap().join(b.wrap()),
+                a.lift().join(b.lift()),
                 [(0, Ok(Val(0))), (1, Ok(Val(0)))].into()
             );
         }
@@ -110,17 +107,17 @@ mod tests {
             let a: BTreeMap<u8, Val> = [(0, Val(0))].into();
             let b: BTreeMap<u8, Val> = [(1, Val(0))].into();
             assert_eq!(
-                a.wrap().join(b.wrap()).try_unwrap(),
+                a.lift().join(b.lift()).try_unwrap(),
                 Ok([(0, Val(0)), (1, Val(0))].into())
             );
         }
 
         #[test]
-        fn wrapped_conflict() {
+        fn lifted_conflict() {
             let a: BTreeMap<u8, Val> = [(0, Val(0))].into();
             let c: BTreeMap<u8, Val> = [(0, Val(1))].into();
             assert_eq!(
-                a.wrap().join(c.wrap()),
+                a.lift().join(c.lift()),
                 [(0, Err(Conflict::from_values([Val(0), Val(1)])))].into()
             );
         }
@@ -130,7 +127,7 @@ mod tests {
             let a: BTreeMap<u8, Val> = [(0, Val(0))].into();
             let c: BTreeMap<u8, Val> = [(0, Val(1))].into();
             assert_eq!(
-                a.wrap().join(c.wrap()).try_unwrap(),
+                a.lift().join(c.lift()).try_unwrap(),
                 Err([(0, Err(Conflict::from_values([Val(0), Val(1)])))].into())
             );
         }
@@ -170,20 +167,33 @@ mod tests {
         // Type-specific
         proptest! {
             #[test]
-            fn wrap_try_unwrap_roundtrip(
+            fn lift_try_unwrap_roundtrip(
                 m in proptest::collection::btree_map(0u8..4, arb_val(), 0..=3)
             ) {
                 let len = m.len();
-                let wrapped: BTreeMap<u8, JoinResult<Val>> = m.wrap();
-                prop_assert_eq!(wrapped.len(), len);
-                prop_assert!(wrapped.is_ok());
-                prop_assert!(wrapped.try_unwrap().is_ok());
+                let lifted: BTreeMap<u8, JoinResult<Val>> = m.clone().lift();
+                prop_assert_eq!(lifted.len(), len);
+                prop_assert!(lifted.is_ok());
+                prop_assert_eq!(lifted.try_unwrap(), Ok(m));
             }
 
             #[test]
             fn is_ok_reflects_content(m in arb_btreemap()) {
                 let has_conflict = m.values().any(|v| v.is_err());
                 prop_assert_eq!(m.is_ok(), !has_conflict);
+            }
+
+            #[test]
+            fn visits_each_conflict_under_its_key(m in arb_btreemap()) {
+                let mut visited = Vec::new();
+                m.visit_conflicts(&mut |key, conflict| {
+                    visited.push((format!("{key:?}"), format!("{conflict:?}")));
+                });
+                let expected: Vec<_> = m
+                    .iter()
+                    .filter_map(|(k, v)| v.as_ref().err().map(|c| (format!("{:?}", Some(k)), format!("{c:?}"))))
+                    .collect();
+                prop_assert_eq!(visited, expected);
             }
 
             #[test]

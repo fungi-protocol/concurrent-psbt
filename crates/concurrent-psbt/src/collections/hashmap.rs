@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 use crate::lattice::join::{Join, JoinMut};
-use crate::lattice::partial::{JoinResult, PartialJoin};
+use crate::lattice::lift::ResultValue;
 
 /// [`JoinMut`] (in-place join) for `HashMap`: matching keys are joined, disjoint keys are unioned.
 impl<K, V> JoinMut for HashMap<K, V>
@@ -50,31 +50,6 @@ impl<K: Hash + Eq, V> HashMapExt for HashMap<K, V> {
     }
 }
 
-/// Value stored in a result-domain map.
-pub(crate) trait HashMapResultValue: Sized {
-    /// Clean value extracted when the result-domain value has no conflicts.
-    type Clean;
-    /// Returns `true` when this value contains no conflicts.
-    fn is_ok(&self) -> bool;
-    /// Extract the clean value, or return the original result-domain value.
-    fn try_unwrap(self) -> Result<Self::Clean, Self>;
-}
-
-impl<V: PartialJoin> HashMapResultValue for JoinResult<V> {
-    type Clean = V;
-
-    fn is_ok(&self) -> bool {
-        Result::is_ok(self)
-    }
-
-    fn try_unwrap(self) -> Result<V, Self> {
-        match self {
-            Ok(value) => Ok(value),
-            Err(conflict) => Err(Err(conflict)),
-        }
-    }
-}
-
 /// Extension trait for result-domain `HashMap` values.
 #[cfg_attr(
     not(test),
@@ -85,24 +60,22 @@ impl<V: PartialJoin> HashMapResultValue for JoinResult<V> {
 )]
 pub(crate) trait ResultHashMapExt: Sized {
     type Key;
-    type Value: HashMapResultValue;
+    type Value: ResultValue;
     /// Returns `true` if every value in the map is conflict-free.
     fn is_ok(&self) -> bool;
     /// Extract the plain map, or return `self` if any value is a conflict.
-    fn try_unwrap(
-        self,
-    ) -> Result<HashMap<Self::Key, <Self::Value as HashMapResultValue>::Clean>, Self>;
+    fn try_unwrap(self) -> Result<HashMap<Self::Key, <Self::Value as ResultValue>::Clean>, Self>;
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-fn unwrap_after_is_ok<V: HashMapResultValue>(value: V) -> V::Clean {
+fn unwrap_after_is_ok<V: ResultValue>(value: V) -> V::Clean {
     match value.try_unwrap() {
         Ok(value) => value,
         Err(_) => unreachable!("is_ok() guard verified all entries"),
     }
 }
 
-impl<K: Hash + Eq, V: HashMapResultValue> ResultHashMapExt for HashMap<K, V> {
+impl<K: Hash + Eq, V: ResultValue> ResultHashMapExt for HashMap<K, V> {
     type Key = K;
     type Value = V;
 
@@ -126,7 +99,7 @@ impl<K: Hash + Eq, V: HashMapResultValue> ResultHashMapExt for HashMap<K, V> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::lattice::partial::Conflict;
+    use crate::lattice::partial::{Conflict, JoinResult, PartialJoin};
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct Val(u8);
@@ -217,15 +190,6 @@ mod tests {
 
         // Type-specific
         proptest! {
-            #[test]
-            fn result_value_try_unwrap_preserves_conflict(a in arb_val(), b in arb_val()) {
-                let value: JoinResult<Val> = Err(Conflict::from_values([a, b]));
-                prop_assert_eq!(
-                    HashMapResultValue::try_unwrap(value.clone()),
-                    Err(value),
-                );
-            }
-
             #[test]
             fn wrap_try_unwrap_roundtrip(m in proptest::collection::hash_map(0u8..4, arb_val(), 0..=3)) {
                 let len = m.len();

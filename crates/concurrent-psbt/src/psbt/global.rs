@@ -13,6 +13,8 @@
 //! each of them in the internal result domain, enabling field-by-field merging
 //! that accumulates conflicts without short-circuiting.
 
+use std::collections::BTreeMap;
+
 use bitcoin::bip32::{KeySource, Xpub};
 use bitcoin::locktime::absolute;
 use bitcoin::transaction;

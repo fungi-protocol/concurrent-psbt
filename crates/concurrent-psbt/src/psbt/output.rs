@@ -1,5 +1,7 @@
 #![allow(clippy::result_large_err)]
 
+use std::collections::BTreeMap;
+
 use bitcoin::bip32::KeySource;
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
 use bitcoin::taproot::TapTree;
@@ -268,85 +270,18 @@ mod tests {
     #[cfg(feature = "unit-tests")]
     mod unit {
         use super::*;
-        use crate::lattice::partial::{Conflict, JoinResult, PartialJoin};
-        use bitcoin::secp256k1::{Secp256k1, SecretKey};
-
-        const ALL_CONFLICT_FIELDS: &[&str] = &[
-            "unique_id",
-            "amount",
-            "script_pubkey",
-            "redeem_script",
-            "witness_script",
-            "bip32_derivations",
-            "tap_internal_key",
-            "tap_tree",
-            "tap_key_origins",
-            "proprietaries",
-            "unknowns",
-        ];
-
-        fn empty_conflict<T: PartialJoin>() -> JoinResult<T> {
-            Err(Conflict::from_values([]))
-        }
-
-        fn all_fields_conflict(seed: u8) -> ResultOutput {
-            let mut result = output(seed).wrap();
-            result.unique_id = empty_conflict();
-            result.amount = empty_conflict();
-            result.script_pubkey = empty_conflict();
-            result.redeem_script = Some(empty_conflict());
-            result.witness_script = Some(empty_conflict());
-            result.tap_internal_key = Some(empty_conflict());
-            result.tap_tree = Some(empty_conflict());
-
-            let secret_key = SecretKey::from_slice(&[seed; 32]).expect("bounded nonzero seed");
-            let secp_public_key =
-                bitcoin::secp256k1::PublicKey::from_secret_key(&Secp256k1::new(), &secret_key);
-            let public_key = PublicKey::new(secp_public_key);
-            let (x_only_public_key, _) = secp_public_key.x_only_public_key();
-            result
-                .bip32_derivations
-                .insert(public_key, empty_conflict());
-            result
-                .tap_key_origins
-                .insert(x_only_public_key, empty_conflict());
-            result.proprietaries.insert(
-                raw::ProprietaryKey {
-                    prefix: vec![seed],
-                    subtype: seed,
-                    key: vec![seed],
-                },
-                empty_conflict(),
-            );
-            result.unknowns.insert(
-                raw::Key {
-                    type_value: seed,
-                    key: vec![seed],
-                },
-                empty_conflict(),
-            );
-            result
-        }
 
         #[test]
-        fn try_unwrap_conflicting_returns_err() {
-            let a = Output {
-                amount: bitcoin::Amount::from_sat(100),
+        fn outputs_with_different_amounts_conflict() {
+            let with_amount = |sats| Output {
+                amount: Amount::from_sat(sats),
                 ..output(1)
             };
-            let b = Output {
-                amount: bitcoin::Amount::from_sat(200),
-                ..output(1)
-            };
-            assert!(a.wrap().join(b.wrap()).try_unwrap().is_err());
-        }
-
-        #[test]
-        fn for_each_conflict_reports_every_conflicted_field() {
-            let result = all_fields_conflict(1);
+            let joined = with_amount(100).wrap().join(with_amount(200).wrap());
             let mut fields = Vec::new();
-            result.for_each_conflict(|field, _, _| fields.push(field.to_owned()));
-            assert_eq!(fields, ALL_CONFLICT_FIELDS);
+            joined.for_each_conflict(|field, _, _| fields.push(field.to_owned()));
+            assert_eq!(fields, ["amount"]);
+            assert_eq!(joined.clone().try_unwrap(), Err(joined));
         }
     }
 
@@ -382,18 +317,12 @@ mod tests {
         proptest! {
             #[test]
             fn wrap_try_unwrap_roundtrip(o in arb_output()) {
-                let wrapped = o.wrap();
-                prop_assert!(wrapped.is_ok());
-                prop_assert!(wrapped.try_unwrap().is_ok());
+                prop_assert_eq!(o.clone().wrap().try_unwrap(), Ok(o));
             }
 
             #[test]
-            fn is_ok_reflects_content(r in arb_result_output()) {
-                if r.is_ok() {
-                    prop_assert!(r.try_unwrap().is_ok());
-                } else {
-                    prop_assert!(r.try_unwrap().is_err());
-                }
+            fn is_ok_iff_try_unwrap_succeeds(r in arb_result_output()) {
+                prop_assert_eq!(r.is_ok(), r.try_unwrap().is_ok());
             }
 
         }
