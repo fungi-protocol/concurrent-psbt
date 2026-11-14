@@ -15,6 +15,9 @@
         // {
           cargoArtifacts = cargoArtifactsDev;
           CARGO_PROFILE = "dev";
+          # Crane disables incremental compilation, but cargo-mutants rebuilds
+          # the crate once per mutant in the same target directory.
+          CARGO_BUILD_INCREMENTAL = "true";
           pnameSuffix = "-mutants";
           nativeBuildInputs = [
             pkgs.cargo-mutants
