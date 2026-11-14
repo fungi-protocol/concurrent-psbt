@@ -1,10 +1,23 @@
+/// Converts a mirrored field whose type differs from the psbt-v2 field of the
+/// same name.
+pub(crate) trait MirroredField {
+    /// The psbt-v2 field's type.
+    type V2;
+    /// The field's type.
+    type Value;
+    /// Convert from the psbt-v2 field.
+    fn from_v2(value: Self::V2) -> Self::Value;
+    /// Convert into the psbt-v2 field.
+    fn into_v2(value: Self::Value) -> Self::V2;
+}
+
 /// Generate a product type, its result-domain counterpart, and their lattice
 /// operations from a single field list using standard Rust type syntax.
 ///
 /// Each field's result-domain type is `<Type as Lift>::Result`, so a field
 /// joins the way its type [`Lift`](crate::lattice::lift::Lift)s: a
 /// [`PartialJoin`](crate::PartialJoin) scalar as a
-/// [`JoinResult`](crate::JoinResult), and `Option` and `BTreeMap` by lifting
+/// [`JoinResult`](crate::JoinResult), and `Option`, `BTreeMap` and `HashMap` by lifting
 /// their contents. Paths and type aliases resolve like any other type.
 ///
 /// Mirrored fields are private, with public getters and setters by default.
@@ -19,13 +32,12 @@
 /// 3. `$Source::wrap`
 /// 4. `Join for $Result`
 /// 5. `$Result::is_ok` and `$Result::try_unwrap`
-/// 6. `ResultWrapped for $Result`
+/// 6. `Lift for $Source` and `ResultWrapped for $Result`
+/// 7. Typed conflict paths and `Conflicts for $Result`
 ///
-/// Each entry in `fields` mirrors the field of the same name, and type, in the
-/// `v2` type. The field itself is private: its visibility
-/// applies to a getter of the same name and a `set_` setter, so the
-/// representation can change, and invariants can be added, without breaking
-/// callers. Each entry in `proprietary` is written
+/// Each entry in `fields` mirrors the field of the same name in the `v2` type.
+/// If the two types differ, an `=` after the type names the [`MirroredField`]
+/// that converts between them. Each entry in `proprietary` is written
 /// `name: Type = Codec`, and is stored in a proprietary key of `v2` by the
 /// [`ProprietaryField`](crate::psbt::proprietary::ProprietaryField) impl
 /// `Codec`. The struct then has private conversions:
@@ -49,7 +61,7 @@ macro_rules! joinable_struct {
             $(
                 $(#[$field_meta:meta])*
                 $( [accessors($accessor_vis:vis)] )?
-                $field:ident : $T:ty
+                $field:ident : $T:ty $( = $Conversion:ty )?
                 => $Variant:ident $( [ $Key:ty ] )? $( ( $Value:ty ) )?
             ),+ $(,)?
         },
@@ -81,7 +93,7 @@ macro_rules! joinable_struct {
             /// The mirrored fields of `v2`, with these proprietary fields.
             fn from_v2_fields(v2: $V2, $( $proprietary: $P ),*) -> Self {
                 Self {
-                    $( $field: v2.$field, )+
+                    $( $field: joinable_struct!(@from_v2 v2.$field $(, $Conversion)?), )+
                     $( $proprietary, )*
                 }
             }
@@ -105,7 +117,7 @@ macro_rules! joinable_struct {
             /// If a proprietary field encodes to `None`, its key is removed from
             /// `base`, even if `self.proprietaries` has it.
             fn encode_v2(self, mut base: $V2) -> $V2 {
-                $( base.$field = self.$field; )+
+                $( base.$field = joinable_struct!(@into_v2 self.$field $(, $Conversion)?); )+
                 $(
                     let key = $crate::psbt::proprietary::key(
                         <$Codec as $crate::psbt::proprietary::ProprietaryField>::SUBTYPE,
@@ -121,6 +133,22 @@ macro_rules! joinable_struct {
                 base
             }
         }
+    };
+
+    (@from_v2 $value:expr) => {
+        $value
+    };
+
+    (@from_v2 $value:expr, $Conversion:ty) => {
+        <$Conversion as $crate::psbt::joinable_struct_macro::MirroredField>::from_v2($value)
+    };
+
+    (@into_v2 $value:expr) => {
+        $value
+    };
+
+    (@into_v2 $value:expr, $Conversion:ty) => {
+        <$Conversion as $crate::psbt::joinable_struct_macro::MirroredField>::into_v2($value)
     };
 
     (@decode $v2:ident []) => {
@@ -175,17 +203,20 @@ macro_rules! joinable_struct {
                 "`]."
             )]
             pub fn wrap(self) -> $Result {
+                $crate::lattice::lift::Lift::wrap(self)
+            }
+        }
+
+        impl $crate::lattice::lift::Lift for $Source {
+            type Result = $Result;
+
+            fn wrap(self) -> $Result {
                 $Result {
                     $(
                         $field: $crate::lattice::lift::Lift::wrap(self.$field),
                     )+
                 }
             }
-        }
-
-        impl $crate::Lift for $Source {
-            type Result = $Result;
-            fn wrap(self) -> $Result { Self::wrap(self) }
         }
 
         impl $crate::lattice::join::Join for $Result {

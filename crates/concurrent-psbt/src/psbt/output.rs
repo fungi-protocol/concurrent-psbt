@@ -1,14 +1,22 @@
 #![allow(clippy::result_large_err)]
 
+//! Per-output field type and output set merging.
+//!
+//! [`ResultOutput`] wraps each per-output field in the internal result domain.
+//! `OutputSet` and `ResultOutputSet` are sets of outputs identified by their
+//! [`UniqueId`]. Joining two sets joins the outputs that have the same unique ID
+//! field by field, and fields that differ become conflicts.
+
 use std::collections::BTreeMap;
 
 use bitcoin::bip32::KeySource;
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
-use bitcoin::taproot::{TapLeafHash, TapTree};
+use bitcoin::taproot::TapTree;
 use bitcoin::{Amount, ScriptBuf};
 use psbt_v2::raw;
 
 use super::proprietary::ProprietaryField;
+use super::tap_leaf_hashes::{TapKeyOrigins, TapLeafHashes};
 
 joinable_struct! {
     /// A PSBT output, mirroring the BIP 370 per-output map, identified by its
@@ -32,7 +40,7 @@ joinable_struct! {
         bip32_derivations: BTreeMap<PublicKey, KeySource> => Bip32Derivation[PublicKey](KeySource),
         tap_internal_key: Option<XOnlyPublicKey> => TapInternalKey(XOnlyPublicKey),
         tap_tree: Option<TapTree> => TapTree(TapTree),
-        tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)> => TapKeyOrigin[XOnlyPublicKey]((Vec<TapLeafHash>, KeySource)),
+        tap_key_origins: BTreeMap<XOnlyPublicKey, (TapLeafHashes, KeySource)> = TapKeyOrigins => TapKeyOrigin[XOnlyPublicKey]((TapLeafHashes, KeySource)),
         proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>> => Proprietary[raw::ProprietaryKey](Vec<u8>),
         unknowns: BTreeMap<raw::Key, Vec<u8>> => Unknown[raw::Key](Vec<u8>),
     },
@@ -100,13 +108,13 @@ impl From<Output> for psbt_v2::v2::Output {
 
 /// Opaque byte-vector identifier for a PSBT output.
 ///
-/// Computed from the `PSBT_OUT_UNIQUE_ID` proprietary field, keyed by subtype
-/// [`PSBT_OUT_UNIQUE_ID_SUBTYPE`]. Used as the map key in `OutputSet`
-/// so that outputs can be merged in an order-independent way.
+/// Stored in the `PSBT_OUT_UNIQUE_ID` proprietary field, subtype
+/// [`PSBT_OUT_UNIQUE_ID_SUBTYPE`]. Identifies an output within an
+/// `OutputSet`.
 ///
-/// Built with [`TryFrom`], a unique ID is 1 to [`UniqueId::MAX_LEN`] bytes
-/// long, as is one read from a BIP 370 output. An empty ID would make
-/// unrelated outputs join as one.
+/// A unique ID built with [`TryFrom`] or read from a BIP 370 output is 1 to
+/// [`UniqueId::MAX_LEN`] bytes long. An empty ID would make unrelated outputs
+/// join as one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UniqueId(Vec<u8>);
 
@@ -235,7 +243,7 @@ mod tests {
         use bitcoin::bip32::{DerivationPath, Fingerprint};
         use bitcoin::hashes::Hash;
         use bitcoin::secp256k1::{Secp256k1, SecretKey};
-        use bitcoin::taproot::TaprootBuilder;
+        use bitcoin::taproot::{TapLeafHash, TaprootBuilder};
         use std::collections::BTreeMap;
 
         #[test]
@@ -245,8 +253,10 @@ mod tests {
                 ..output(1)
             };
             let joined = with_amount(100).wrap().join(with_amount(200).wrap());
-            let fields: Vec<_> = joined.conflicts().map(|c| c.path()).collect();
-            assert_eq!(fields, [OutputField::Amount]);
+            assert_eq!(
+                joined.conflicts().map(|c| c.path()).collect::<Vec<_>>(),
+                [OutputField::Amount]
+            );
             assert_eq!(joined.clone().try_unwrap(), Err(joined));
         }
 
@@ -271,7 +281,10 @@ mod tests {
                 tap_tree: Some(TapTree::try_from(tap_tree).expect("complete tree")),
                 tap_key_origins: BTreeMap::from([(
                     x_only_public_key,
-                    (vec![TapLeafHash::from_byte_array([5; 32])], source),
+                    (
+                        TapLeafHashes::from(vec![TapLeafHash::from_byte_array([5; 32])]),
+                        source,
+                    ),
                 )]),
                 proprietaries: BTreeMap::from([(
                     raw::ProprietaryKey {
@@ -339,6 +352,7 @@ mod tests {
 
             #[test]
             fn is_ok_iff_try_unwrap_succeeds(r in arb_result_output()) {
+                prop_assert_eq!(r.conflicts().next().is_none(), r.is_ok());
                 prop_assert_eq!(r.is_ok(), r.try_unwrap().is_ok());
             }
 

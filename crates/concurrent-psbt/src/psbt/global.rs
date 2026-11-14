@@ -3,7 +3,6 @@
     not(test),
     expect(dead_code, reason = "global serialization is used by UnorderedPsbt")
 )]
-
 //! PSBT global fields and their merging.
 //!
 //! [`Global`] holds the global fields of a PSBT, and [`ResultGlobal`] wraps
@@ -210,6 +209,7 @@ mod tests {
 
             #[test]
             fn is_ok_consistency(a in arb_result_global()) {
+                prop_assert_eq!(a.conflicts().next().is_none(), a.is_ok());
                 if a.is_ok() {
                     prop_assert!(a.try_unwrap().is_ok());
                 } else {
