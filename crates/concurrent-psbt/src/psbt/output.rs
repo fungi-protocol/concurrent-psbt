@@ -4,11 +4,12 @@ use std::collections::BTreeMap;
 
 use bitcoin::bip32::KeySource;
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
-use bitcoin::taproot::{TapLeafHash, TapTree};
+use bitcoin::taproot::TapTree;
 use bitcoin::{Amount, ScriptBuf};
 use psbt_v2::raw;
 
 use super::proprietary::ProprietaryField;
+use super::tap_leaf_hashes::{TapKeyOrigins, TapLeafHashes};
 
 joinable_struct! {
     /// A PSBT output, mirroring the BIP 370 per-output map, identified by its
@@ -31,7 +32,7 @@ joinable_struct! {
         pub bip32_derivations: BTreeMap<PublicKey, KeySource>,
         pub tap_internal_key: Option<XOnlyPublicKey>,
         pub tap_tree: Option<TapTree>,
-        pub tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
+        pub tap_key_origins: BTreeMap<XOnlyPublicKey, (TapLeafHashes, KeySource)> = TapKeyOrigins,
         pub proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
         pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
     },
@@ -234,7 +235,7 @@ mod tests {
         use bitcoin::bip32::{DerivationPath, Fingerprint};
         use bitcoin::hashes::Hash;
         use bitcoin::secp256k1::{Secp256k1, SecretKey};
-        use bitcoin::taproot::TaprootBuilder;
+        use bitcoin::taproot::{TapLeafHash, TaprootBuilder};
         use std::collections::BTreeMap;
 
         #[test]
@@ -271,7 +272,10 @@ mod tests {
                 tap_tree: Some(TapTree::try_from(tap_tree).expect("complete tree")),
                 tap_key_origins: BTreeMap::from([(
                     x_only_public_key,
-                    (vec![TapLeafHash::from_byte_array([5; 32])], source),
+                    (
+                        TapLeafHashes::from(vec![TapLeafHash::from_byte_array([5; 32])]),
+                        source,
+                    ),
                 )]),
                 proprietaries: BTreeMap::from([(
                     raw::ProprietaryKey {

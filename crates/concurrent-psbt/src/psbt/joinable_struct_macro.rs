@@ -1,3 +1,16 @@
+/// Converts a mirrored field whose type differs from the psbt-v2 field of the
+/// same name.
+pub(crate) trait MirroredField {
+    /// The psbt-v2 field's type.
+    type V2;
+    /// The field's type.
+    type Value;
+    /// Convert from the psbt-v2 field.
+    fn from_v2(value: Self::V2) -> Self::Value;
+    /// Convert into the psbt-v2 field.
+    fn into_v2(value: Self::Value) -> Self::V2;
+}
+
 /// Generate a product type, its result-domain counterpart, and their lattice
 /// operations from a single field list using standard Rust type syntax.
 ///
@@ -18,8 +31,9 @@
 /// 5. `$Result::is_ok`, `$Result::for_each_conflict` and `$Result::try_unwrap`
 /// 6. `ResultValue for $Result`
 ///
-/// Each entry in `fields` mirrors the field of the same name, and type, in the
-/// `v2` type. The field itself is private: its visibility
+/// Each entry in `fields` mirrors the field of the same name in the `v2` type.
+/// If the two types differ, an `=` after the type names the [`MirroredField`]
+/// that converts between them. The field itself is private: its visibility
 /// applies to a getter of the same name and a `set_` setter, so the
 /// representation can change, and invariants can be added, without breaking
 /// callers. Each entry in `proprietary` is written
@@ -44,7 +58,7 @@ macro_rules! joinable_struct {
         fields: {
             $(
                 $(#[$field_meta:meta])* $vis:vis
-                $field:ident : $T:ty
+                $field:ident : $T:ty $( = $Conversion:ty )?
             ),+ $(,)?
         },
         proprietary: {
@@ -85,7 +99,7 @@ macro_rules! joinable_struct {
             /// The mirrored fields of `v2`, with these proprietary fields.
             fn from_v2_fields(v2: $V2, $( $proprietary: $P ),*) -> Self {
                 Self {
-                    $( $field: v2.$field, )+
+                    $( $field: joinable_struct!(@from_v2 v2.$field $(, $Conversion)?), )+
                     $( $proprietary, )*
                 }
             }
@@ -109,7 +123,7 @@ macro_rules! joinable_struct {
             /// If a proprietary field encodes to `None`, its key is removed from
             /// `base`, even if `self.proprietaries` has it.
             fn encode_v2(self, mut base: $V2) -> $V2 {
-                $( base.$field = self.$field; )+
+                $( base.$field = joinable_struct!(@into_v2 self.$field $(, $Conversion)?); )+
                 $(
                     let key = $crate::psbt::proprietary::key(
                         <$Codec as $crate::psbt::proprietary::ProprietaryField>::SUBTYPE,
@@ -125,6 +139,22 @@ macro_rules! joinable_struct {
                 base
             }
         }
+    };
+
+    (@from_v2 $value:expr) => {
+        $value
+    };
+
+    (@from_v2 $value:expr, $Conversion:ty) => {
+        <$Conversion as $crate::psbt::joinable_struct_macro::MirroredField>::from_v2($value)
+    };
+
+    (@into_v2 $value:expr) => {
+        $value
+    };
+
+    (@into_v2 $value:expr, $Conversion:ty) => {
+        <$Conversion as $crate::psbt::joinable_struct_macro::MirroredField>::into_v2($value)
     };
 
     (@decode $v2:ident []) => {

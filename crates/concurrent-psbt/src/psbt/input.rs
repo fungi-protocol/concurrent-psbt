@@ -11,6 +11,8 @@ use bitcoin::{OutPoint, ScriptBuf, Sequence, Transaction, TxOut, Txid, Witness, 
 use psbt_v2::PsbtSighashType;
 use psbt_v2::raw;
 
+use super::tap_leaf_hashes::{TapKeyOrigins, TapLeafHashes};
+
 joinable_struct! {
     /// A PSBT input, mirroring the BIP 370 per-input map.
     source: Input,
@@ -43,7 +45,7 @@ joinable_struct! {
         pub tap_key_sig: Option<taproot::Signature>,
         pub tap_script_sigs: BTreeMap<(XOnlyPublicKey, TapLeafHash), taproot::Signature>,
         pub tap_scripts: BTreeMap<ControlBlock, (ScriptBuf, LeafVersion)>,
-        pub tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
+        pub tap_key_origins: BTreeMap<XOnlyPublicKey, (TapLeafHashes, KeySource)> = TapKeyOrigins,
         pub tap_internal_key: Option<XOnlyPublicKey>,
         pub tap_merkle_root: Option<TapNodeHash>,
         pub proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
@@ -172,7 +174,10 @@ mod tests {
                 tap_key_sig: Some(taproot_signature),
                 tap_script_sigs: BTreeMap::from([((x_only_public_key, leaf), taproot_signature)]),
                 tap_scripts: BTreeMap::from([(control_block, (script, LeafVersion::TapScript))]),
-                tap_key_origins: BTreeMap::from([(x_only_public_key, (vec![leaf], source))]),
+                tap_key_origins: BTreeMap::from([(
+                    x_only_public_key,
+                    (TapLeafHashes::from(vec![leaf]), source),
+                )]),
                 tap_internal_key: Some(x_only_public_key),
                 tap_merkle_root: Some(TapNodeHash::from_byte_array([13; 32])),
                 proprietaries: BTreeMap::from([(
