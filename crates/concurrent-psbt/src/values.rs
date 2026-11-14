@@ -14,6 +14,7 @@ impl<T: IdempotentValue> PartialJoin for T {
     }
 }
 
+impl IdempotentValue for bool {}
 impl IdempotentValue for u8 {}
 impl IdempotentValue for u32 {}
 impl IdempotentValue for usize {}

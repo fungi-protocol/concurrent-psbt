@@ -7,8 +7,8 @@ use psbt_v2::v2::Psbt;
 
 use crate::lattice::join::Join;
 
-use super::global::{Global, ResultGlobal};
-use super::input::{DuplicateInput, Input, InputSet, ResultInputSet};
+use super::global::{Global, InvalidGlobal, ResultGlobal, SortSeed};
+use super::input::{DuplicateInput, Input, InputSet, ResultInputSet, SortKey};
 use super::output::{DuplicateOutput, InvalidOutput, Output, OutputSet, ResultOutputSet, UniqueId};
 
 /// A BIP 370 PSBT decomposed into [`Global`], [`InputSet`], and [`OutputSet`], without ordering.
@@ -47,12 +47,26 @@ pub enum UnorderedPsbtError {
     InputCountMismatch { declared: usize, found: usize },
     /// `PSBT_GLOBAL_OUTPUT_COUNT` is not the number of outputs.
     OutputCountMismatch { declared: usize, found: usize },
+    /// `PSBT_GLOBAL_TX_UNORDERED` is present but its value is not `0x03`.
+    InvalidUnorderedFlag(Vec<u8>),
+    /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` is present but its value is neither
+    /// `0x00` nor `0x01`.
+    InvalidSortKeyDerivation(Vec<u8>),
+    /// `PSBT_GLOBAL_SORT_SEED` is shorter than [`SortSeed::MIN_LEN`]; this is
+    /// its length.
+    SortSeedTooShort(usize),
+    /// The input spending this outpoint has a `PSBT_IN_SORT_KEY` longer than
+    /// [`SortKey::MAX_LEN`].
+    InputSortKeyTooLong(OutPoint),
     /// The output at this position is missing the `PSBT_OUT_UNIQUE_ID`
     /// proprietary field.
     MissingOutputUniqueId(usize),
     /// The output at this position has a `PSBT_OUT_UNIQUE_ID` that is empty or
     /// longer than [`UniqueId::MAX_LEN`] bytes.
     InvalidOutputUniqueId(usize),
+    /// The output at this position has a `PSBT_OUT_SORT_KEY` longer than
+    /// [`SortKey::MAX_LEN`].
+    OutputSortKeyTooLong(usize),
     /// Two inputs spend the same outpoint, so the transaction is invalid.
     DuplicateInput(OutPoint),
     /// Two outputs carry the same `PSBT_OUT_UNIQUE_ID`.
@@ -71,12 +85,23 @@ impl From<DuplicateOutput> for UnorderedPsbtError {
     }
 }
 
+impl From<InvalidGlobal> for UnorderedPsbtError {
+    fn from(error: InvalidGlobal) -> Self {
+        match error {
+            InvalidGlobal::UnorderedFlag(value) => Self::InvalidUnorderedFlag(value),
+            InvalidGlobal::SortKeyDerivation(value) => Self::InvalidSortKeyDerivation(value),
+            InvalidGlobal::SortSeed(error) => Self::SortSeedTooShort(error.0.len()),
+        }
+    }
+}
+
 impl UnorderedPsbtError {
     /// The error for the output at `index`, which could not be converted.
     fn invalid_output(index: usize, error: InvalidOutput) -> Self {
         match error {
             InvalidOutput::MissingUniqueId => Self::MissingOutputUniqueId(index),
             InvalidOutput::InvalidUniqueId(_) => Self::InvalidOutputUniqueId(index),
+            InvalidOutput::SortKeyTooLong(_) => Self::OutputSortKeyTooLong(index),
         }
     }
 }
@@ -90,6 +115,23 @@ impl fmt::Display for UnorderedPsbtError {
             Self::OutputCountMismatch { declared, found } => {
                 write!(f, "declares {declared} outputs but has {found}")
             }
+            Self::InvalidUnorderedFlag(value) => {
+                write!(f, "PSBT_GLOBAL_TX_UNORDERED is {value:02x?}, not 0x03")
+            }
+            Self::InvalidSortKeyDerivation(value) => write!(
+                f,
+                "PSBT_GLOBAL_SORT_KEY_DERIVATION is {value:02x?}, not 0x00 or 0x01"
+            ),
+            Self::SortSeedTooShort(len) => write!(
+                f,
+                "PSBT_GLOBAL_SORT_SEED is {len} bytes, fewer than {}",
+                SortSeed::MIN_LEN
+            ),
+            Self::InputSortKeyTooLong(outpoint) => write!(
+                f,
+                "sort key of the input spending {outpoint} is longer than {} bytes",
+                SortKey::MAX_LEN
+            ),
             Self::MissingOutputUniqueId(index) => {
                 write!(f, "output {index} missing PSBT_OUT_UNIQUE_ID")
             }
@@ -97,6 +139,11 @@ impl fmt::Display for UnorderedPsbtError {
                 f,
                 "PSBT_OUT_UNIQUE_ID of output {index} is empty or longer than {} bytes",
                 UniqueId::MAX_LEN
+            ),
+            Self::OutputSortKeyTooLong(index) => write!(
+                f,
+                "sort key of output {index} is longer than {} bytes",
+                SortKey::MAX_LEN
             ),
             Self::DuplicateInput(outpoint) => write!(f, "two inputs spend {outpoint}"),
             Self::DuplicateOutputUniqueId(_) => {
@@ -124,10 +171,12 @@ impl UnorderedPsbt {
     /// # Errors
     /// Returns a count mismatch if the declared input or output count is not
     /// the number of inputs or outputs, which only a `Psbt` assembled by hand
-    /// can have. Otherwise returns the first input whose outpoint repeats,
-    /// then the first output whose `PSBT_OUT_UNIQUE_ID` is missing, empty or
-    /// longer than [`UniqueId::MAX_LEN`] bytes, then the first unique ID that
-    /// repeats.
+    /// can have. Otherwise returns a malformed global sort field, then the
+    /// first input whose sort key is longer than [`SortKey::MAX_LEN`] bytes,
+    /// then the first input whose outpoint repeats, then the first output
+    /// whose `PSBT_OUT_UNIQUE_ID` is missing, empty or longer than
+    /// [`UniqueId::MAX_LEN`] bytes, or whose sort key is longer than
+    /// [`SortKey::MAX_LEN`] bytes, then the first unique ID that repeats.
     pub fn try_from_psbt(psbt: Psbt) -> Result<Self, UnorderedPsbtError> {
         let Psbt {
             global,
@@ -147,8 +196,19 @@ impl UnorderedPsbt {
             });
         }
 
-        let global = Global::from(global);
-        let inputs = InputSet::try_from_inputs(inputs.into_iter().map(Input::from))?;
+        let global = Global::try_from(global)?;
+        let inputs = inputs
+            .into_iter()
+            .map(|input| {
+                let outpoint = OutPoint {
+                    txid: input.previous_txid,
+                    vout: input.spent_output_index,
+                };
+                Input::try_from(input)
+                    .map_err(|_| UnorderedPsbtError::InputSortKeyTooLong(outpoint))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let inputs = InputSet::try_from_inputs(inputs)?;
         let inputs = if global.tx_modifiable_flags & INPUTS_MODIFIABLE == 0 {
             inputs.freeze()
         } else {
@@ -356,6 +416,29 @@ mod tests {
                     UnorderedPsbtError::DuplicateOutputUniqueId(UniqueId::new(vec![1])),
                     "two outputs share a PSBT_OUT_UNIQUE_ID".to_string(),
                 ),
+                (
+                    UnorderedPsbtError::InvalidUnorderedFlag(vec![1]),
+                    "PSBT_GLOBAL_TX_UNORDERED is [01], not 0x03".to_string(),
+                ),
+                (
+                    UnorderedPsbtError::InvalidSortKeyDerivation(vec![2]),
+                    "PSBT_GLOBAL_SORT_KEY_DERIVATION is [02], not 0x00 or 0x01".to_string(),
+                ),
+                (
+                    UnorderedPsbtError::SortSeedTooShort(15),
+                    "PSBT_GLOBAL_SORT_SEED is 15 bytes, fewer than 16".to_string(),
+                ),
+                (
+                    UnorderedPsbtError::InputSortKeyTooLong(outpoint(1)),
+                    format!(
+                        "sort key of the input spending {} is longer than 32 bytes",
+                        outpoint(1)
+                    ),
+                ),
+                (
+                    UnorderedPsbtError::OutputSortKeyTooLong(1),
+                    "sort key of output 1 is longer than 32 bytes".to_string(),
+                ),
             ];
             for (error, message) in cases {
                 assert_eq!(error.to_string(), message);
@@ -374,7 +457,44 @@ mod tests {
                 output.amount = Amount::from_sat(sat);
                 output
             };
+            let field = |subtype| psbt_v2::raw::ProprietaryKey {
+                prefix: crate::PROPRIETARY_PREFIX.to_vec(),
+                subtype,
+                key: vec![],
+            };
+            let with_global_field = |subtype, value: Vec<u8>| {
+                let mut psbt = v2_psbt(vec![], vec![]);
+                psbt.global.proprietaries.insert(field(subtype), value);
+                psbt
+            };
+            let mut long_input_key = psbt_v2::v2::Input::new(&outpoint(1));
+            long_input_key
+                .proprietaries
+                .insert(field(crate::input::PSBT_IN_SORT_KEY_SUBTYPE), vec![0; 33]);
+            let mut long_output_key = v2_output_with_uid(vec![2]);
+            long_output_key
+                .proprietaries
+                .insert(field(crate::output::PSBT_OUT_SORT_KEY_SUBTYPE), vec![0; 33]);
             let cases = [
+                (
+                    with_global_field(crate::global::PSBT_GLOBAL_TX_UNORDERED_SUBTYPE, vec![1]),
+                    UnorderedPsbtError::InvalidUnorderedFlag(vec![1]),
+                ),
+                (
+                    with_global_field(
+                        crate::global::PSBT_GLOBAL_SORT_KEY_DERIVATION_SUBTYPE,
+                        vec![2],
+                    ),
+                    UnorderedPsbtError::InvalidSortKeyDerivation(vec![2]),
+                ),
+                (
+                    with_global_field(crate::global::PSBT_GLOBAL_SORT_SEED_SUBTYPE, vec![0; 15]),
+                    UnorderedPsbtError::SortSeedTooShort(15),
+                ),
+                (
+                    v2_psbt(vec![long_input_key], vec![]),
+                    UnorderedPsbtError::InputSortKeyTooLong(outpoint(1)),
+                ),
                 (
                     v2_psbt(vec![input_with_sequence(1), input_with_sequence(2)], vec![]),
                     UnorderedPsbtError::DuplicateInput(outpoint(1)),
@@ -393,6 +513,10 @@ mod tests {
                 (
                     v2_psbt(vec![], vec![v2_output_with_uid(vec![1; 33])]),
                     UnorderedPsbtError::InvalidOutputUniqueId(0),
+                ),
+                (
+                    v2_psbt(vec![], vec![v2_output_with_uid(vec![1]), long_output_key]),
+                    UnorderedPsbtError::OutputSortKeyTooLong(1),
                 ),
                 (
                     v2_psbt(
@@ -567,6 +691,80 @@ mod tests {
                 let outputs_agree = flags & OUTPUTS_MODIFIABLE != 0 || a.outputs == b.outputs;
                 let joined = a.wrap().join(b.wrap());
                 prop_assert_eq!(joined.is_ok(), inputs_agree && outputs_agree);
+            }
+
+            #[test]
+            fn error_messages_are_distinct_and_name_the_offending_value(
+                index in any::<usize>(),
+                len in any::<usize>(),
+                value in proptest::collection::vec(any::<u8>(), 0..4),
+                vout in any::<u32>(),
+            ) {
+                let outpoint = OutPoint { vout, ..OutPoint::null() };
+                let bytes = format!("{value:02x?}");
+                let errors = [
+                    (
+                        UnorderedPsbtError::InputCountMismatch { declared: len, found: index },
+                        Some(format!("{len} inputs but has {index}")),
+                    ),
+                    (
+                        UnorderedPsbtError::OutputCountMismatch { declared: len, found: index },
+                        Some(format!("{len} outputs but has {index}")),
+                    ),
+                    (UnorderedPsbtError::InvalidUnorderedFlag(value.clone()), Some(bytes.clone())),
+                    (UnorderedPsbtError::InvalidSortKeyDerivation(value.clone()), Some(bytes)),
+                    (UnorderedPsbtError::SortSeedTooShort(len), Some(len.to_string())),
+                    (UnorderedPsbtError::InputSortKeyTooLong(outpoint), Some(outpoint.to_string())),
+                    (UnorderedPsbtError::MissingOutputUniqueId(index), Some(index.to_string())),
+                    (UnorderedPsbtError::InvalidOutputUniqueId(index), Some(index.to_string())),
+                    (UnorderedPsbtError::OutputSortKeyTooLong(index), Some(index.to_string())),
+                    (UnorderedPsbtError::DuplicateInput(outpoint), Some(outpoint.to_string())),
+                    // The unique ID is opaque bytes, so the message leaves it out.
+                    (UnorderedPsbtError::DuplicateOutputUniqueId(UniqueId::new(value)), None),
+                ];
+                let messages: Vec<_> = errors.iter().map(|(error, _)| error.to_string()).collect();
+                for ((_, payload), message) in errors.iter().zip(&messages) {
+                    if let Some(payload) = payload {
+                        prop_assert!(message.contains(payload.as_str()), "{message:?} lacks {payload:?}");
+                    }
+                }
+                let distinct: std::collections::HashSet<_> = messages.iter().collect();
+                prop_assert_eq!(distinct.len(), messages.len());
+            }
+
+            #[test]
+            fn malformed_sort_fields_reject_the_psbt(
+                a in arb_unordered_psbt(),
+                key_len in (SortKey::MAX_LEN + 1)..=40,
+                seed_len in 0..SortSeed::MIN_LEN,
+            ) {
+                let field = |subtype| psbt_v2::raw::ProprietaryKey {
+                    prefix: crate::PROPRIETARY_PREFIX.to_vec(),
+                    subtype,
+                    key: vec![],
+                };
+                let mut psbt = a.into_psbt();
+                if let Some(input) = psbt.inputs.first_mut() {
+                    input
+                        .proprietaries
+                        .insert(field(crate::input::PSBT_IN_SORT_KEY_SUBTYPE), vec![0; key_len]);
+                    let outpoint = OutPoint {
+                        txid: input.previous_txid,
+                        vout: input.spent_output_index,
+                    };
+                    prop_assert_eq!(
+                        UnorderedPsbt::try_from_psbt(psbt.clone()),
+                        Err(UnorderedPsbtError::InputSortKeyTooLong(outpoint))
+                    );
+                }
+                // A malformed global field is reported before any input.
+                psbt.global
+                    .proprietaries
+                    .insert(field(crate::global::PSBT_GLOBAL_SORT_SEED_SUBTYPE), vec![0; seed_len]);
+                prop_assert_eq!(
+                    UnorderedPsbt::try_from_psbt(psbt),
+                    Err(UnorderedPsbtError::SortSeedTooShort(seed_len))
+                );
             }
 
             #[test]

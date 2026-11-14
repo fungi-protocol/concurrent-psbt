@@ -20,6 +20,8 @@ use psbt_v2::raw;
 
 use super::tap_leaf_hashes::{TapKeyOrigins, TapLeafHashes};
 
+use super::proprietary::ProprietaryField;
+
 joinable_struct! {
     /// A PSBT input, mirroring the BIP 370 per-input map.
     source: Input,
@@ -58,20 +60,38 @@ joinable_struct! {
         pub proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
         pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
     },
-    proprietary: {},
+    proprietary: {
+        pub(crate) sort_key: Option<SortKey> = SortKeyField<PSBT_IN_SORT_KEY_SUBTYPE>,
+    },
 }
 
 impl Input {
     /// Create an input spending `outpoint`, with every other field unset.
     pub fn new(outpoint: &OutPoint) -> Self {
-        Self::from_v2_fields(psbt_v2::v2::Input::new(outpoint))
+        Self::from_v2_fields(psbt_v2::v2::Input::new(outpoint), None)
+    }
+
+    /// Get the sort key, if set.
+    pub fn sort_key(&self) -> Option<&[u8]> {
+        self.sort_key.as_ref().map(SortKey::as_bytes)
+    }
+
+    /// Set the sort key.
+    pub fn set_sort_key(&mut self, sort_key: SortKey) {
+        self.sort_key = Some(sort_key);
     }
 }
 
-impl From<psbt_v2::v2::Input> for Input {
-    fn from(input: psbt_v2::v2::Input) -> Self {
-        let Ok(input) = Self::decode_v2::<std::convert::Infallible>(input);
-        input
+/// Reads `PSBT_IN_SORT_KEY` out of the proprietary fields.
+///
+/// # Errors
+/// Returns [`InvalidSortKey`] if the sort key is longer than
+/// [`SortKey::MAX_LEN`] bytes.
+impl TryFrom<psbt_v2::v2::Input> for Input {
+    type Error = InvalidSortKey;
+
+    fn try_from(input: psbt_v2::v2::Input) -> Result<Self, InvalidSortKey> {
+        Self::decode_v2(input)
     }
 }
 
@@ -92,6 +112,81 @@ pub(crate) fn out_point(input: &Input) -> OutPoint {
 }
 
 pub use super::input_set::{DuplicateInput, InputSet, ResultInputSet};
+
+/// Subtype for `PSBT_IN_SORT_KEY`.
+///
+/// Up to [`SortKey::MAX_LEN`] bytes of arbitrary data used as a lexicographic
+/// sort key. Must be distinct across all inputs in a PSBT.
+pub const PSBT_IN_SORT_KEY_SUBTYPE: u8 = 0x10;
+
+/// A `PSBT_IN_SORT_KEY` or `PSBT_OUT_SORT_KEY` value, at most
+/// [`SortKey::MAX_LEN`] bytes long.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SortKey(Vec<u8>);
+
+impl SortKey {
+    /// The maximum length of a sort key in bytes.
+    pub const MAX_LEN: usize = 32;
+
+    /// Access the raw bytes of the sort key.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Consume and return the raw bytes.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+/// The bytes are too long for a [`SortKey`]; they are returned unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidSortKey(pub Vec<u8>);
+
+impl TryFrom<Vec<u8>> for SortKey {
+    type Error = InvalidSortKey;
+
+    fn try_from(bytes: Vec<u8>) -> Result<Self, InvalidSortKey> {
+        if bytes.len() > Self::MAX_LEN {
+            return Err(InvalidSortKey(bytes));
+        }
+        Ok(Self(bytes))
+    }
+}
+
+impl std::fmt::Display for InvalidSortKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "sort key is {} bytes, more than {}",
+            self.0.len(),
+            SortKey::MAX_LEN
+        )
+    }
+}
+
+impl std::error::Error for InvalidSortKey {}
+
+impl crate::values::IdempotentValue for SortKey {}
+
+/// `PSBT_IN_SORT_KEY` or `PSBT_OUT_SORT_KEY`, under `SUBTYPE`. Absent means
+/// no sort key.
+pub(crate) struct SortKeyField<const SUBTYPE: u8>;
+
+impl<const S: u8> ProprietaryField for SortKeyField<S> {
+    const SUBTYPE: u8 = S;
+    type Value = Option<SortKey>;
+    type Error = InvalidSortKey;
+
+    fn decode(value: Option<Vec<u8>>) -> Result<Option<SortKey>, InvalidSortKey> {
+        value.map(SortKey::try_from).transpose()
+    }
+
+    fn encode(sort_key: Option<SortKey>) -> Option<Vec<u8>> {
+        sort_key.map(SortKey::into_bytes)
+    }
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub(crate) mod tests {
@@ -118,6 +213,33 @@ pub(crate) mod tests {
         }
 
         #[test]
+        fn sort_key_is_encoded_under_the_crate_prefix() {
+            let key = psbt_v2::raw::ProprietaryKey {
+                prefix: b"concurrent-psbt".to_vec(),
+                subtype: 0x10,
+                key: vec![],
+            };
+            let mut input = Input::new(&OutPoint::null());
+            assert_eq!(input.sort_key(), None);
+            input.set_sort_key(SortKey::try_from(vec![0x42]).unwrap());
+            assert_eq!(input.sort_key(), Some([0x42].as_slice()));
+            let v2 = psbt_v2::v2::Input::from(input.clone());
+            assert_eq!(v2.proprietaries.get(&key), Some(&vec![0x42]));
+            assert_eq!(Input::try_from(v2), Ok(input));
+        }
+
+        #[test]
+        fn sort_key_is_at_most_32_bytes() {
+            assert_eq!(
+                SortKey::try_from(vec![0; 32]).map(SortKey::into_bytes),
+                Ok(vec![0; 32])
+            );
+            let error = SortKey::try_from(vec![0; 33]).unwrap_err();
+            assert_eq!(error, InvalidSortKey(vec![0; 33]));
+            assert_eq!(error.to_string(), "sort key is 33 bytes, more than 32");
+        }
+
+        #[test]
         fn v2_conversion_round_trips_a_populated_input() {
             let mut input = make_input(1, 2);
             input.sequence = Some(Sequence(3));
@@ -134,7 +256,7 @@ pub(crate) mod tests {
                 (v2.previous_txid, v2.spent_output_index, v2.sequence),
                 (input.previous_txid, 2, Some(Sequence(3)))
             );
-            assert_eq!(Input::from(v2), input);
+            assert_eq!(Input::try_from(v2), Ok(input));
         }
 
         #[test]
@@ -187,9 +309,10 @@ pub(crate) mod tests {
                     proptest::collection::vec(0u8..255, 0..=4),
                     0..=2,
                 ), // proprietaries
+                proptest::option::of(proptest::collection::vec(0u8..3, 0..=2)),   // sort_key
             )
                 .prop_map(
-                    |(op, seq, utxo_val, redeem, witness_s, final_sig, props)| {
+                    |(op, seq, utxo_val, redeem, witness_s, final_sig, props, sort_key)| {
                         let mut input = Input {
                             sequence: seq.map(Sequence),
                             witness_utxo: utxo_val.map(|v| TxOut {
@@ -199,6 +322,8 @@ pub(crate) mod tests {
                             redeem_script: redeem.map(ScriptBuf::from_bytes),
                             witness_script: witness_s.map(ScriptBuf::from_bytes),
                             final_script_sig: final_sig.map(ScriptBuf::from_bytes),
+                            sort_key: sort_key
+                                .map(|key| SortKey::try_from(key).expect("at most 2 bytes")),
                             ..Input::new(&op)
                         };
                         for (k, v) in props {
@@ -218,13 +343,27 @@ pub(crate) mod tests {
 
         proptest! {
             #[test]
+            fn try_from_reads_the_sort_key(key in proptest::collection::vec(any::<u8>(), 0..=40)) {
+                let mut v2 = psbt_v2::v2::Input::new(&OutPoint::null());
+                v2.proprietaries
+                    .insert(crate::psbt::proprietary::key(PSBT_IN_SORT_KEY_SUBTYPE), key.clone());
+                let Ok(input) = Input::try_from(v2.clone()) else {
+                    prop_assert!(key.len() > SortKey::MAX_LEN);
+                    prop_assert_eq!(Input::try_from(v2), Err(InvalidSortKey(key)));
+                    return Ok(());
+                };
+                prop_assert_eq!(input.sort_key(), Some(key.as_slice()));
+                prop_assert_eq!(psbt_v2::v2::Input::from(input), v2);
+            }
+
+            #[test]
             fn wrap_try_unwrap_roundtrip(i in arb_input_with_fields()) {
                 prop_assert_eq!(i.clone().wrap().try_unwrap(), Ok(i));
             }
 
             #[test]
             fn v2_roundtrip(i in arb_input_with_fields()) {
-                prop_assert_eq!(Input::from(psbt_v2::v2::Input::from(i.clone())), i);
+                prop_assert_eq!(Input::try_from(psbt_v2::v2::Input::from(i.clone())), Ok(i));
             }
 
             #[test]
