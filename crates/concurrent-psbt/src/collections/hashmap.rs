@@ -22,13 +22,6 @@ where
 }
 
 /// Extension trait for transforming `HashMap` values while preserving keys.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "temporary helper is consumed by PSBT set wrappers in later commits"
-    )
-)]
 pub(crate) trait HashMapExt {
     type Key;
     type Value;
@@ -51,13 +44,6 @@ impl<K: Hash + Eq, V> HashMapExt for HashMap<K, V> {
 }
 
 /// Extension trait for result-domain `HashMap` values.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "temporary helper is consumed by PSBT set wrappers in later commits"
-    )
-)]
 pub(crate) trait ResultHashMapExt: Sized {
     type Key;
     type Value: ResultValue;
