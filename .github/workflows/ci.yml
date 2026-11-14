@@ -36,9 +36,13 @@ jobs:
           version: v3.0.1
           # Do not upload paths that cache.nixos.org already serves.
           upstream-cache-filter: true
-      - name: Validate commits
+      - name: Validate commits (quick)
         run: |
-          NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --parallel --keep-going --print-build-logs \
+          NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --quick --parallel --print-build-logs \
+            -- "$BASE_SHA..HEAD"
+      - name: Validate commits (full)
+        run: |
+          NIX_FLAKE_SHALLOW=1 nix run '.?shallow=1#validate-commits' -- --git --forward --quick=deferred --parallel --keep-going --print-build-logs \
             -- "$BASE_SHA..HEAD"
       - name: Link recorded nextest result
         run: |
