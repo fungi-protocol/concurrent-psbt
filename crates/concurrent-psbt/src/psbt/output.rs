@@ -2,31 +2,148 @@
 
 use bitcoin::bip32::KeySource;
 use bitcoin::key::{PublicKey, XOnlyPublicKey};
-use bitcoin::taproot::{TapLeafHash, TapTree};
+use bitcoin::taproot::TapTree;
 use bitcoin::{Amount, ScriptBuf};
 use psbt_v2::raw;
-use psbt_v2::v2::Output;
+
+use super::tap_leaf_hashes::{TapLeafHashes, tap_key_origins_from_v2, tap_key_origins_into_v2};
 
 joinable_struct! {
-    /// Result-domain representation of a PSBT output.
+    /// A PSBT output, mirroring the BIP 370 per-output map, identified by its
+    /// [`UniqueId`].
     ///
-    /// Each field mirrors its counterpart in [`psbt_v2::v2::Output`] but is
-    /// represented in the internal result domain, recording either a clean value
-    /// or an accumulated conflict.
+    /// The unique ID is set when the output is created with [`Output::new`]
+    /// or converted from a BIP 370 output carrying `PSBT_OUT_UNIQUE_ID`, and
+    /// cannot change afterwards.
     source: Output,
+    /// Result-domain counterpart of [`Output`].
+    ///
+    /// Each field holds a clean value or a conflict.
     result: ResultOutput,
-    ext: OutputExt,
     fields: {
-        amount: Amount,
-        script_pubkey: ScriptBuf,
-        redeem_script: Option<ScriptBuf>,
-        witness_script: Option<ScriptBuf>,
-        bip32_derivations: BTreeMap<PublicKey, KeySource>,
-        tap_internal_key: Option<XOnlyPublicKey>,
-        tap_tree: Option<TapTree>,
-        tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
-        proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
-        unknowns: BTreeMap<raw::Key, Vec<u8>>,
+        unique_id: UniqueId,
+        pub amount: Amount,
+        pub script_pubkey: ScriptBuf,
+        pub redeem_script: Option<ScriptBuf>,
+        pub witness_script: Option<ScriptBuf>,
+        pub bip32_derivations: BTreeMap<PublicKey, KeySource>,
+        pub tap_internal_key: Option<XOnlyPublicKey>,
+        pub tap_tree: Option<TapTree>,
+        pub tap_key_origins: BTreeMap<XOnlyPublicKey, (TapLeafHashes, KeySource)>,
+        pub proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
+        pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
+    }
+}
+
+impl Output {
+    /// Create an output paying `amount` to `script_pubkey`, identified by
+    /// `unique_id`, with every other field unset.
+    pub fn new(unique_id: UniqueId, amount: Amount, script_pubkey: ScriptBuf) -> Self {
+        Self::with_unique_id(
+            psbt_v2::v2::Output {
+                amount,
+                script_pubkey,
+                ..psbt_v2::v2::Output::default()
+            },
+            unique_id,
+        )
+    }
+
+    /// The [`UniqueId`] identifying this output.
+    pub fn unique_id(&self) -> &UniqueId {
+        &self.unique_id
+    }
+
+    /// Take the fields of `output`, other than its `PSBT_OUT_UNIQUE_ID`.
+    fn with_unique_id(output: psbt_v2::v2::Output, unique_id: UniqueId) -> Self {
+        let psbt_v2::v2::Output {
+            amount,
+            script_pubkey,
+            redeem_script,
+            witness_script,
+            bip32_derivations,
+            tap_internal_key,
+            tap_tree,
+            tap_key_origins,
+            mut proprietaries,
+            unknowns,
+            ..
+        } = output;
+        proprietaries.remove(&unique_id_key());
+        Self {
+            unique_id,
+            amount,
+            script_pubkey,
+            redeem_script,
+            witness_script,
+            bip32_derivations,
+            tap_internal_key,
+            tap_tree,
+            tap_key_origins: tap_key_origins_from_v2(tap_key_origins),
+            proprietaries,
+            unknowns,
+        }
+    }
+}
+
+/// Why a BIP 370 output cannot be converted into an [`Output`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InvalidOutput {
+    /// It has no `PSBT_OUT_UNIQUE_ID`.
+    MissingUniqueId,
+    /// Its `PSBT_OUT_UNIQUE_ID` is empty or longer than [`UniqueId::MAX_LEN`]
+    /// bytes.
+    InvalidUniqueId(InvalidUniqueId),
+}
+
+impl std::fmt::Display for InvalidOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingUniqueId => write!(f, "output missing PSBT_OUT_UNIQUE_ID"),
+            Self::InvalidUniqueId(error) => write!(f, "output {error}"),
+        }
+    }
+}
+
+impl std::error::Error for InvalidOutput {}
+
+/// Reads the unique ID from `PSBT_OUT_UNIQUE_ID`.
+impl TryFrom<psbt_v2::v2::Output> for Output {
+    type Error = InvalidOutput;
+
+    fn try_from(output: psbt_v2::v2::Output) -> Result<Self, InvalidOutput> {
+        let bytes = output
+            .proprietaries
+            .get(&unique_id_key())
+            .ok_or(InvalidOutput::MissingUniqueId)?;
+        let unique_id =
+            UniqueId::try_from(bytes.clone()).map_err(InvalidOutput::InvalidUniqueId)?;
+        Ok(Self::with_unique_id(output, unique_id))
+    }
+}
+
+/// Writes the unique ID to `PSBT_OUT_UNIQUE_ID`.
+impl From<Output> for psbt_v2::v2::Output {
+    #[expect(
+        clippy::needless_update,
+        reason = "psbt-v2's silent-payments feature adds fields this crate does not support yet"
+    )]
+    fn from(output: Output) -> Self {
+        let mut proprietaries = output.proprietaries;
+        proprietaries.insert(unique_id_key(), output.unique_id.into_bytes());
+        Self {
+            amount: output.amount,
+            script_pubkey: output.script_pubkey,
+            redeem_script: output.redeem_script,
+            witness_script: output.witness_script,
+            bip32_derivations: output.bip32_derivations,
+            tap_internal_key: output.tap_internal_key,
+            tap_tree: output.tap_tree,
+            tap_key_origins: tap_key_origins_into_v2(output.tap_key_origins),
+            proprietaries,
+            unknowns: output.unknowns,
+            ..psbt_v2::v2::Output::default()
+        }
     }
 }
 
@@ -36,8 +153,9 @@ joinable_struct! {
 /// [`PSBT_OUT_UNIQUE_ID_SUBTYPE`]. Used as the map key in `OutputSet`
 /// so that outputs can be merged in an order-independent way.
 ///
-/// Built with [`TryFrom`], a unique ID is at most [`UniqueId::MAX_LEN`]
-/// bytes long. One read from an output is not checked.
+/// Built with [`TryFrom`], a unique ID is 1 to [`UniqueId::MAX_LEN`] bytes
+/// long, as is one read from a BIP 370 output. An empty ID would make
+/// unrelated outputs join as one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UniqueId(Vec<u8>);
 
@@ -82,7 +200,8 @@ impl UniqueId {
 
 impl crate::values::IdempotentValue for UniqueId {}
 
-/// The bytes are too long for a [`UniqueId`]; they are returned unchanged.
+/// Bytes that are not a valid [`UniqueId`]: empty, or longer than
+/// [`UniqueId::MAX_LEN`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvalidUniqueId(pub Vec<u8>);
 
@@ -90,7 +209,7 @@ impl TryFrom<Vec<u8>> for UniqueId {
     type Error = InvalidUniqueId;
 
     fn try_from(bytes: Vec<u8>) -> Result<Self, InvalidUniqueId> {
-        if bytes.len() > Self::MAX_LEN {
+        if bytes.is_empty() || bytes.len() > Self::MAX_LEN {
             return Err(InvalidUniqueId(bytes));
         }
         Ok(Self(bytes))
@@ -101,7 +220,7 @@ impl std::fmt::Display for InvalidUniqueId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "unique ID is {} bytes, more than {}",
+            "unique ID is {} bytes, not 1 to {}",
             self.0.len(),
             UniqueId::MAX_LEN
         )
@@ -112,36 +231,26 @@ impl std::error::Error for InvalidUniqueId {}
 
 pub const PSBT_OUT_UNIQUE_ID_SUBTYPE: u8 = 0x01;
 
-/// Extension trait on [`psbt_v2::v2::Output`] for accessing the unique-ID proprietary field.
-pub trait OutputUniqueIdExt {
-    /// Return the [`UniqueId`] stored in the `PSBT_OUT_UNIQUE_ID` proprietary field, if present.
-    fn unique_id(&self) -> Option<UniqueId>;
-    /// Return `true` if this output carries a [`UniqueId`].
-    fn has_unique_id(&self) -> bool {
-        self.unique_id().is_some()
+fn unique_id_key() -> raw::ProprietaryKey {
+    raw::ProprietaryKey {
+        prefix: b"concurrent-psbt".to_vec(),
+        subtype: PSBT_OUT_UNIQUE_ID_SUBTYPE,
+        key: vec![],
     }
+}
+
+/// Sets `PSBT_OUT_UNIQUE_ID` on BIP 370 outputs, for tests that parse them.
+#[cfg(test)]
+pub(crate) trait OutputUniqueIdExt {
     /// Store `id` in the `PSBT_OUT_UNIQUE_ID` proprietary field, replacing
     /// any existing value.
     fn set_unique_id(&mut self, id: UniqueId);
 }
 
-impl OutputUniqueIdExt for Output {
-    fn unique_id(&self) -> Option<UniqueId> {
-        let key = psbt_v2::raw::ProprietaryKey {
-            prefix: b"concurrent-psbt".to_vec(),
-            subtype: PSBT_OUT_UNIQUE_ID_SUBTYPE,
-            key: vec![],
-        };
-        self.proprietaries.get(&key).map(|v| UniqueId(v.clone()))
-    }
-
+#[cfg(test)]
+impl OutputUniqueIdExt for psbt_v2::v2::Output {
     fn set_unique_id(&mut self, id: UniqueId) {
-        let key = psbt_v2::raw::ProprietaryKey {
-            prefix: b"concurrent-psbt".to_vec(),
-            subtype: PSBT_OUT_UNIQUE_ID_SUBTYPE,
-            key: vec![],
-        };
-        self.proprietaries.insert(key, id.into_bytes());
+        self.proprietaries.insert(unique_id_key(), id.into_bytes());
     }
 }
 
@@ -151,6 +260,11 @@ mod tests {
     use super::*;
     use crate::lattice::join::Join;
 
+    /// An output with unique ID `[tag]` and every other field unset.
+    fn output(tag: u8) -> Output {
+        Output::new(UniqueId::new(vec![tag]), Amount::ZERO, ScriptBuf::new())
+    }
+
     #[cfg(feature = "unit-tests")]
     mod unit {
         use super::*;
@@ -158,6 +272,7 @@ mod tests {
         use bitcoin::secp256k1::{Secp256k1, SecretKey};
 
         const ALL_CONFLICT_FIELDS: &[&str] = &[
+            "unique_id",
             "amount",
             "script_pubkey",
             "redeem_script",
@@ -175,7 +290,8 @@ mod tests {
         }
 
         fn all_fields_conflict(seed: u8) -> ResultOutput {
-            let mut result = Output::default().wrap();
+            let mut result = output(seed).wrap();
+            result.unique_id = empty_conflict();
             result.amount = empty_conflict();
             result.script_pubkey = empty_conflict();
             result.redeem_script = Some(empty_conflict());
@@ -216,11 +332,11 @@ mod tests {
         fn try_unwrap_conflicting_returns_err() {
             let a = Output {
                 amount: bitcoin::Amount::from_sat(100),
-                ..Output::default()
+                ..output(1)
             };
             let b = Output {
                 amount: bitcoin::Amount::from_sat(200),
-                ..Output::default()
+                ..output(1)
             };
             assert!(a.wrap().join(b.wrap()).try_unwrap().is_err());
         }
@@ -250,7 +366,7 @@ mod tests {
                     script_pubkey: ScriptBuf::new(),
                     redeem_script: redeem.map(ScriptBuf::from_bytes),
                     witness_script: witness.map(ScriptBuf::from_bytes),
-                    ..Output::default()
+                    ..output(1)
                 })
         }
 
@@ -290,22 +406,55 @@ mod tests {
 
         proptest! {
             #[test]
-            fn unique_id_roundtrip(uid in proptest::collection::vec(0u8..=255, 1..=40)) {
+            fn unique_id_roundtrip(uid in proptest::collection::vec(0u8..=255, 0..=40)) {
                 let Ok(id) = UniqueId::try_from(uid.clone()) else {
-                    prop_assert!(uid.len() > UniqueId::MAX_LEN);
+                    prop_assert!(uid.is_empty() || uid.len() > UniqueId::MAX_LEN);
                     let error = InvalidUniqueId(uid.clone());
-                    prop_assert!(error.to_string().contains("more than 32"));
+                    prop_assert!(error.to_string().contains("not 1 to 32"));
                     prop_assert_eq!(UniqueId::try_from(uid), Err(error));
                     return Ok(());
                 };
                 prop_assert_eq!(&id, &UniqueId::new(uid.clone()));
                 prop_assert_eq!(id.as_bytes(), uid.as_slice());
+                prop_assert_eq!(id.into_bytes(), uid);
+            }
 
-                let mut output = Output::default();
-                prop_assert!(!output.has_unique_id());
-                output.set_unique_id(id);
-                prop_assert!(output.has_unique_id());
-                prop_assert_eq!(output.unique_id().unwrap().into_bytes(), uid);
+            #[test]
+            fn v2_conversion_reads_and_writes_the_unique_id(
+                uid in proptest::collection::vec(0u8..=255, 0..=40),
+                amount in any::<u64>(),
+                unknown in proptest::option::of(proptest::collection::vec(0u8..=255, 0..=4)),
+            ) {
+                let mut v2 = psbt_v2::v2::Output {
+                    amount: Amount::from_sat(amount),
+                    ..psbt_v2::v2::Output::default()
+                };
+                if let Some(unknown) = unknown {
+                    v2.unknowns.insert(raw::Key { type_value: 0xfc, key: vec![] }, unknown);
+                }
+                prop_assert_eq!(
+                    Output::try_from(v2.clone()),
+                    Err(InvalidOutput::MissingUniqueId)
+                );
+
+                v2.set_unique_id(UniqueId::new(uid.clone()));
+                match Output::try_from(v2.clone()) {
+                    Ok(output) => {
+                        prop_assert!((1..=UniqueId::MAX_LEN).contains(&uid.len()));
+                        prop_assert_eq!(output.unique_id().as_bytes(), uid.as_slice());
+                        prop_assert!(output.proprietaries.is_empty());
+                        prop_assert_eq!(output.amount, Amount::from_sat(amount));
+                        prop_assert_eq!(psbt_v2::v2::Output::from(output), v2);
+                    }
+                    Err(error) => {
+                        prop_assert!(uid.is_empty() || uid.len() > UniqueId::MAX_LEN);
+                        prop_assert!(error.to_string().starts_with("output unique ID is"));
+                        prop_assert_eq!(
+                            error,
+                            InvalidOutput::InvalidUniqueId(InvalidUniqueId(uid))
+                        );
+                    }
+                }
             }
         }
     }
@@ -314,42 +463,56 @@ mod tests {
     mod unit_uid {
         use super::*;
 
-        fn output_with_uid(uid: &[u8]) -> Output {
-            let mut output = Output::default();
-            let key = psbt_v2::raw::ProprietaryKey {
+        #[test]
+        fn unique_id_is_encoded_under_the_crate_prefix() {
+            let key = raw::ProprietaryKey {
                 prefix: b"concurrent-psbt".to_vec(),
-                subtype: PSBT_OUT_UNIQUE_ID_SUBTYPE,
+                subtype: 0x01,
                 key: vec![],
             };
-            output.proprietaries.insert(key, uid.to_vec());
-            output
+            let v2 = psbt_v2::v2::Output::from(output(7));
+            assert_eq!(v2.proprietaries.get(&key), Some(&vec![7]));
+            let mut set = psbt_v2::v2::Output::default();
+            set.set_unique_id(UniqueId::new(vec![7]));
+            assert_eq!(set, v2);
+            assert_eq!(
+                InvalidOutput::MissingUniqueId.to_string(),
+                "output missing PSBT_OUT_UNIQUE_ID"
+            );
         }
 
         #[test]
-        fn unique_id_present() {
-            let output = output_with_uid(&[1, 2, 3]);
-            assert!(output.has_unique_id());
-            assert_eq!(output.unique_id().unwrap().into_bytes(), vec![1, 2, 3]);
+        fn unique_id_is_1_to_32_bytes() {
+            for len in [1, 32] {
+                let mut v2 = psbt_v2::v2::Output::default();
+                v2.set_unique_id(UniqueId::new(vec![0; len]));
+                let output = Output::try_from(v2).expect("a valid unique ID");
+                assert_eq!(output.unique_id(), &UniqueId::new(vec![0; len]));
+            }
+            for len in [0, 33] {
+                let error = UniqueId::try_from(vec![0; len]).unwrap_err();
+                assert_eq!(error, InvalidUniqueId(vec![0; len]));
+                assert_eq!(
+                    error.to_string(),
+                    format!("unique ID is {len} bytes, not 1 to 32")
+                );
+                let mut v2 = psbt_v2::v2::Output::default();
+                v2.set_unique_id(UniqueId::new(vec![0; len]));
+                let error = Output::try_from(v2).unwrap_err();
+                assert_eq!(
+                    error.to_string(),
+                    format!("output unique ID is {len} bytes, not 1 to 32")
+                );
+            }
         }
 
         #[test]
-        fn unique_id_absent() {
-            let output = Output::default();
-            assert!(!output.has_unique_id());
-            assert!(output.unique_id().is_none());
-        }
-
-        #[test]
-        fn unique_id_construction_generation_and_setting() {
-            let id = UniqueId::new(vec![1, 2, 3]);
-            assert_eq!(id.as_bytes(), &[1, 2, 3]);
-
+        fn unique_id_construction_and_generation() {
             let generated = UniqueId::generate();
             assert_eq!(generated.as_bytes().len(), 16);
-
-            let mut output = Output::default();
-            output.set_unique_id(id);
-            assert_eq!(output.unique_id().unwrap().into_bytes(), vec![1, 2, 3]);
+            let output = Output::new(generated.clone(), Amount::ONE_SAT, ScriptBuf::new());
+            assert_eq!(output.unique_id(), &generated);
+            assert_eq!(output.amount, Amount::ONE_SAT);
         }
     }
 }

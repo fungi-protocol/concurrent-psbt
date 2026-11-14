@@ -1,5 +1,5 @@
-/// Generate a result-domain product type and its lattice operations from a
-/// single field list using standard Rust type syntax.
+/// Generate a product type, its result-domain counterpart, and their lattice
+/// operations from a single field list using standard Rust type syntax.
 ///
 /// Fields are classified automatically:
 ///
@@ -14,12 +14,16 @@
 /// as a scalar, which only compiles if the whole type implements
 /// `PartialJoin`. Import the types and write them bare.
 ///
+/// Each field may carry attributes and a visibility, which apply to the
+/// `$Source` field; fields of `$Result` are `pub(crate)`.
+///
 /// Generates:
-/// 1. `$Result` struct with transformed field types
-/// 2. `$Ext` trait with `wrap` method on the source type
-/// 3. `Join for $Result`
-/// 4. `$Result::is_ok`
-/// 5. `$Result::try_unwrap`
+/// 1. `$Source` struct with the fields as written
+/// 2. `$Result` struct with transformed field types
+/// 3. `$Source::wrap`
+/// 4. `Join for $Result`
+/// 5. `$Result::is_ok`
+/// 6. `$Result::try_unwrap`
 ///
 /// The field list must name at least one field: `is_ok` is generated as the
 /// conjunction of the per-field checks, which has no expansion for an empty
@@ -27,17 +31,17 @@
 macro_rules! joinable_struct {
     // ── Entry point ──────────────────────────────────────────
     (
-        $(#[$result_meta:meta])*
+        $(#[$source_meta:meta])*
         source: $Source:ident,
+        $(#[$result_meta:meta])*
         result: $Result:ident,
-        ext: $Ext:ident,
         fields: { $($fields:tt)* }
     ) => {
         joinable_struct!(@munch
-            meta: [ $(#[$result_meta])* ]
+            source_meta: [ $(#[$source_meta])* ]
+            result_meta: [ $(#[$result_meta])* ]
             source: $Source
             result: $Result
-            ext: $Ext
             classified: []
             rest: [ $($fields)* ]
         );
@@ -45,71 +49,107 @@ macro_rules! joinable_struct {
 
     // ── Option<T> ────────────────────────────────────────────
     (@munch
-        meta: $meta:tt
+        source_meta: $source_meta:tt
+        result_meta: $result_meta:tt
         source: $Source:ident
         result: $Result:ident
-        ext: $Ext:ident
         classified: [ $($classified:tt)* ]
-        rest: [ $field:ident : Option < $T:ty > , $($rest:tt)* ]
+        rest: [
+            $(#[$field_meta:meta])* $vis:vis $field:ident : Option < $T:ty > ,
+            $($rest:tt)*
+        ]
     ) => {
         joinable_struct!(@munch
-            meta: $meta
+            source_meta: $source_meta
+            result_meta: $result_meta
             source: $Source
             result: $Result
-            ext: $Ext
-            classified: [ $($classified)* (option $field $T) ]
+            classified: [
+                $($classified)*
+                (option [ $(#[$field_meta])* ] [ $vis ] $field $T)
+            ]
             rest: [ $($rest)* ]
         );
     };
 
     // ── BTreeMap<K, V> ──────────────────────────────────────
     (@munch
-        meta: $meta:tt
+        source_meta: $source_meta:tt
+        result_meta: $result_meta:tt
         source: $Source:ident
         result: $Result:ident
-        ext: $Ext:ident
         classified: [ $($classified:tt)* ]
-        rest: [ $field:ident : BTreeMap < $K:ty , $V:ty > , $($rest:tt)* ]
+        rest: [
+            $(#[$field_meta:meta])* $vis:vis $field:ident : BTreeMap < $K:ty , $V:ty > ,
+            $($rest:tt)*
+        ]
     ) => {
         joinable_struct!(@munch
-            meta: $meta
+            source_meta: $source_meta
+            result_meta: $result_meta
             source: $Source
             result: $Result
-            ext: $Ext
-            classified: [ $($classified)* (map $field [ $K => $V ]) ]
+            classified: [
+                $($classified)*
+                (map [ $(#[$field_meta])* ] [ $vis ] $field [ $K => $V ])
+            ]
             rest: [ $($rest)* ]
         );
     };
 
     // ── Scalar T (catch-all; must come after Option, BTreeMap) ─
     (@munch
-        meta: $meta:tt
+        source_meta: $source_meta:tt
+        result_meta: $result_meta:tt
         source: $Source:ident
         result: $Result:ident
-        ext: $Ext:ident
         classified: [ $($classified:tt)* ]
-        rest: [ $field:ident : $T:ty , $($rest:tt)* ]
+        rest: [
+            $(#[$field_meta:meta])* $vis:vis $field:ident : $T:ty ,
+            $($rest:tt)*
+        ]
     ) => {
         joinable_struct!(@munch
-            meta: $meta
+            source_meta: $source_meta
+            result_meta: $result_meta
             source: $Source
             result: $Result
-            ext: $Ext
-            classified: [ $($classified)* (scalar $field $T) ]
+            classified: [
+                $($classified)*
+                (scalar [ $(#[$field_meta])* ] [ $vis ] $field $T)
+            ]
             rest: [ $($rest)* ]
         );
     };
 
     // ── Terminal: no more fields ─────────────────────────────
     (@munch
-        meta: [ $(#[$result_meta:meta])* ]
+        source_meta: [ $(#[$source_meta:meta])* ]
+        result_meta: [ $(#[$result_meta:meta])* ]
         source: $Source:ident
         result: $Result:ident
-        ext: $Ext:ident
-        classified: [ $( ($category:ident $field:ident $type_tokens:tt) )* ]
+        classified: [
+            $( (
+                $category:ident
+                [ $(#[$field_meta:meta])* ]
+                [ $vis:vis ]
+                $field:ident
+                $type_tokens:tt
+            ) )*
+        ]
         rest: []
     ) => {
-        // 1. Result struct
+        // 1. Source struct
+        $(#[$source_meta])*
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub struct $Source {
+            $(
+                $(#[$field_meta])*
+                $vis $field: joinable_struct!(@source_type $category $type_tokens),
+            )*
+        }
+
+        // 2. Result struct
         $(#[$result_meta])*
         #[derive(Debug, Clone, PartialEq)]
         pub struct $Result {
@@ -118,13 +158,14 @@ macro_rules! joinable_struct {
             )*
         }
 
-        // 2. Ext trait + impl
-        pub trait $Ext {
-            fn wrap(self) -> $Result;
-        }
-
-        impl $Ext for $Source {
-            fn wrap(self) -> $Result {
+        // 3. wrap
+        impl $Source {
+            #[doc = concat!(
+                "Lift into the result domain as a conflict-free [`",
+                stringify!($Result),
+                "`]."
+            )]
+            pub fn wrap(self) -> $Result {
                 $Result {
                     $(
                         $field: joinable_struct!(@wrap $category self . $field),
@@ -133,7 +174,7 @@ macro_rules! joinable_struct {
             }
         }
 
-        // 3. Join
+        // 4. Join
         impl $crate::lattice::join::Join for $Result {
             fn join(self, other: Self) -> Self {
                 $Result {
@@ -144,7 +185,7 @@ macro_rules! joinable_struct {
             }
         }
 
-        // 4. is_ok + 5. try_unwrap
+        // 5. is_ok + 6. try_unwrap
         impl $Result {
             pub fn is_ok(&self) -> bool {
                 $(
@@ -184,7 +225,17 @@ macro_rules! joinable_struct {
         }
     };
 
-    // --- Type transformation rules ---
+    // --- Type rules ---
+
+    (@source_type scalar $T:ty) => {
+        $T
+    };
+    (@source_type option $T:ty) => {
+        Option<$T>
+    };
+    (@source_type map [$K:ty => $V:ty]) => {
+        std::collections::BTreeMap<$K, $V>
+    };
 
     (@result_type scalar $T:ty) => {
         $crate::lattice::partial::JoinResult<$T>
@@ -266,18 +317,11 @@ mod tests {
 
     use crate::lattice::join::Join;
 
-    #[derive(Debug, PartialEq)]
-    pub struct Sample {
-        scalar: u8,
-        option: Option<u8>,
-        map: BTreeMap<u8, u8>,
-    }
-
     joinable_struct! {
-        /// Result-domain form of [`Sample`], one field per category.
+        /// One field per category.
         source: Sample,
+        /// Result-domain form of [`Sample`].
         result: ResultSample,
-        ext: SampleExt,
         fields: {
             scalar: u8,
             option: Option<u8>,
