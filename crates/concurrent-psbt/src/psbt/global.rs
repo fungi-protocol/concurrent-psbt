@@ -13,6 +13,8 @@
 //! enabling field-by-field merging that accumulates conflicts without short-circuiting.
 //! [`GlobalExt::wrap`] lifts a clean [`Global`] into the result domain.
 
+use std::collections::BTreeMap;
+
 use bitcoin::bip32::{KeySource, Xpub};
 use bitcoin::locktime::absolute;
 use bitcoin::transaction;
