@@ -10,6 +10,7 @@ prop-tests = []
 
 [dependencies]
 bitcoin = "0.32"
+pastey = "0.2.3"
 psbt-v2 = "0.3.0"
 rand = "0.9"
 
