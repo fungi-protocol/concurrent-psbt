@@ -3,4 +3,7 @@ mod joinable_struct_macro;
 pub(crate) mod global;
 pub mod input;
 pub mod output;
+mod tap_leaf_hashes;
 mod values;
+
+pub use tap_leaf_hashes::TapLeafHashes;
