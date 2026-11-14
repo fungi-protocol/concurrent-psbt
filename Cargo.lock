@@ -132,6 +132,7 @@ name = "concurrent-psbt"
 version = "0.1.0"
 dependencies = [
  "bitcoin",
+ "pastey",
  "proptest",
  "psbt-v2",
  "rand",
@@ -248,6 +249,12 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "pastey"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 
 [[package]]
 name = "ppv-lite86"
