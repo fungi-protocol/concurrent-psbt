@@ -40,6 +40,7 @@ joinable_struct! {
         proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
         unknowns: BTreeMap<raw::Key, Vec<u8>>,
     },
+    proprietary: {},
 }
 
 impl Default for Global {
@@ -51,7 +52,8 @@ impl Default for Global {
 /// Drops the version and the input and output counts.
 impl From<psbt_v2::v2::Global> for Global {
     fn from(global: psbt_v2::v2::Global) -> Self {
-        Self::from_v2_fields(global)
+        let Ok(global) = Self::decode_v2::<std::convert::Infallible>(global);
+        global
     }
 }
 
