@@ -40,6 +40,11 @@ impl OutputSet {
         self.0.set().is_empty()
     }
 
+    /// Iterate over the outputs, in no particular order.
+    pub(crate) fn values(&self) -> impl Iterator<Item = &Output> {
+        self.0.set().values()
+    }
+
     pub fn wrap(self) -> ResultOutputSet {
         ResultOutputSet(self.0.wrap(Output::wrap))
     }

@@ -9,6 +9,13 @@ mod values;
 mod collections;
 #[macro_use]
 mod psbt;
+pub mod roles;
+#[cfg(all(test, feature = "unit-tests"))]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod test_support;
+
+pub use roles::sorter;
+pub use roles::sorter as sort;
 
 pub use lattice::join::{Join, JoinMut};
 pub use lattice::partial::{Conflict, JoinResult, PartialJoin};
