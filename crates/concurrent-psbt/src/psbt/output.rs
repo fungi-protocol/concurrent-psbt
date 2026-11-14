@@ -1,5 +1,12 @@
 #![allow(clippy::result_large_err)]
 
+//! Per-output field type and output set merging.
+//!
+//! [`ResultOutput`] wraps each per-output field in the internal result domain.
+//! [`OutputSet`] and [`ResultOutputSet`] are sets of outputs identified by their
+//! [`UniqueId`]. Joining two sets joins the outputs that have the same unique ID
+//! field by field, and fields that differ become conflicts.
+
 use std::collections::BTreeMap;
 
 use bitcoin::bip32::KeySource;
@@ -100,13 +107,13 @@ impl From<Output> for psbt_v2::v2::Output {
 
 /// Opaque byte-vector identifier for a PSBT output.
 ///
-/// Computed from the `PSBT_OUT_UNIQUE_ID` proprietary field, keyed by subtype
-/// [`PSBT_OUT_UNIQUE_ID_SUBTYPE`]. Used as the map key in `OutputSet`
-/// so that outputs can be merged in an order-independent way.
+/// Stored in the `PSBT_OUT_UNIQUE_ID` proprietary field, subtype
+/// [`PSBT_OUT_UNIQUE_ID_SUBTYPE`]. Identifies an output within an
+/// [`OutputSet`].
 ///
-/// Built with [`TryFrom`], a unique ID is 1 to [`UniqueId::MAX_LEN`] bytes
-/// long, as is one read from a BIP 370 output. An empty ID would make
-/// unrelated outputs join as one.
+/// A unique ID built with [`TryFrom`] or read from a BIP 370 output is 1 to
+/// [`UniqueId::MAX_LEN`] bytes long. An empty ID would make unrelated outputs
+/// join as one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UniqueId(Vec<u8>);
 
@@ -217,6 +224,8 @@ impl OutputUniqueIdExt for psbt_v2::v2::Output {
         );
     }
 }
+
+pub use super::output_set::{DuplicateOutput, OutputSet, ResultOutputSet};
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

@@ -11,6 +11,7 @@ pub mod input;
 )]
 mod keyed_set;
 pub mod output;
+mod output_set;
 pub(crate) mod proprietary;
 mod tap_leaf_hashes;
 mod values;
