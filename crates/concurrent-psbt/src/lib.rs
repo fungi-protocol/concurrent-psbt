@@ -6,10 +6,12 @@
 mod lattice;
 mod values;
 
+mod canonical;
 mod collections;
 #[macro_use]
 mod psbt;
 
+pub use canonical::{Canonicalizable, Canonicalization, Canonicalize, Preserve};
 pub use lattice::join::{Join, JoinMut};
 pub use lattice::partial::{Conflict, JoinResult, PartialJoin};
 pub use psbt::TapLeafHashes;

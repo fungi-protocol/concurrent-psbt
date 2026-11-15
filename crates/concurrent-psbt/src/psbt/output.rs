@@ -10,6 +10,7 @@ use psbt_v2::raw;
 
 use super::proprietary::ProprietaryField;
 use super::tap_leaf_hashes::{TapKeyOrigins, TapLeafHashes};
+use crate::canonical::{Canonicalization, Preserve};
 
 joinable_struct! {
     /// A PSBT output, mirroring the BIP 370 per-output map, identified by its
@@ -59,6 +60,17 @@ impl Output {
     pub fn unique_id(&self) -> &UniqueId {
         &self.unique_id
     }
+
+    /// Convert from a BIP 370 output, reading the unique ID from
+    /// `PSBT_OUT_UNIQUE_ID` and canonicalizing the fields as `P` says.
+    ///
+    /// # Errors
+    /// Returns [`InvalidOutput`] if the output has no valid unique ID.
+    pub fn try_from_v2<P: Canonicalization>(
+        output: psbt_v2::v2::Output,
+    ) -> Result<Self, InvalidOutput> {
+        Self::decode_v2(output).map(P::apply)
+    }
 }
 
 /// Why a BIP 370 output cannot be converted into an [`Output`].
@@ -82,12 +94,13 @@ impl std::fmt::Display for InvalidOutput {
 
 impl std::error::Error for InvalidOutput {}
 
-/// Reads the unique ID from `PSBT_OUT_UNIQUE_ID`.
+/// Reads the unique ID from `PSBT_OUT_UNIQUE_ID`, and [`Preserve`]s the
+/// fields as given.
 impl TryFrom<psbt_v2::v2::Output> for Output {
     type Error = InvalidOutput;
 
     fn try_from(output: psbt_v2::v2::Output) -> Result<Self, InvalidOutput> {
-        Self::decode_v2(output)
+        Self::try_from_v2::<Preserve>(output)
     }
 }
 
@@ -309,6 +322,8 @@ mod tests {
     #[cfg(feature = "prop-tests")]
     mod prop {
         use super::*;
+        use crate::canonical::Canonicalize;
+        use crate::psbt::tap_leaf_hashes::tests::{all_canonical, arb_v2_tap_key_origins};
         use proptest::prelude::*;
 
         fn arb_output() -> impl Strategy<Value = Output> {
@@ -344,6 +359,20 @@ mod tests {
             #[test]
             fn is_ok_iff_try_unwrap_succeeds(r in arb_result_output()) {
                 prop_assert_eq!(r.is_ok(), r.try_unwrap().is_ok());
+            }
+
+            #[test]
+            fn canonicalize_policy_decides_the_tap_key_origins(
+                o in arb_output(),
+                origins in arb_v2_tap_key_origins(),
+            ) {
+                let mut v2 = psbt_v2::v2::Output::from(o);
+                v2.tap_key_origins = origins.clone();
+                let preserved = Output::try_from(v2.clone()).expect("has a unique ID");
+                let canonical = Output::try_from_v2::<Canonicalize>(v2).expect("has a unique ID");
+                prop_assert!(all_canonical(canonical.tap_key_origins()));
+                prop_assert_eq!(&canonical, &preserved);
+                prop_assert_eq!(psbt_v2::v2::Output::from(preserved).tap_key_origins, origins);
             }
 
             #[test]
