@@ -205,6 +205,8 @@ impl crate::values::IdempotentValue for TxUuid {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortKeyDerivation {
     /// `0x00`: every input and output needs an explicit sort key.
+    /// Inputs, or outputs, with the same explicit key are ordered by their
+    /// derived keys.
     ExplicitKeysRequired,
     /// `0x01`: inputs and outputs are ordered by their derived keys alone,
     /// and explicit sort keys are not allowed.

@@ -74,6 +74,7 @@ fn hand_off<M: Modifiability>(psbt: Psbt) -> Result<M::Sorted, M::Error> {
 pub enum ExplicitKeysForbidden {}
 
 /// Sort mode: every input and output needs an explicit sort key.
+/// Inputs, or outputs, with the same key are ordered by their derived keys.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExplicitKeysRequired {}
 
@@ -113,6 +114,9 @@ pub struct Seeded<S>(PhantomData<S>, std::convert::Infallible);
 /// - the sort seed = [`SortSeedHash`] of `h || e`,
 /// - a derived sort key = [`SortKeyHash`] of the sort seed, then the input's
 ///   consensus-encoded outpoint or the output's unique ID.
+///
+/// Derived keys of distinct inputs, or outputs, differ, so explicit keys may
+/// repeat.
 ///
 /// [`UnorderedPsbt::into_psbt`] uses `HashMap` iteration order, which is
 /// intentionally non-deterministic, satisfying the spec's shuffle requirement
