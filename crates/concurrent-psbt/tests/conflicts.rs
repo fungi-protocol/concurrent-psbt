@@ -134,3 +134,25 @@ fn proprietary_sort_fields_keep_their_typed_paths() {
         [OutputField::SortKey]
     );
 }
+
+#[test]
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn transaction_uuid_conflict_retains_both_identities() {
+    use concurrent_psbt::global::{Global, TxUuid};
+    let mut a = Global::default();
+    a.set_uuid(TxUuid::try_from(vec![1; 16]).unwrap());
+    let mut b = Global::default();
+    b.set_uuid(TxUuid::try_from(vec![2; 16]).unwrap());
+    let joined = a.wrap().join(b.wrap());
+    let mut conflicts = joined.conflicts();
+    let conflict = conflicts.next().unwrap();
+    assert_eq!(conflict.path(), GlobalField::TxUuid);
+    let GlobalConflict::TxUuid { values } = conflict else {
+        panic!("transaction UUID conflict");
+    };
+    assert_eq!(
+        values.into_iter().map(TxUuid::as_bytes).collect::<Vec<_>>(),
+        [vec![1; 16], vec![2; 16]]
+    );
+    assert!(conflicts.next().is_none());
+}
