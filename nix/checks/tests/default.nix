@@ -3,6 +3,7 @@
     {
       checkArgs,
       commonArgs,
+      depsArgs,
       pkgs,
       toolchains,
       ...
@@ -13,7 +14,13 @@
         release = "release";
       };
 
-      mkDeps = profile: craneLib: craneLib.buildDepsOnly (commonArgs // { CARGO_PROFILE = profile; });
+      # Stable cargo lacks the unused_dependencies lint that depsArgs silences
+      # and warns about the unknown `lints.cargo` key instead.
+      mkDeps =
+        tcName: profile: craneLib:
+        craneLib.buildDepsOnly (
+          (if tcName != "stable" then depsArgs else commonArgs) // { CARGO_PROFILE = profile; }
+        );
 
       mkTestCheck =
         profile: craneLib: cargoArtifacts:
@@ -55,7 +62,7 @@
         pkgs.lib.concatMapAttrs (
           profName: profile:
           let
-            cargoArtifacts = mkDeps profile craneLib;
+            cargoArtifacts = mkDeps tcName profile craneLib;
           in
           {
             "tests-${tcName}-${profName}" = mkTestCheck profile craneLib cargoArtifacts;
