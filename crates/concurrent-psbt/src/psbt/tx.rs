@@ -12,9 +12,7 @@ use crate::lattice::partial::{Conflict, JoinResult, PartialJoin};
 use crate::{Conflicts, Lift, ResultWrapped};
 
 use super::conflicts::PsbtConflict;
-use super::global::{
-    Global, InvalidGlobal, InvalidTxUuid, ResultGlobal, SortKeyDerivation, SortSeed,
-};
+use super::global::{Global, InvalidGlobal, InvalidTxUuid, ResultGlobal, SortKeyDerivation};
 use super::input::{DuplicateInput, Input, InputSet, ResultInputSet, SortKey, out_point};
 use super::output::{DuplicateOutput, InvalidOutput, Output, OutputSet, ResultOutputSet, UniqueId};
 
@@ -62,9 +60,6 @@ pub enum UnorderedPsbtError {
     InvalidSortKeyDerivation(Vec<u8>),
     /// The length of `PSBT_GLOBAL_TX_UUID` is outside the allowed range.
     InvalidTxUuid(InvalidTxUuid),
-    /// `PSBT_GLOBAL_SORT_SEED` is shorter than [`SortSeed::MIN_LEN`]; this is
-    /// its length.
-    SortSeedTooShort(usize),
     /// The input spending this outpoint has a `PSBT_IN_SORT_KEY` longer than
     /// [`SortKey::MAX_LEN`].
     InputSortKeyTooLong(OutPoint),
@@ -90,9 +85,6 @@ pub enum UnorderedPsbtError {
     /// The input spending this outpoint requests a sighash other than
     /// `SIGHASH_ALL`, including Taproot `DEFAULT` or a nonstandard value.
     UnorderedInputSighashNotAll(OutPoint),
-    /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` is `0x00`, so sort keys are never
-    /// derived, but `PSBT_GLOBAL_SORT_SEED` is set.
-    UnexpectedSortSeed,
     /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` is `0x01`, so every sort key is
     /// derived, but the input spending this outpoint has a `PSBT_IN_SORT_KEY`.
     UnexpectedInputSortKey(OutPoint),
@@ -121,7 +113,6 @@ impl From<InvalidGlobal> for UnorderedPsbtError {
             InvalidGlobal::UnorderedFlag(value) => Self::InvalidUnorderedFlag(value),
             InvalidGlobal::SortKeyDerivation(value) => Self::InvalidSortKeyDerivation(value),
             InvalidGlobal::TxUuid(error) => Self::InvalidTxUuid(error),
-            InvalidGlobal::SortSeed(error) => Self::SortSeedTooShort(error.0.len()),
         }
     }
 }
@@ -154,11 +145,6 @@ impl fmt::Display for UnorderedPsbtError {
                 "PSBT_GLOBAL_SORT_KEY_DERIVATION is {value:02x?}, not 0x00 or 0x01"
             ),
             Self::InvalidTxUuid(error) => error.fmt(f),
-            Self::SortSeedTooShort(len) => write!(
-                f,
-                "PSBT_GLOBAL_SORT_SEED is {len} bytes, fewer than {}",
-                SortSeed::MIN_LEN
-            ),
             Self::InputSortKeyTooLong(outpoint) => write!(
                 f,
                 "sort key of the input spending {outpoint} is longer than {} bytes",
@@ -192,10 +178,6 @@ impl fmt::Display for UnorderedPsbtError {
                     "the input spending {outpoint} requests a sighash other than SIGHASH_ALL"
                 )
             }
-            Self::UnexpectedSortSeed => write!(
-                f,
-                "PSBT_GLOBAL_SORT_SEED is set but PSBT_GLOBAL_SORT_KEY_DERIVATION is 0x00"
-            ),
             Self::UnexpectedInputSortKey(outpoint) => write!(
                 f,
                 "the input spending {outpoint} has a sort key but PSBT_GLOBAL_SORT_KEY_DERIVATION is 0x01"
@@ -300,9 +282,8 @@ impl UnorderedPsbt {
     /// [`ResultUnorderedPsbt::try_from_psbt`].
     ///
     /// # Errors
-    /// Returns the errors of [`ResultUnorderedPsbt::try_from_psbt`]. Then
-    /// returns [`UnorderedPsbtError::UnexpectedSortSeed`] for a seed under
-    /// derivation `0x00`, then under derivation `0x01`
+    /// Returns the errors of [`ResultUnorderedPsbt::try_from_psbt`]. Then,
+    /// under derivation `0x01`, returns
     /// [`UnorderedPsbtError::UnexpectedInputSortKey`] for the smallest outpoint
     /// whose input has a sort key, or
     /// [`UnorderedPsbtError::UnexpectedOutputSortKey`] for the smallest unique
@@ -478,11 +459,10 @@ impl ResultUnorderedPsbt {
     }
 
     /// Mark the sort fields that break the rules of
-    /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` as conflicts: the seed if the
-    /// derivation may be `0x00`, every explicit sort key if it may be `0x01`,
-    /// and an explicit sort key that another input, or another output, may also
-    /// have. The derivation is marked with them, since together they are
-    /// invalid.
+    /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` as conflicts: every explicit sort key
+    /// if it may be `0x01`, and an explicit sort key that another input, or
+    /// another output, may also have. The derivation is marked with them, since
+    /// together they are invalid.
     ///
     /// The rules read the values a field may hold, which joins only add to, so
     /// a marked field stays marked under later joins. Marking keeps the values,
@@ -492,11 +472,6 @@ impl ResultUnorderedPsbt {
         let may_be =
             |derivation| values(&self.global.sort_key_derivation).any(|value| *value == derivation);
         let derived = may_be(SortKeyDerivation::ExplicitKeysForbidden);
-        let seed_broken =
-            may_be(SortKeyDerivation::ExplicitKeysRequired) && self.global.sort_seed.is_some();
-        if seed_broken {
-            mark(&mut self.global.sort_seed);
-        }
         let inputs_broken = mark_sort_keys(
             self.inputs
                 .0
@@ -511,7 +486,7 @@ impl ResultUnorderedPsbt {
                 .map(|(_, output)| &mut output.sort_key),
             derived,
         );
-        if seed_broken || inputs_broken || outputs_broken {
+        if inputs_broken || outputs_broken {
             mark(&mut self.global.sort_key_derivation);
         }
         self
@@ -523,9 +498,6 @@ impl ResultUnorderedPsbt {
     /// [`enforce_sort_rules`](Self::enforce_sort_rules) marked, each holding
     /// the one value read.
     fn sort_rule_error(&self) -> UnorderedPsbtError {
-        if matches!(self.global.sort_seed, Some(Err(_))) {
-            return UnorderedPsbtError::UnexpectedSortSeed;
-        }
         let inputs = || {
             marked_sort_keys(
                 self.inputs
@@ -676,6 +648,7 @@ mod tests {
         }
     }
     use super::*;
+    use crate::global::SortSeed;
     use crate::lattice::join::Join;
     use crate::psbt::output::OutputUniqueIdExt;
 
@@ -893,10 +866,6 @@ mod tests {
                     "PSBT_GLOBAL_SORT_KEY_DERIVATION is [02], not 0x00 or 0x01".to_string(),
                 ),
                 (
-                    UnorderedPsbtError::SortSeedTooShort(15),
-                    "PSBT_GLOBAL_SORT_SEED is 15 bytes, fewer than 16".to_string(),
-                ),
-                (
                     UnorderedPsbtError::InputSortKeyTooLong(outpoint(1)),
                     format!(
                         "sort key of the input spending {} is longer than 32 bytes",
@@ -921,11 +890,6 @@ mod tests {
                         "the input spending {} requests a sighash other than SIGHASH_ALL",
                         outpoint(1)
                     ),
-                ),
-                (
-                    UnorderedPsbtError::UnexpectedSortSeed,
-                    "PSBT_GLOBAL_SORT_SEED is set but PSBT_GLOBAL_SORT_KEY_DERIVATION is 0x00"
-                        .to_string(),
                 ),
                 (
                     UnorderedPsbtError::UnexpectedInputSortKey(outpoint(1)),
@@ -1025,10 +989,6 @@ mod tests {
                     UnorderedPsbtError::InvalidSortKeyDerivation(vec![2]),
                 ),
                 (
-                    with_global_field(crate::global::PSBT_GLOBAL_SORT_SEED_SUBTYPE, vec![0; 15]),
-                    UnorderedPsbtError::SortSeedTooShort(15),
-                ),
-                (
                     v2_psbt(vec![long_input_key], vec![]),
                     UnorderedPsbtError::InputSortKeyTooLong(outpoint(1)),
                 ),
@@ -1109,7 +1069,7 @@ mod tests {
                     global.set_sort_key_derivation(derivation);
                 }
                 if seeded {
-                    global.set_sort_seed(SortSeed::try_from(vec![0; 16]).unwrap());
+                    global.set_sort_seed(SortSeed::from(vec![0; 16]));
                 }
                 global
             };
@@ -1145,10 +1105,6 @@ mod tests {
                 (
                     v2_psbt_with(sighash_single, vec![], vec![]),
                     Err(UnorderedPsbtError::UnorderedSighashSingle),
-                ),
-                (
-                    v2_psbt_with(global(Some(ExplicitKeysRequired), true), vec![], vec![]),
-                    Err(UnorderedPsbtError::UnexpectedSortSeed),
                 ),
                 (
                     v2_psbt_with(
@@ -1193,10 +1149,11 @@ mod tests {
                     ),
                     Ok(()),
                 ),
-                // An input and an output may share a sort key.
+                // Derivation 0x00 accepts a seed, and an input and an output
+                // may share a sort key.
                 (
                     v2_psbt_with(
-                        global(Some(ExplicitKeysRequired), false),
+                        global(Some(ExplicitKeysRequired), true),
                         vec![input(1, Some(0))],
                         vec![output(1, Some(0))],
                     ),
@@ -1295,42 +1252,44 @@ mod tests {
 
         #[test]
         fn joins_that_break_the_sort_rules_mark_the_fields_that_break_them() {
-            let explicit = {
-                let mut psbt = singleton(1);
-                psbt.global
-                    .set_sort_key_derivation(SortKeyDerivation::ExplicitKeysRequired);
-                psbt.wrap()
-            };
-            let seed = SortSeed::try_from(vec![0; 16]).unwrap();
-            let seeded = {
-                let mut psbt = singleton(1);
-                psbt.global.set_sort_seed(seed.clone());
-                psbt.wrap()
-            };
-            let joined = explicit.join(seeded);
-            assert_eq!(
-                joined.global.sort_key_derivation,
-                Some(Err(Conflict::from_values([
-                    SortKeyDerivation::ExplicitKeysRequired
-                ])))
-            );
-            assert_eq!(
-                joined.global.sort_seed,
-                Some(Err(Conflict::from_values([seed])))
-            );
-            assert!(joined.clone().try_unwrap().is_err());
-
-            // Without a derivation, only the repeated keys are marked.
             let key = SortKey::try_from(vec![0]).unwrap();
             let keyed = |byte| {
                 let mut input = Input::new(&outpoint(byte));
                 input.set_sort_key(key.clone());
                 let mut psbt = singleton(byte);
                 psbt.inputs = InputSet::try_from_inputs([input]).unwrap();
+                psbt
+            };
+            let derived = {
+                let mut psbt = singleton(2);
+                psbt.global
+                    .set_sort_key_derivation(SortKeyDerivation::ExplicitKeysForbidden);
                 psbt.wrap()
             };
-            let joined = keyed(1).join(keyed(2));
+            let joined = derived.join(keyed(1).wrap());
+            assert_eq!(
+                joined.global.sort_key_derivation,
+                Some(Err(Conflict::from_values([
+                    SortKeyDerivation::ExplicitKeysForbidden
+                ])))
+            );
+            for (spent, input) in joined.inputs.0.entries() {
+                let expected =
+                    (*spent == outpoint(1)).then(|| Err(Conflict::from_values([key.clone()])));
+                assert_eq!(input.sort_key, expected);
+            }
+            assert!(joined.clone().try_unwrap().is_err());
+
+            // Without a derivation, only the repeated keys are marked, and a
+            // seed is allowed.
+            let mut seeded = keyed(2);
+            seeded.global.set_sort_seed(SortSeed::from(vec![0; 16]));
+            let joined = keyed(1).wrap().join(seeded.wrap());
             assert_eq!(joined.global.sort_key_derivation, None);
+            assert_eq!(
+                joined.global.sort_seed,
+                Some(Ok(SortSeed::from(vec![0; 16])))
+            );
             for (_, input) in joined.inputs.0.entries() {
                 assert_eq!(
                     input.sort_key,
@@ -1370,6 +1329,7 @@ mod tests {
     #[cfg(feature = "prop-tests")]
     mod prop {
         use super::*;
+        use crate::global::TxUuid;
         use bitcoin::transaction;
         use proptest::prelude::*;
 
@@ -1411,10 +1371,11 @@ mod tests {
                     Just(SortKeyDerivation::ExplicitKeysRequired),
                     Just(SortKeyDerivation::ExplicitKeysForbidden),
                 ]),
-                proptest::option::of(0u8..2), // sort seed byte
+                proptest::option::of(0u8..2), // sort seed: empty or 16 bytes
+                proptest::option::of(1u8..3), // UUID byte
             )
                 .prop_map(
-                    move |(use_v1, flags, input_specs, output_specs, derivation, seed)| {
+                    move |(use_v1, flags, input_specs, output_specs, derivation, seed, uuid)| {
                         use bitcoin::hashes::Hash;
 
                         let derivation = derivation.filter(|_| sort_fields);
@@ -1462,14 +1423,11 @@ mod tests {
                         if let Some(derivation) = derivation {
                             global.set_sort_key_derivation(derivation);
                         }
-                        let seed = seed.filter(|_| {
-                            sort_fields
-                                && derivation != Some(SortKeyDerivation::ExplicitKeysRequired)
-                        });
-                        if let Some(byte) = seed {
-                            global.set_sort_seed(
-                                SortSeed::try_from(vec![byte; 16]).expect("16 bytes"),
-                            );
+                        if let Some(len) = seed.filter(|_| sort_fields) {
+                            global.set_sort_seed(SortSeed::from(vec![len; 16 * usize::from(len)]));
+                        }
+                        if let Some(byte) = uuid.filter(|_| sort_fields) {
+                            global.set_uuid(TxUuid::try_from(vec![byte; 16]).unwrap());
                         }
                         let psbt = UnorderedPsbt {
                             global,
@@ -1592,7 +1550,6 @@ mod tests {
                     ),
                     (UnorderedPsbtError::InvalidUnorderedFlag(value.clone()), Some(bytes.clone())),
                     (UnorderedPsbtError::InvalidSortKeyDerivation(value.clone()), Some(bytes.clone())),
-                    (UnorderedPsbtError::SortSeedTooShort(len), Some(len.to_string())),
                     (UnorderedPsbtError::InputSortKeyTooLong(outpoint), Some(outpoint.to_string())),
                     (UnorderedPsbtError::MissingOutputUniqueId(index), Some(index.to_string())),
                     (UnorderedPsbtError::InvalidOutputUniqueId(index), Some(index.to_string())),
@@ -1601,7 +1558,6 @@ mod tests {
                     (UnorderedPsbtError::NotUnordered, None),
                     (UnorderedPsbtError::UnorderedSighashSingle, None),
                     (UnorderedPsbtError::UnorderedInputSighashNotAll(outpoint), Some(outpoint.to_string())),
-                    (UnorderedPsbtError::UnexpectedSortSeed, None),
                     (UnorderedPsbtError::UnexpectedInputSortKey(outpoint), Some(outpoint.to_string())),
                     (UnorderedPsbtError::UnexpectedOutputSortKey(id.clone()), Some(formatted_id.clone())),
                     (UnorderedPsbtError::DuplicateSortKey(value.clone()), Some(format!("{value:02x?}"))),
@@ -1622,7 +1578,7 @@ mod tests {
             fn malformed_sort_fields_reject_the_psbt(
                 a in arb_unordered_psbt(),
                 key_len in (SortKey::MAX_LEN + 1)..=40,
-                seed_len in 0..SortSeed::MIN_LEN,
+                derivation in 2u8..=255,
             ) {
                 let field = |subtype| psbt_v2::raw::ProprietaryKey {
                     prefix: crate::PROPRIETARY_PREFIX.to_vec(),
@@ -1644,12 +1600,13 @@ mod tests {
                     );
                 }
                 // A malformed global field is reported before any input.
-                psbt.global
-                    .proprietaries
-                    .insert(field(crate::global::PSBT_GLOBAL_SORT_SEED_SUBTYPE), vec![0; seed_len]);
+                psbt.global.proprietaries.insert(
+                    field(crate::global::PSBT_GLOBAL_SORT_KEY_DERIVATION_SUBTYPE),
+                    vec![derivation],
+                );
                 prop_assert_eq!(
                     UnorderedPsbt::try_from_psbt(psbt),
-                    Err(UnorderedPsbtError::SortSeedTooShort(seed_len))
+                    Err(UnorderedPsbtError::InvalidSortKeyDerivation(vec![derivation]))
                 );
             }
 

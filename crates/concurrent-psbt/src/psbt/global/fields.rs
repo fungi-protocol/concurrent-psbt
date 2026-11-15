@@ -65,10 +65,7 @@ impl ProprietaryField for SortSeedField {
     type Error = InvalidGlobal;
 
     fn decode(value: Option<Vec<u8>>) -> Result<Self::Value, InvalidGlobal> {
-        value
-            .map(SortSeed::try_from)
-            .transpose()
-            .map_err(InvalidGlobal::SortSeed)
+        Ok(value.map(SortSeed))
     }
 
     fn encode(seed: Self::Value) -> Option<Vec<u8>> {
