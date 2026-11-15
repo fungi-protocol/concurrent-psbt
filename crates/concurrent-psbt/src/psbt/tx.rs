@@ -103,6 +103,14 @@ pub enum UnorderedPsbtError {
     /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` is `0x01`, so every sort key is
     /// derived, but the output with this unique ID has a `PSBT_OUT_SORT_KEY`.
     UnexpectedOutputSortKey(UniqueId),
+    /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` is `0x00`, so every explicit sort key
+    /// must be non-empty, but the input spending this outpoint has an empty
+    /// `PSBT_IN_SORT_KEY`.
+    EmptyInputSortKey(OutPoint),
+    /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` is `0x00`, so every explicit sort key
+    /// must be non-empty, but the output with this unique ID has an empty
+    /// `PSBT_OUT_SORT_KEY`.
+    EmptyOutputSortKey(UniqueId),
 }
 
 impl From<DuplicateInput> for UnorderedPsbtError {
@@ -194,6 +202,15 @@ impl fmt::Display for UnorderedPsbtError {
                 "the output with unique ID {:02x?} has a sort key but PSBT_GLOBAL_SORT_KEY_DERIVATION is 0x01",
                 unique_id.as_bytes()
             ),
+            Self::EmptyInputSortKey(outpoint) => write!(
+                f,
+                "the input spending {outpoint} has an empty sort key but PSBT_GLOBAL_SORT_KEY_DERIVATION is 0x00"
+            ),
+            Self::EmptyOutputSortKey(unique_id) => write!(
+                f,
+                "the output with unique ID {:02x?} has an empty sort key but PSBT_GLOBAL_SORT_KEY_DERIVATION is 0x00",
+                unique_id.as_bytes()
+            ),
         }
     }
 }
@@ -237,15 +254,18 @@ fn mark<V: PartialJoin>(field: &mut Option<JoinResult<V>>) {
         .map(|result| result.join(Err(Conflict::from_values([]))));
 }
 
-/// Mark every sort key if `derived`, since then no key may be explicit.
-/// Return `true` if a key was marked.
+/// Mark every sort key if `derived`, since then no key may be explicit, and
+/// every key that may be empty if `explicit`, since then every key must be
+/// non-empty. Return `true` if a key was marked.
 fn mark_sort_keys<'a>(
     keys: impl Iterator<Item = &'a mut Option<JoinResult<SortKey>>>,
     derived: bool,
+    explicit: bool,
 ) -> bool {
     let mut marked = false;
     for key in keys {
-        if key.is_some() && derived {
+        let empty = || values(key).any(|key| key.as_bytes().is_empty());
+        if key.is_some() && (derived || explicit && empty()) {
             mark(key);
             marked = true;
         }
@@ -273,7 +293,11 @@ impl UnorderedPsbt {
     /// [`UnorderedPsbtError::UnexpectedInputSortKey`] for the smallest outpoint
     /// whose input has a sort key, or
     /// [`UnorderedPsbtError::UnexpectedOutputSortKey`] for the smallest unique
-    /// ID whose output has one.
+    /// ID whose output has one. Under derivation `0x00`, returns
+    /// [`UnorderedPsbtError::EmptyInputSortKey`] for the smallest outpoint
+    /// whose input has an empty sort key, or
+    /// [`UnorderedPsbtError::EmptyOutputSortKey`] for the smallest unique ID
+    /// whose output has one.
     pub fn try_from_psbt(psbt: Psbt) -> Result<Self, UnorderedPsbtError> {
         ResultUnorderedPsbt::try_from_psbt(psbt)?
             .try_unwrap()
@@ -445,8 +469,8 @@ impl ResultUnorderedPsbt {
 
     /// Mark the sort fields that break the rules of
     /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` as conflicts: every explicit sort key
-    /// if it may be `0x01`. The derivation is marked with them, since together
-    /// they are invalid.
+    /// if it may be `0x01`, and every empty one if it may be `0x00`. The
+    /// derivation is marked with them, since together they are invalid.
     ///
     /// The rules read the values a field may hold, which joins only add to, so
     /// a marked field stays marked under later joins. Marking keeps the values,
@@ -456,12 +480,14 @@ impl ResultUnorderedPsbt {
         let may_be =
             |derivation| values(&self.global.sort_key_derivation).any(|value| *value == derivation);
         let derived = may_be(SortKeyDerivation::ExplicitKeysForbidden);
+        let explicit = may_be(SortKeyDerivation::ExplicitKeysRequired);
         let inputs_broken = mark_sort_keys(
             self.inputs
                 .0
                 .entries_mut()
                 .map(|(_, input)| &mut input.sort_key),
             derived,
+            explicit,
         );
         let outputs_broken = mark_sort_keys(
             self.outputs
@@ -469,6 +495,7 @@ impl ResultUnorderedPsbt {
                 .entries_mut()
                 .map(|(_, output)| &mut output.sort_key),
             derived,
+            explicit,
         );
         if inputs_broken || outputs_broken {
             mark(&mut self.global.sort_key_derivation);
@@ -501,9 +528,13 @@ impl ResultUnorderedPsbt {
             .expect("a sort key was marked")
             .clone()
         };
-        match outpoint {
-            Some(outpoint) => UnorderedPsbtError::UnexpectedInputSortKey(outpoint),
-            None => UnorderedPsbtError::UnexpectedOutputSortKey(unique_id()),
+        let derived = values(&self.global.sort_key_derivation)
+            .any(|value| *value == SortKeyDerivation::ExplicitKeysForbidden);
+        match (derived, outpoint) {
+            (true, Some(outpoint)) => UnorderedPsbtError::UnexpectedInputSortKey(outpoint),
+            (true, None) => UnorderedPsbtError::UnexpectedOutputSortKey(unique_id()),
+            (false, Some(outpoint)) => UnorderedPsbtError::EmptyInputSortKey(outpoint),
+            (false, None) => UnorderedPsbtError::EmptyOutputSortKey(unique_id()),
         }
     }
 
@@ -875,6 +906,22 @@ mod tests {
                         [0xab; 16]
                     ),
                 ),
+                (
+                    UnorderedPsbtError::EmptyInputSortKey(outpoint(1)),
+                    format!(
+                        "the input spending {} has an empty sort key but PSBT_GLOBAL_SORT_KEY_DERIVATION is 0x00",
+                        outpoint(1)
+                    ),
+                ),
+                (
+                    UnorderedPsbtError::EmptyOutputSortKey(
+                        UniqueId::try_from(vec![0xab; 16]).unwrap(),
+                    ),
+                    format!(
+                        "the output with unique ID {:02x?} has an empty sort key but PSBT_GLOBAL_SORT_KEY_DERIVATION is 0x00",
+                        [0xab; 16]
+                    ),
+                ),
             ];
             for (error, message) in cases {
                 assert_eq!(error.to_string(), message);
@@ -1088,6 +1135,32 @@ mod tests {
                         UniqueId::try_from(vec![2; 16]).unwrap(),
                     )),
                 ),
+                (
+                    v2_psbt_with(
+                        global(Some(ExplicitKeysRequired), false),
+                        vec![
+                            input(1, Some(&[0])),
+                            input(2, Some(&[])),
+                            input(3, Some(&[])),
+                        ],
+                        vec![output(1, Some(&[]))],
+                    ),
+                    Err(UnorderedPsbtError::EmptyInputSortKey(outpoint(2))),
+                ),
+                (
+                    v2_psbt_with(
+                        global(Some(ExplicitKeysRequired), true),
+                        vec![input(1, Some(&[0]))],
+                        vec![
+                            output(1, Some(&[0])),
+                            output(3, Some(&[])),
+                            output(2, Some(&[])),
+                        ],
+                    ),
+                    Err(UnorderedPsbtError::EmptyOutputSortKey(
+                        UniqueId::try_from(vec![2; 16]).unwrap(),
+                    )),
+                ),
                 // Derivation 0x01 accepts entries without explicit keys.
                 (
                     v2_psbt_with(
@@ -1098,12 +1171,12 @@ mod tests {
                     Ok(()),
                 ),
                 // Derivation 0x00 accepts a seed, missing keys, which may be
-                // added later, empty keys, and keys that repeat.
+                // added later, and keys that repeat.
                 (
                     v2_psbt_with(
                         global(Some(ExplicitKeysRequired), true),
                         vec![input(1, Some(&[0])), input(2, Some(&[0])), input(3, None)],
-                        vec![output(1, Some(&[])), output(2, Some(&[]))],
+                        vec![output(1, Some(&[0])), output(2, Some(&[0]))],
                     ),
                     Ok(()),
                 ),
@@ -1217,17 +1290,17 @@ mod tests {
                 psbt.inputs = InputSet::try_from_inputs([input]).unwrap();
                 psbt
             };
-            let derived = {
+            let explicit = {
                 let mut psbt = singleton(2);
                 psbt.global
-                    .set_sort_key_derivation(SortKeyDerivation::ExplicitKeysForbidden);
+                    .set_sort_key_derivation(SortKeyDerivation::ExplicitKeysRequired);
                 psbt.wrap()
             };
-            let joined = derived.join(keyed(1, &empty_key).wrap());
+            let joined = explicit.join(keyed(1, &empty_key).wrap());
             assert_eq!(
                 joined.global.sort_key_derivation,
                 Some(Err(Conflict::from_values([
-                    SortKeyDerivation::ExplicitKeysForbidden
+                    SortKeyDerivation::ExplicitKeysRequired
                 ])))
             );
             for (spent, input) in joined.inputs.0.entries() {
@@ -1293,7 +1366,7 @@ mod tests {
         }
 
         /// The sort key drawn as `key`, empty for `0`, if `derivation` allows
-        /// it: none under `0x01`.
+        /// it: none under `0x01`, and no empty one under `0x00`.
         fn allowed_key(
             sort_fields: bool,
             derivation: Option<SortKeyDerivation>,
@@ -1304,7 +1377,9 @@ mod tests {
                         sort_fields && derivation != Some(SortKeyDerivation::ExplicitKeysForbidden)
                     })
                     .map(|key| if key == 0 { vec![] } else { vec![key] })?;
-                Some(SortKey::try_from(key).expect("at most one byte"))
+                let empty_forbidden = derivation == Some(SortKeyDerivation::ExplicitKeysRequired);
+                (!(empty_forbidden && key.is_empty()))
+                    .then(|| SortKey::try_from(key).expect("at most one byte"))
             }
         }
 
@@ -1510,6 +1585,8 @@ mod tests {
                     (UnorderedPsbtError::UnorderedInputSighashSingle(outpoint), Some(outpoint.to_string())),
                     (UnorderedPsbtError::UnexpectedInputSortKey(outpoint), Some(outpoint.to_string())),
                     (UnorderedPsbtError::UnexpectedOutputSortKey(id.clone()), Some(formatted_id.clone())),
+                    (UnorderedPsbtError::EmptyInputSortKey(outpoint), Some(outpoint.to_string())),
+                    (UnorderedPsbtError::EmptyOutputSortKey(id.clone()), Some(formatted_id.clone())),
                     // The unique ID is opaque bytes, so the message leaves it out.
                     (UnorderedPsbtError::DuplicateOutputUniqueId(id), None),
                 ];
@@ -1606,9 +1683,10 @@ mod tests {
                 prop_assert_eq!(ResultUnorderedPsbt::try_from_psbt(psbt).map(|_| ()), expected);
             }
 
-            /// Under derivation `0x01` the smallest entry with a sort key is
-            /// rejected. Otherwise keys may be empty or repeat. Entry `i` spends
-            /// output `i` of the null txid or has unique ID `[i; 16]`, so the
+            /// Under derivation `0x01` the smallest entry with a sort key, and
+            /// under `0x00` the smallest with an empty one, is rejected. Keys
+            /// may repeat, and without a derivation anything goes. Entry `i`
+            /// spends output `i` of the null txid or has unique ID `[i; 16]`, so the
             /// smallest is the first.
             #[test]
             fn try_from_psbt_rejects_the_smallest_entry_breaking_the_sort_rules(
@@ -1619,8 +1697,10 @@ mod tests {
                 ]),
                 on_outputs in proptest::bool::ANY,
             ) {
-                let breaks = |key: &Option<usize>| {
-                    derivation == Some(SortKeyDerivation::ExplicitKeysForbidden) && key.is_some()
+                let breaks = |key: &Option<usize>| match derivation {
+                    Some(SortKeyDerivation::ExplicitKeysForbidden) => key.is_some(),
+                    Some(SortKeyDerivation::ExplicitKeysRequired) => *key == Some(0),
+                    None => false,
                 };
                 let first = keys.iter().position(breaks);
                 let sort_key = |len| SortKey::try_from(vec![7; len]).expect("at most two bytes");
@@ -1644,7 +1724,11 @@ mod tests {
                         })
                         .collect();
                     let expected = first.map(|index| {
-                        UnorderedPsbtError::UnexpectedOutputSortKey(UniqueId::try_from(vec![index as u8; 16]).unwrap())
+                        let unique_id = UniqueId::try_from(vec![index as u8; 16]).unwrap();
+                        match derivation {
+                            Some(SortKeyDerivation::ExplicitKeysForbidden) => UnorderedPsbtError::UnexpectedOutputSortKey(unique_id),
+                            _ => UnorderedPsbtError::EmptyOutputSortKey(unique_id),
+                        }
                     });
                     (v2_psbt_with(global, vec![], outputs), expected)
                 } else {
@@ -1658,7 +1742,11 @@ mod tests {
                         })
                         .collect();
                     let expected = first.map(|index| {
-                        UnorderedPsbtError::UnexpectedInputSortKey(OutPoint { vout: index as u32, ..OutPoint::null() })
+                        let outpoint = OutPoint { vout: index as u32, ..OutPoint::null() };
+                        match derivation {
+                            Some(SortKeyDerivation::ExplicitKeysForbidden) => UnorderedPsbtError::UnexpectedInputSortKey(outpoint),
+                            _ => UnorderedPsbtError::EmptyInputSortKey(outpoint),
+                        }
                     });
                     (v2_psbt_with(global, inputs, vec![]), expected)
                 };

@@ -216,13 +216,13 @@ impl crate::values::IdempotentValue for TxUuid {}
 /// Subtype for `PSBT_GLOBAL_SORT_KEY_DERIVATION`.
 ///
 /// `0x01` = explicit sort keys MUST NOT be set.
-/// `0x00` = explicit sort keys required.
+/// `0x00` = non-empty explicit sort keys required.
 pub const PSBT_GLOBAL_SORT_KEY_DERIVATION_SUBTYPE: u8 = 0x12;
 
 /// A `PSBT_GLOBAL_SORT_KEY_DERIVATION` value: where sort keys come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortKeyDerivation {
-    /// `0x00`: every input and output needs an explicit sort key.
+    /// `0x00`: every input and output needs a non-empty explicit sort key.
     /// Inputs, or outputs, with the same explicit key are ordered by their
     /// derived keys.
     ExplicitKeysRequired,
