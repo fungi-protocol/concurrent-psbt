@@ -494,8 +494,9 @@ impl ResultUnorderedPsbt {
     fn enforce_sort_rules(mut self) -> Self {
         let may_be =
             |derivation| values(&self.global.sort_key_derivation).any(|value| *value == derivation);
-        let derived = may_be(SortKeyDerivation::Derived);
-        let seed_broken = may_be(SortKeyDerivation::Explicit) && self.global.sort_seed.is_some();
+        let derived = may_be(SortKeyDerivation::ExplicitKeysForbidden);
+        let seed_broken =
+            may_be(SortKeyDerivation::ExplicitKeysRequired) && self.global.sort_seed.is_some();
         if seed_broken {
             mark(&mut self.global.sort_seed);
         }
@@ -545,7 +546,7 @@ impl ResultUnorderedPsbt {
             )
         };
         if values(&self.global.sort_key_derivation)
-            .any(|value| *value == SortKeyDerivation::Derived)
+            .any(|value| *value == SortKeyDerivation::ExplicitKeysForbidden)
         {
             return match inputs().map(|(outpoint, _)| *outpoint).min() {
                 Some(outpoint) => UnorderedPsbtError::UnexpectedInputSortKey(outpoint),
@@ -1071,7 +1072,7 @@ mod tests {
 
         #[test]
         fn psbts_that_break_the_sort_rules_are_rejected() {
-            use SortKeyDerivation::{Derived, Explicit};
+            use SortKeyDerivation::{ExplicitKeysForbidden, ExplicitKeysRequired};
 
             let global = |derivation: Option<SortKeyDerivation>, seeded: bool| {
                 let mut global = Global::default();
@@ -1117,12 +1118,12 @@ mod tests {
                     Err(UnorderedPsbtError::UnorderedSighashSingle),
                 ),
                 (
-                    v2_psbt_with(global(Some(Explicit), true), vec![], vec![]),
+                    v2_psbt_with(global(Some(ExplicitKeysRequired), true), vec![], vec![]),
                     Err(UnorderedPsbtError::UnexpectedSortSeed),
                 ),
                 (
                     v2_psbt_with(
-                        global(Some(Derived), true),
+                        global(Some(ExplicitKeysForbidden), true),
                         vec![input(1, None), input(2, Some(0))],
                         vec![],
                     ),
@@ -1130,7 +1131,7 @@ mod tests {
                 ),
                 (
                     v2_psbt_with(
-                        global(Some(Derived), true),
+                        global(Some(ExplicitKeysForbidden), true),
                         vec![],
                         vec![output(1, None), output(2, Some(0))],
                     ),
@@ -1140,7 +1141,7 @@ mod tests {
                 ),
                 (
                     v2_psbt_with(
-                        global(Some(Explicit), false),
+                        global(Some(ExplicitKeysRequired), false),
                         vec![input(1, Some(0)), input(2, Some(0))],
                         vec![],
                     ),
@@ -1148,7 +1149,7 @@ mod tests {
                 ),
                 (
                     v2_psbt_with(
-                        global(Some(Explicit), false),
+                        global(Some(ExplicitKeysRequired), false),
                         vec![],
                         vec![output(1, Some(0)), output(2, Some(0))],
                     ),
@@ -1157,7 +1158,7 @@ mod tests {
                 // Seeded derivation accepts entries without explicit keys.
                 (
                     v2_psbt_with(
-                        global(Some(Derived), true),
+                        global(Some(ExplicitKeysForbidden), true),
                         vec![input(1, None)],
                         vec![output(1, None)],
                     ),
@@ -1166,7 +1167,7 @@ mod tests {
                 // An input and an output may share a sort key.
                 (
                     v2_psbt_with(
-                        global(Some(Explicit), false),
+                        global(Some(ExplicitKeysRequired), false),
                         vec![input(1, Some(0))],
                         vec![output(1, Some(0))],
                     ),
@@ -1268,7 +1269,7 @@ mod tests {
             let explicit = {
                 let mut psbt = singleton(1);
                 psbt.global
-                    .set_sort_key_derivation(SortKeyDerivation::Explicit);
+                    .set_sort_key_derivation(SortKeyDerivation::ExplicitKeysRequired);
                 psbt.wrap()
             };
             let seed = SortSeed::try_from(vec![0; 16]).unwrap();
@@ -1280,7 +1281,9 @@ mod tests {
             let joined = explicit.join(seeded);
             assert_eq!(
                 joined.global.sort_key_derivation,
-                Some(Err(Conflict::from_values([SortKeyDerivation::Explicit])))
+                Some(Err(Conflict::from_values([
+                    SortKeyDerivation::ExplicitKeysRequired
+                ])))
             );
             assert_eq!(
                 joined.global.sort_seed,
@@ -1376,8 +1379,8 @@ mod tests {
                 // outputs: uid_byte to sort key
                 proptest::collection::hash_map(0u8..10, proptest::option::of(0u8..3), 0..=3),
                 proptest::option::of(prop_oneof![
-                    Just(SortKeyDerivation::Explicit),
-                    Just(SortKeyDerivation::Derived),
+                    Just(SortKeyDerivation::ExplicitKeysRequired),
+                    Just(SortKeyDerivation::ExplicitKeysForbidden),
                 ]),
                 proptest::option::of(0u8..2), // sort seed byte
             )
@@ -1386,8 +1389,8 @@ mod tests {
                         use bitcoin::hashes::Hash;
 
                         let derivation = derivation.filter(|_| sort_fields);
-                        let no_keys =
-                            !sort_fields || derivation == Some(SortKeyDerivation::Derived);
+                        let no_keys = !sort_fields
+                            || derivation == Some(SortKeyDerivation::ExplicitKeysForbidden);
 
                         let mut input_key = distinct_keys(no_keys);
                         let inputs = InputSet::try_from_inputs(input_specs.into_iter().map(
@@ -1431,7 +1434,8 @@ mod tests {
                             global.set_sort_key_derivation(derivation);
                         }
                         let seed = seed.filter(|_| {
-                            sort_fields && derivation != Some(SortKeyDerivation::Explicit)
+                            sort_fields
+                                && derivation != Some(SortKeyDerivation::ExplicitKeysRequired)
                         });
                         if let Some(byte) = seed {
                             global.set_sort_seed(
