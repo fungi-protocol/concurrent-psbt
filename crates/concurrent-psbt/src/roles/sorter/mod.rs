@@ -73,7 +73,7 @@ fn hand_off<M: Modifiability>(psbt: Psbt) -> Result<M::Sorted, M::Error> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExplicitKeysForbidden {}
 
-/// Sort mode: every input and output needs an explicit sort key.
+/// Sort mode: every input and output needs a non-empty explicit sort key.
 /// Inputs, or outputs, with the same key are ordered by their derived keys.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExplicitKeysRequired {}
@@ -800,12 +800,12 @@ mod tests {
             )
         }
 
-        /// The sort key an item has in `mode`: the key in the explicit mode,
-        /// the key if the item carries it in the mixed mode, and none in the
-        /// derived mode.
+        /// The sort key an item has in `mode`: a non-empty one in the explicit
+        /// mode, as derivation `0x00` requires, the key if the item carries it
+        /// in the mixed mode, and none in the derived mode.
         fn explicit_key(mode: Mode, key: &[u8], carried: bool) -> Option<SortKey> {
             match mode {
-                Mode::ExplicitKeysRequired => Some(key.to_vec()),
+                Mode::ExplicitKeysRequired => Some([&[1u8][..], key].concat()),
                 Mode::Mixed => carried.then(|| key.to_vec()),
                 Mode::ExplicitKeysForbidden => None,
             }
