@@ -17,6 +17,8 @@ use bitcoin::transaction;
 
 use psbt_v2::raw;
 
+use crate::canonical::{Canonicalization, Preserve};
+
 joinable_struct! {
     /// The global fields of a PSBT.
     ///
@@ -49,15 +51,22 @@ impl Default for Global {
     }
 }
 
-/// Drops the version and the input and output counts.
+/// Drops the version and the input and output counts, and [`Preserve`]s the
+/// fields as given.
 impl From<psbt_v2::v2::Global> for Global {
     fn from(global: psbt_v2::v2::Global) -> Self {
-        let Ok(global) = Self::decode_v2::<std::convert::Infallible>(global);
-        global
+        Self::from_v2::<Preserve>(global)
     }
 }
 
 impl Global {
+    /// Convert from a BIP 370 global map, dropping the version and the input
+    /// and output counts, and canonicalizing the fields as `P` says.
+    pub fn from_v2<P: Canonicalization>(global: psbt_v2::v2::Global) -> Self {
+        let Ok(global) = Self::decode_v2::<std::convert::Infallible>(global);
+        P::apply(global)
+    }
+
     /// Convert to a BIP 370 global map for a PSBT with `input_count` inputs
     /// and `output_count` outputs.
     pub(crate) fn into_v2(self, input_count: usize, output_count: usize) -> psbt_v2::v2::Global {
@@ -119,6 +128,8 @@ mod tests {
         use bitcoin::bip32::{DerivationPath, Xpriv};
         use bitcoin::secp256k1::Secp256k1;
         use proptest::prelude::*;
+
+        use crate::canonical::Canonicalize;
 
         fn arb_proprietary_key() -> impl Strategy<Value = raw::ProprietaryKey> {
             (
@@ -205,6 +216,12 @@ mod tests {
                 prop_assert_eq!(v2.version, psbt_v2::Version::TWO);
                 prop_assert_eq!((v2.input_count, v2.output_count), (input_count, output_count));
                 prop_assert_eq!(Global::from(v2), a);
+            }
+
+            #[test]
+            fn canonicalize_policy_keeps_the_global_fields(a in arb_global()) {
+                let v2 = a.clone().into_v2(0, 0);
+                prop_assert_eq!(Global::from_v2::<Canonicalize>(v2), a);
             }
 
             #[test]

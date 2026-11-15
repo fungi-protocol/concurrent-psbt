@@ -7,6 +7,8 @@ pub(crate) trait MirroredField {
     type Value;
     /// Convert from the psbt-v2 field.
     fn from_v2(value: Self::V2) -> Self::Value;
+    /// Put a converted value into its canonical form.
+    fn canonicalize(value: &mut Self::Value);
     /// Convert into the psbt-v2 field.
     fn into_v2(value: Self::Value) -> Self::V2;
 }
@@ -37,7 +39,12 @@ pub(crate) trait MirroredField {
 ///
 /// Each entry in `fields` mirrors the field of the same name in the `v2` type.
 /// If the two types differ, an `=` after the type names the [`MirroredField`]
-/// that converts between them. Each entry in `proprietary` is written
+/// that converts between them, and canonicalizes the field when the struct
+/// is [`Canonicalizable::canonicalize`](crate::Canonicalizable::canonicalize)d;
+/// other fields have a single representation. The field itself is private: its visibility
+/// applies to a getter of the same name and a `set_` setter, so the
+/// representation can change, and invariants can be added, without breaking
+/// callers. Each entry in `proprietary` is written
 /// `name: Type = Codec`, and is stored in a proprietary key of `v2` by the
 /// [`ProprietaryField`](crate::psbt::proprietary::ProprietaryField) impl
 /// `Codec`. The struct then has private conversions:
@@ -49,6 +56,8 @@ pub(crate) trait MirroredField {
 /// - `encode_v2(self, base)` moves the mirrored fields into `base` and
 ///   encodes the proprietary fields into its proprietary keys. Fields of
 ///   `base` that are not mirrored are kept.
+///
+/// The struct is [`Canonicalizable`](crate::Canonicalizable).
 macro_rules! joinable_struct {
     (
         $(#[$source_meta:meta])*
@@ -133,6 +142,18 @@ macro_rules! joinable_struct {
                 base
             }
         }
+
+        impl $crate::Canonicalizable for $Source {
+            fn canonicalize(&mut self) {
+                $( joinable_struct!(@canonicalize self.$field $(, $Conversion)?); )+
+            }
+        }
+    };
+
+    (@canonicalize $value:expr) => {};
+
+    (@canonicalize $value:expr, $Conversion:ty) => {
+        <$Conversion as $crate::psbt::joinable_struct_macro::MirroredField>::canonicalize(&mut $value)
     };
 
     (@from_v2 $value:expr) => {

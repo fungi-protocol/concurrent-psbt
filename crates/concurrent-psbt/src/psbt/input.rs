@@ -19,6 +19,7 @@ use psbt_v2::PsbtSighashType;
 use psbt_v2::raw;
 
 use super::tap_leaf_hashes::{TapKeyOrigins, TapLeafHashes};
+use crate::canonical::{Canonicalization, Preserve};
 
 joinable_struct! {
     /// A PSBT input, mirroring the BIP 370 per-input map.
@@ -67,12 +68,18 @@ impl Input {
     pub fn new(outpoint: &OutPoint) -> Self {
         Self::from_v2_fields(psbt_v2::v2::Input::new(outpoint))
     }
+
+    /// Convert from a BIP 370 input, canonicalizing the fields as `P` says.
+    pub fn from_v2<P: Canonicalization>(input: psbt_v2::v2::Input) -> Self {
+        let Ok(input) = Self::decode_v2::<std::convert::Infallible>(input);
+        P::apply(input)
+    }
 }
 
+/// [`Preserve`]s the fields as given.
 impl From<psbt_v2::v2::Input> for Input {
     fn from(input: psbt_v2::v2::Input) -> Self {
-        let Ok(input) = Self::decode_v2::<std::convert::Infallible>(input);
-        input
+        Self::from_v2::<Preserve>(input)
     }
 }
 
@@ -268,6 +275,8 @@ pub(crate) mod tests {
     #[cfg(feature = "prop-tests")]
     pub(crate) mod prop {
         use super::*;
+        use crate::canonical::Canonicalize;
+        use crate::psbt::tap_leaf_hashes::tests::{all_canonical, arb_v2_tap_key_origins};
         use bitcoin::hashes::Hash;
         use proptest::prelude::*;
 
@@ -338,7 +347,7 @@ pub(crate) mod tests {
 
         proptest! {
             #[test]
-            fn wrap_try_unwrap_roundtrip(i in prop_oneof![arb_input(), arb_input_with_fields()]) {
+            fn wrap_try_unwrap_roundtrip(i in arb_input_with_fields()) {
                 prop_assert_eq!(i.clone().wrap().try_unwrap(), Ok(i));
             }
 
@@ -352,6 +361,23 @@ pub(crate) mod tests {
                 prop_assert_eq!(r.conflicts().next().is_none(), r.is_ok());
                 prop_assert_eq!(r.is_ok(), r.try_unwrap().is_ok());
             }
+        }
+
+        proptest! {
+            #[test]
+            fn canonicalize_policy_decides_the_tap_key_origins(
+                i in arb_input(),
+                origins in arb_v2_tap_key_origins(),
+            ) {
+                let mut v2 = psbt_v2::v2::Input::from(i);
+                v2.tap_key_origins = origins.clone();
+                let preserved = Input::from(v2.clone());
+                let canonical = Input::from_v2::<Canonicalize>(v2);
+                prop_assert!(all_canonical(canonical.tap_key_origins()));
+                prop_assert_eq!(&canonical, &preserved);
+                prop_assert_eq!(psbt_v2::v2::Input::from(preserved).tap_key_origins, origins);
+            }
+
         }
 
         assert_join_laws!(arb_result_input());

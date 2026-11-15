@@ -19,3 +19,6 @@ pub use psbt::output;
 pub use lattice::conflicts::Conflicts;
 pub use lattice::lift::{Lift, ResultWrapped};
 pub use psbt::global;
+
+pub mod canonical;
+pub use canonical::{Canonicalizable, Canonicalization, Canonicalize, Preserve};
