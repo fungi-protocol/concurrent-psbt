@@ -52,18 +52,18 @@ fn hand_off<M: Modifiability>(psbt: Psbt) -> Result<M::Sorted, M::Error> {
 /// order before signing. Observers on Bitcoin's peer-to-peer network receive
 /// the ordered transaction without the PSBT seed.
 #[derive(Debug, Clone, PartialEq)]
-pub enum DerivedOnly {}
+pub enum ExplicitKeysForbidden {}
 
 /// Sort mode: ordering determined by explicit sort key fields on each input/output.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ExplicitOnly {}
+pub enum ExplicitKeysRequired {}
 
 /// Sort mode: explicit sort keys where present, the rest derived from the
 /// sort seed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mixed {}
 
-/// Sort mode refinement: [`DerivedOnly`] or [`Mixed`] with
+/// Sort mode refinement: [`ExplicitKeysForbidden`] or [`Mixed`] with
 /// `PSBT_GLOBAL_SORT_SEED` known to be set.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Seeded<S>(PhantomData<S>, std::convert::Infallible);
@@ -75,8 +75,9 @@ pub struct Seeded<S>(PhantomData<S>, std::convert::Infallible);
 /// may still be added, the [`Updater`](psbt_v2::v2::Updater) once neither
 /// may.
 ///
-/// `S` is the sort mode: [`Mixed`], [`DerivedOnly`], or [`ExplicitOnly`], or
-/// [`Seeded`] `Mixed` or `DerivedOnly` once the sort seed is known to be set.
+/// `S` is the sort mode: [`Mixed`], [`ExplicitKeysForbidden`], or
+/// [`ExplicitKeysRequired`], or [`Seeded`] `Mixed` or `ExplicitKeysForbidden`
+/// once the sort seed is known to be set.
 ///
 /// # Ordering
 ///
@@ -189,7 +190,7 @@ impl<M: Modifiability> Sorter<M, Seeded<Mixed>> {
     }
 }
 
-impl<M: Modifiability> Sorter<M, DerivedOnly> {
+impl<M: Modifiability> Sorter<M, ExplicitKeysForbidden> {
     /// Join `seed` into `PSBT_GLOBAL_SORT_SEED`: set it if unset, and keep it
     /// if it is already `seed`.
     ///
@@ -199,7 +200,7 @@ impl<M: Modifiability> Sorter<M, DerivedOnly> {
     pub fn try_set_seed(
         self,
         seed: SortSeed,
-    ) -> Result<Sorter<M, Seeded<DerivedOnly>>, SeedConflict> {
+    ) -> Result<Sorter<M, Seeded<ExplicitKeysForbidden>>, SeedConflict> {
         self.try_with_seed(seed)
     }
 
@@ -210,9 +211,10 @@ impl<M: Modifiability> Sorter<M, DerivedOnly> {
     /// set.
     pub fn try_into_ordered_psbt(self) -> Result<Psbt, SortError> {
         match self.0.global.sort_seed() {
-            Some(_) => {
-                Ok(Sorter::<M, Seeded<DerivedOnly>>::from_unordered(self.0).into_ordered_psbt())
-            }
+            Some(_) => Ok(
+                Sorter::<M, Seeded<ExplicitKeysForbidden>>::from_unordered(self.0)
+                    .into_ordered_psbt(),
+            ),
             None => Err(SortError::MissingSortSeed),
         }
     }
@@ -229,7 +231,7 @@ impl<M: Modifiability> Sorter<M, DerivedOnly> {
     }
 }
 
-impl<M: Modifiability> Sorter<M, Seeded<DerivedOnly>> {
+impl<M: Modifiability> Sorter<M, Seeded<ExplicitKeysForbidden>> {
     /// Apply deterministic ordering: derive sort keys from the seed, sort,
     /// and produce an ordered BIP 370 [`Psbt`].
     ///
@@ -264,7 +266,7 @@ impl<M: Modifiability> Sorter<M, Seeded<DerivedOnly>> {
     }
 }
 
-impl<M: Modifiability> Sorter<M, ExplicitOnly> {
+impl<M: Modifiability> Sorter<M, ExplicitKeysRequired> {
     /// Apply explicit ordering: sort by the `PSBT_IN_SORT_KEY` and
     /// `PSBT_OUT_SORT_KEY` fields, and produce an ordered BIP 370 [`Psbt`].
     ///
@@ -301,9 +303,10 @@ pub(crate) mod sealed {
 }
 
 /// A sort mode that a PSBT's sort fields select: [`Mixed`] if
-/// `PSBT_GLOBAL_SORT_KEY_DERIVATION` is unset, [`DerivedOnly`] if it is
-/// `0x01`, [`ExplicitOnly`] if it is `0x00`, and [`Seeded`] [`Mixed`] or
-/// [`DerivedOnly`] if `PSBT_GLOBAL_SORT_SEED` is set too.
+/// `PSBT_GLOBAL_SORT_KEY_DERIVATION` is unset, [`ExplicitKeysForbidden`] if it
+/// is `0x01`, [`ExplicitKeysRequired`] if it is `0x00`, and [`Seeded`]
+/// [`Mixed`] or [`ExplicitKeysForbidden`] if `PSBT_GLOBAL_SORT_SEED` is set
+/// too.
 pub trait SortMode: sealed::SortMode {}
 
 macro_rules! sort_mode {
@@ -320,15 +323,15 @@ macro_rules! sort_mode {
 sort_mode! {
     Mixed => None, false;
     Seeded<Mixed> => None, true;
-    DerivedOnly => Some(SortKeyDerivation::Derived), false;
-    Seeded<DerivedOnly> => Some(SortKeyDerivation::Derived), true;
-    ExplicitOnly => Some(SortKeyDerivation::Explicit), false;
+    ExplicitKeysForbidden => Some(SortKeyDerivation::ExplicitKeysForbidden), false;
+    Seeded<ExplicitKeysForbidden> => Some(SortKeyDerivation::ExplicitKeysForbidden), true;
+    ExplicitKeysRequired => Some(SortKeyDerivation::ExplicitKeysRequired), false;
 }
 
 /// Check that `psbt`'s sort fields select sort mode `S`. Besides matching
 /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` and requiring a seed in a [`Seeded`] mode,
-/// an [`ExplicitOnly`] PSBT must have no sort seed and a [`DerivedOnly`] one no
-/// sort keys, since neither would be used.
+/// an [`ExplicitKeysRequired`] PSBT must have no sort seed and an
+/// [`ExplicitKeysForbidden`] one no sort keys, since neither would be used.
 ///
 /// # Errors
 /// Returns the first [`SortModeError`] in that order.
@@ -350,8 +353,12 @@ pub(crate) fn check_sort_mode<S: SortMode>(psbt: &UnorderedPsbt) -> Result<(), S
     };
     match S::SORT_KEY_DERIVATION {
         _ if S::SEEDED && !seeded => Err(SortModeError::MissingSortSeed),
-        Some(SortKeyDerivation::Explicit) if seeded => Err(SortModeError::UnexpectedSortSeed),
-        Some(SortKeyDerivation::Derived) if sort_keyed() => Err(SortModeError::UnexpectedSortKey),
+        Some(SortKeyDerivation::ExplicitKeysRequired) if seeded => {
+            Err(SortModeError::UnexpectedSortSeed)
+        }
+        Some(SortKeyDerivation::ExplicitKeysForbidden) if sort_keyed() => {
+            Err(SortModeError::UnexpectedSortKey)
+        }
         _ => Ok(()),
     }
 }
@@ -469,14 +476,15 @@ mod tests {
 
         /// Each row is a PSBT's sort key derivation, whether it has a seed and
         /// which entry has a sort key, then what `Mixed`, `Seeded<Mixed>`,
-        /// `DerivedOnly`, `Seeded<DerivedOnly>` and `ExplicitOnly` do with it.
+        /// `ExplicitKeysForbidden`, `Seeded<ExplicitKeysForbidden>` and
+        /// `ExplicitKeysRequired` do with it.
         #[test]
         fn the_sort_fields_select_the_sort_mode() {
             use Outcome::{Admits, KeyForbidden, MissingSeed, SeedForbidden, Wants};
             use SortKeyOn as K;
             const U: Option<SortKeyDerivation> = None;
-            const D: Option<SortKeyDerivation> = Some(SortKeyDerivation::Derived);
-            const E: Option<SortKeyDerivation> = Some(SortKeyDerivation::Explicit);
+            const D: Option<SortKeyDerivation> = Some(SortKeyDerivation::ExplicitKeysForbidden);
+            const E: Option<SortKeyDerivation> = Some(SortKeyDerivation::ExplicitKeysRequired);
 
             #[rustfmt::skip]
             let rows = [
@@ -516,13 +524,16 @@ mod tests {
                     Sorter::<Unmodifiable, Mixed>::try_from_unordered_psbt(psbt.clone()).err(),
                     Sorter::<Unmodifiable, Seeded<Mixed>>::try_from_unordered_psbt(psbt.clone())
                         .err(),
-                    Sorter::<Unmodifiable, DerivedOnly>::try_from_unordered_psbt(psbt.clone())
-                        .err(),
-                    Sorter::<Unmodifiable, Seeded<DerivedOnly>>::try_from_unordered_psbt(
+                    Sorter::<Unmodifiable, ExplicitKeysForbidden>::try_from_unordered_psbt(
                         psbt.clone(),
                     )
                     .err(),
-                    Sorter::<Unmodifiable, ExplicitOnly>::try_from_unordered_psbt(psbt).err(),
+                    Sorter::<Unmodifiable, Seeded<ExplicitKeysForbidden>>::try_from_unordered_psbt(
+                        psbt.clone(),
+                    )
+                    .err(),
+                    Sorter::<Unmodifiable, ExplicitKeysRequired>::try_from_unordered_psbt(psbt)
+                        .err(),
                 ];
                 let expected = outcomes.map(|outcome| {
                     let error = match outcome {
@@ -546,7 +557,7 @@ mod tests {
 
         #[test]
         fn invalid_flags_are_reported_before_an_invalid_sort_mode() {
-            let mut psbt = with_derivation(empty_psbt(), SortKeyDerivation::Explicit);
+            let mut psbt = with_derivation(empty_psbt(), SortKeyDerivation::ExplicitKeysRequired);
             psbt.global.set_tx_modifiable_flags(0x01);
             assert_eq!(
                 Sorter::<Unmodifiable, Mixed>::try_from_unordered_psbt(psbt).err(),
@@ -568,8 +579,8 @@ mod tests {
                 InputSet::try_from_inputs((1..=5).map(|txid| make_input(txid, 0))).unwrap();
             psbt.outputs = OutputSet::try_from_outputs((0..=4).map(make_output_with_uid)).unwrap();
 
-            let ordered = Sorter::<Unmodifiable, DerivedOnly>::try_from_unordered_psbt(
-                with_derivation(psbt, SortKeyDerivation::Derived),
+            let ordered = Sorter::<Unmodifiable, ExplicitKeysForbidden>::try_from_unordered_psbt(
+                with_derivation(psbt, SortKeyDerivation::ExplicitKeysForbidden),
             )
             .unwrap()
             .try_into_ordered_psbt()
@@ -649,12 +660,13 @@ mod tests {
                 Err(SortError::MissingSortSeed)
             ));
 
-            let derived_only = Sorter::<Unmodifiable, DerivedOnly>::try_from_unordered_psbt(
-                with_derivation(empty_psbt(), SortKeyDerivation::Derived),
-            )
-            .unwrap();
+            let explicit_keys_forbidden =
+                Sorter::<Unmodifiable, ExplicitKeysForbidden>::try_from_unordered_psbt(
+                    with_derivation(empty_psbt(), SortKeyDerivation::ExplicitKeysForbidden),
+                )
+                .unwrap();
             assert!(matches!(
-                derived_only.try_into_ordered_psbt(),
+                explicit_keys_forbidden.try_into_ordered_psbt(),
                 Err(SortError::MissingSortSeed)
             ));
         }
@@ -699,17 +711,15 @@ mod tests {
                 let mixed =
                     |psbt| Sorter::<Unmodifiable, Mixed>::try_from_unordered_psbt(psbt).unwrap();
                 let derived = |psbt| {
-                    Sorter::<Unmodifiable, DerivedOnly>::try_from_unordered_psbt(with_derivation(
-                        psbt,
-                        SortKeyDerivation::Derived,
-                    ))
+                    Sorter::<Unmodifiable, ExplicitKeysForbidden>::try_from_unordered_psbt(
+                        with_derivation(psbt, SortKeyDerivation::ExplicitKeysForbidden),
+                    )
                     .unwrap()
                 };
                 let explicit = |psbt| {
-                    Sorter::<Unmodifiable, ExplicitOnly>::try_from_unordered_psbt(with_derivation(
-                        psbt,
-                        SortKeyDerivation::Explicit,
-                    ))
+                    Sorter::<Unmodifiable, ExplicitKeysRequired>::try_from_unordered_psbt(
+                        with_derivation(psbt, SortKeyDerivation::ExplicitKeysRequired),
+                    )
                     .unwrap()
                 };
 
@@ -775,15 +785,15 @@ mod tests {
         #[derive(Debug, Clone, Copy)]
         enum Mode {
             Mixed,
-            DerivedOnly,
-            ExplicitOnly,
+            ExplicitKeysForbidden,
+            ExplicitKeysRequired,
         }
 
         fn modes() -> impl Strategy<Value = Mode> {
             prop_oneof![
                 Just(Mode::Mixed),
-                Just(Mode::DerivedOnly),
-                Just(Mode::ExplicitOnly)
+                Just(Mode::ExplicitKeysForbidden),
+                Just(Mode::ExplicitKeysRequired)
             ]
         }
 
@@ -815,9 +825,9 @@ mod tests {
         /// mode.
         fn explicit_key(mode: Mode, key: &[u8], carried: bool) -> Option<SortKey> {
             match mode {
-                Mode::ExplicitOnly => true,
+                Mode::ExplicitKeysRequired => true,
                 Mode::Mixed => carried,
-                Mode::DerivedOnly => false,
+                Mode::ExplicitKeysForbidden => false,
             }
             .then(|| sort_key(key.to_vec()))
         }
@@ -859,14 +869,14 @@ mod tests {
             psbt.global.set_unordered();
             match mode {
                 Mode::Mixed => psbt.global.set_sort_seed(sort_seed(seed.to_vec())),
-                Mode::DerivedOnly => {
+                Mode::ExplicitKeysForbidden => {
                     psbt.global.set_sort_seed(sort_seed(seed.to_vec()));
                     psbt.global
-                        .set_sort_key_derivation(SortKeyDerivation::Derived);
+                        .set_sort_key_derivation(SortKeyDerivation::ExplicitKeysForbidden);
                 }
-                Mode::ExplicitOnly => psbt
+                Mode::ExplicitKeysRequired => psbt
                     .global
-                    .set_sort_key_derivation(SortKeyDerivation::Explicit),
+                    .set_sort_key_derivation(SortKeyDerivation::ExplicitKeysRequired),
             }
             psbt.inputs = InputSet::try_from_inputs(inputs).unwrap();
             psbt.outputs = OutputSet::try_from_outputs(outputs).unwrap();
@@ -878,13 +888,13 @@ mod tests {
                 Mode::Mixed => Sorter::<Unmodifiable, Mixed>::try_from_unordered_psbt(psbt)
                     .unwrap()
                     .try_into_ordered_psbt(),
-                Mode::DerivedOnly => {
-                    Sorter::<Unmodifiable, DerivedOnly>::try_from_unordered_psbt(psbt)
+                Mode::ExplicitKeysForbidden => {
+                    Sorter::<Unmodifiable, ExplicitKeysForbidden>::try_from_unordered_psbt(psbt)
                         .unwrap()
                         .try_into_ordered_psbt()
                 }
-                Mode::ExplicitOnly => {
-                    Sorter::<Unmodifiable, ExplicitOnly>::try_from_unordered_psbt(psbt)
+                Mode::ExplicitKeysRequired => {
+                    Sorter::<Unmodifiable, ExplicitKeysRequired>::try_from_unordered_psbt(psbt)
                         .unwrap()
                         .try_into_ordered_psbt()
                 }
@@ -898,13 +908,13 @@ mod tests {
                 Mode::Mixed => Sorter::<Unmodifiable, Mixed>::try_from_unordered_psbt(psbt)
                     .unwrap()
                     .try_sort(),
-                Mode::DerivedOnly => {
-                    Sorter::<Unmodifiable, DerivedOnly>::try_from_unordered_psbt(psbt)
+                Mode::ExplicitKeysForbidden => {
+                    Sorter::<Unmodifiable, ExplicitKeysForbidden>::try_from_unordered_psbt(psbt)
                         .unwrap()
                         .try_sort()
                 }
-                Mode::ExplicitOnly => {
-                    Sorter::<Unmodifiable, ExplicitOnly>::try_from_unordered_psbt(psbt)
+                Mode::ExplicitKeysRequired => {
+                    Sorter::<Unmodifiable, ExplicitKeysRequired>::try_from_unordered_psbt(psbt)
                         .unwrap()
                         .try_sort()
                 }
@@ -1032,9 +1042,9 @@ mod tests {
                 };
                 let mixed = |seed| Sorter::<Unmodifiable, Mixed>::try_from_unordered_psbt(psbt(seed)).unwrap();
                 let derived = |seed| {
-                    Sorter::<Unmodifiable, DerivedOnly>::try_from_unordered_psbt(with_derivation(
+                    Sorter::<Unmodifiable, ExplicitKeysForbidden>::try_from_unordered_psbt(with_derivation(
                         psbt(seed),
-                        SortKeyDerivation::Derived,
+                        SortKeyDerivation::ExplicitKeysForbidden,
                     ))
                     .unwrap()
                 };
@@ -1077,13 +1087,13 @@ mod tests {
             fn try_sort_hands_the_ordered_psbt_to_the_role_for_its_modifiability(
                 seed in seeds(),
             ) {
-                fn sorter<M: Modifiability>(flags: u8, seed: &[u8]) -> Sorter<M, Seeded<DerivedOnly>> {
+                fn sorter<M: Modifiability>(flags: u8, seed: &[u8]) -> Sorter<M, Seeded<ExplicitKeysForbidden>> {
                     let mut psbt = empty_psbt();
                     psbt.global.set_tx_modifiable_flags(flags);
                     psbt.global.set_sort_seed(sort_seed(seed.to_vec()));
                     psbt.inputs = InputSet::try_from_inputs([make_input(1, 0), make_input(2, 0)]).unwrap();
                     psbt.outputs = OutputSet::try_from_outputs([make_output_with_uid(1)]).unwrap();
-                    Sorter::try_from_unordered_psbt(with_derivation(psbt, SortKeyDerivation::Derived)).unwrap()
+                    Sorter::try_from_unordered_psbt(with_derivation(psbt, SortKeyDerivation::ExplicitKeysForbidden)).unwrap()
                 }
 
                 let both: v2::Constructor<v2::Modifiable> = sorter::<BothModifiable>(0x03, &seed).try_sort().unwrap();
@@ -1112,14 +1122,14 @@ mod tests {
                 let mut missing_input = empty_psbt();
                 missing_input.inputs = InputSet::try_from_inputs([make_input(1, 0)]).unwrap();
                 prop_assert!(matches!(
-                    Sorter::<Unmodifiable, ExplicitOnly>(missing_input, PhantomData).try_into_ordered_psbt(),
+                    Sorter::<Unmodifiable, ExplicitKeysRequired>(missing_input, PhantomData).try_into_ordered_psbt(),
                     Err(SortError::MissingInputSortKey(_))
                 ));
 
                 let mut missing_output = empty_psbt();
                 missing_output.outputs = OutputSet::try_from_outputs([make_output_with_uid(1)]).unwrap();
                 prop_assert!(matches!(
-                    Sorter::<Unmodifiable, ExplicitOnly>(missing_output, PhantomData).try_into_ordered_psbt(),
+                    Sorter::<Unmodifiable, ExplicitKeysRequired>(missing_output, PhantomData).try_into_ordered_psbt(),
                     Err(SortError::MissingOutputSortKey)
                 ));
 
@@ -1131,7 +1141,7 @@ mod tests {
                 }))
                 .unwrap();
                 prop_assert!(matches!(
-                    Sorter::<Unmodifiable, ExplicitOnly>(duplicates, PhantomData).try_into_ordered_psbt(),
+                    Sorter::<Unmodifiable, ExplicitKeysRequired>(duplicates, PhantomData).try_into_ordered_psbt(),
                     Err(SortError::DuplicateSortKey(_))
                 ));
             }
