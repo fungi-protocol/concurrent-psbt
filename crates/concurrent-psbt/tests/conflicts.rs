@@ -88,11 +88,11 @@ fn proprietary_sort_fields_keep_their_typed_paths() {
 
     let mut global = Global::default();
     global.clear_unordered();
-    global.set_sort_seed(SortSeed::try_from(vec![1; 16]).unwrap());
+    global.set_sort_seed(SortSeed::from(vec![1; 16]));
     global.set_sort_key_derivation(SortKeyDerivation::ExplicitKeysRequired);
     let mut other = global.clone();
     other.set_unordered();
-    other.set_sort_seed(SortSeed::try_from(vec![2; 16]).unwrap());
+    other.set_sort_seed(SortSeed::from(vec![2; 16]));
     other.set_sort_key_derivation(SortKeyDerivation::ExplicitKeysForbidden);
     let joined = global.wrap().join(other.wrap());
     assert_eq!(

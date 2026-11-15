@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 
 use psbt_v2::v2::Psbt;
 
-use crate::global::{Global, SortKeyDerivation, SortSeed};
+use crate::global::{Global, SortKeyDerivation, SortSeed, TxUuid};
 use crate::lattice::partial::PartialJoin;
 use crate::tx::UnorderedPsbt;
 
@@ -13,11 +13,10 @@ mod key;
 mod modifiability;
 mod order;
 
-pub use error::{FlagsMismatch, SeedConflict, SortError, SortModeError, SorterError};
-pub use key::{SortKeyHash, SortKeyTag};
-use key::{
-    derived_input_sort_key, derived_output_sort_key, explicit_input_sort_key,
-    explicit_output_sort_key, mixed_input_sort_key, mixed_output_sort_key,
+pub use error::{FlagsMismatch, SeedConflict, SortError, SortModeError, SorterError, UuidError};
+pub use key::{
+    AuxSortSeedHash, AuxSortSeedTag, SortKeyHash, SortKeyTag, SortSeedHash, SortSeedTag, UuidHash,
+    UuidTag,
 };
 pub(crate) use modifiability::check_flags;
 pub use modifiability::{
@@ -41,30 +40,52 @@ pub(crate) fn join_seed(global: &mut Global, seed: SortSeed) -> Result<(), SeedC
     Ok(())
 }
 
+/// Whether the PSBT has the UUID required by a [`Seeded`] mode.
+fn has_uuid(global: &Global) -> bool {
+    global.uuid().is_some()
+}
+
+/// Join `uuid` into `PSBT_GLOBAL_TX_UUID`: set it if unset, and keep it if it
+/// is already `uuid`.
+///
+/// # Errors
+/// Returns [`UuidError::Conflict`] if the PSBT already has a different UUID.
+pub(crate) fn join_uuid(global: &mut Global, uuid: TxUuid) -> Result<(), UuidError> {
+    let uuid = match global.uuid.clone() {
+        Some(existing) => existing.try_join(uuid).map_err(UuidError::from_conflict)?,
+        None => uuid,
+    };
+    global.set_uuid(uuid);
+    Ok(())
+}
+
 /// Hand an ordered PSBT to the role that follows sorting under `M`.
 fn hand_off<M: Modifiability>(psbt: Psbt) -> Result<M::Sorted, M::Error> {
     <M as modifiability::sealed::Modifiability>::sorted(psbt)
 }
 
-/// Sort mode: deterministic ordering seeded by a high-entropy value.
+/// Sort mode: every input and output is ordered by its derived sort key
+/// alone, and explicit sort keys are not allowed.
 ///
-/// Participants use the seed in the PSBT to derive the same input and output
-/// order before signing. Observers on Bitcoin's peer-to-peer network receive
-/// the ordered transaction without the PSBT seed.
+/// Participants derive the same order from the transaction UUID in the PSBT
+/// before signing. Observers on Bitcoin's peer-to-peer network receive the
+/// ordered transaction without the PSBT's sort fields.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExplicitKeysForbidden {}
 
-/// Sort mode: ordering determined by explicit sort key fields on each input/output.
+/// Sort mode: every input and output needs an explicit sort key.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExplicitKeysRequired {}
 
-/// Sort mode: explicit sort keys where present, the rest derived from the
-/// sort seed.
+/// Sort mode: inputs and outputs are ordered by their explicit sort keys, a
+/// missing key counting as empty, and then by their derived keys.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mixed {}
 
-/// Sort mode refinement: [`ExplicitKeysForbidden`] or [`Mixed`] with
-/// `PSBT_GLOBAL_SORT_SEED` known to be set.
+/// Sort mode refinement: [`Mixed`], [`ExplicitKeysForbidden`] or
+/// [`ExplicitKeysRequired`] with `PSBT_GLOBAL_TX_UUID` known to be set.
+///
+/// Use [`Sorter::try_set_uuid`] to set a missing UUID and enter a seeded mode.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Seeded<S>(PhantomData<S>, std::convert::Infallible);
 
@@ -76,10 +97,22 @@ pub struct Seeded<S>(PhantomData<S>, std::convert::Infallible);
 /// may.
 ///
 /// `S` is the sort mode: [`Mixed`], [`ExplicitKeysForbidden`], or
-/// [`ExplicitKeysRequired`], or [`Seeded`] `Mixed` or `ExplicitKeysForbidden`
-/// once the sort seed is known to be set.
+/// [`ExplicitKeysRequired`], or one of them [`Seeded`] once
+/// `PSBT_GLOBAL_TX_UUID` is known to be set.
 ///
 /// # Ordering
+///
+/// Each mode constrains which explicit keys participants may supply. Once
+/// those constraints are met, the sorter compares explicit keys first,
+/// treating an absent key as empty. Equal explicit keys are ordered by
+/// their UUID-derived keys. Derived keys are never stored in the PSBT.
+/// The derivation uses the following BIP 340-style tagged hashes:
+///
+/// - `h` = [`UuidHash`] of the required `PSBT_GLOBAL_TX_UUID`,
+/// - `e` = [`AuxSortSeedHash`] of `PSBT_GLOBAL_SORT_SEED`, empty if unset,
+/// - the sort seed = [`SortSeedHash`] of `h || e`,
+/// - a derived sort key = [`SortKeyHash`] of the sort seed, then the input's
+///   consensus-encoded outpoint or the output's unique ID.
 ///
 /// [`UnorderedPsbt::into_psbt`] uses `HashMap` iteration order, which is
 /// intentionally non-deterministic, satisfying the spec's shuffle requirement
@@ -91,7 +124,7 @@ pub struct Sorter<M, S>(pub(crate) UnorderedPsbt, PhantomData<(M, S)>);
 impl<M, S> Sorter<M, S> {
     /// Wrap `psbt` without checking it against `M` and `S`; its
     /// `tx_modifiable_flags` must match `M`, and a [`Seeded`] mode requires
-    /// `PSBT_GLOBAL_SORT_SEED` to be set.
+    /// `PSBT_GLOBAL_TX_UUID` to be set.
     pub(crate) fn from_unordered(psbt: UnorderedPsbt) -> Self {
         Sorter(psbt, PhantomData)
     }
@@ -106,9 +139,15 @@ impl<M, S> Sorter<M, S> {
         self.0
     }
 
-    fn try_with_seed<T>(mut self, seed: SortSeed) -> Result<Sorter<M, Seeded<T>>, SeedConflict> {
+    /// Join `seed` into `PSBT_GLOBAL_SORT_SEED`: set it if unset, and keep it
+    /// if it is already `seed`.
+    ///
+    /// # Errors
+    /// Returns [`SeedConflict`] if the PSBT has a different seed, which
+    /// replacing would not be monotone.
+    pub fn try_set_seed(mut self, seed: SortSeed) -> Result<Self, SeedConflict> {
         join_seed(&mut self.0.global, seed)?;
-        Ok(Sorter::from_unordered(self.0))
+        Ok(self)
     }
 }
 
@@ -125,158 +164,95 @@ impl<M: Modifiability, S: SortMode> Sorter<M, S> {
     }
 }
 
-impl<M: Modifiability> Sorter<M, Mixed> {
-    /// Join `seed` into `PSBT_GLOBAL_SORT_SEED`: set it if unset, and keep it
-    /// if it is already `seed`.
+impl<M, S> Sorter<M, S>
+where
+    Seeded<S>: SortMode,
+{
+    /// Join `uuid` into `PSBT_GLOBAL_TX_UUID`, setting it if unset, and
+    /// refine the mode to [`Seeded`].
     ///
     /// # Errors
-    /// Returns [`SeedConflict`] if the PSBT has a different seed, which
-    /// replacing would not be monotone.
-    pub fn try_set_seed(self, seed: SortSeed) -> Result<Sorter<M, Seeded<Mixed>>, SeedConflict> {
-        self.try_with_seed(seed)
-    }
-
-    /// Apply mixed-mode ordering.
-    ///
-    /// Compare entries using their explicit keys where present. For an entry
-    /// without one, derive its comparison key from `PSBT_GLOBAL_SORT_SEED`.
-    /// Derived sort keys are never stored in the PSBT.
-    ///
-    /// # Errors
-    /// Returns [`SortError::MissingSortSeed`] if any input or output lacks an
-    /// explicit sort key and no sort seed is set, or
-    /// [`SortError::DuplicateSortKey`] if two inputs (or two outputs) end up
-    /// with the same sort key.
-    pub fn try_into_ordered_psbt(self) -> Result<Psbt, SortError> {
-        let seed = self.0.global.sort_seed().map(|seed| seed.to_vec());
-        ordered_psbt(
-            self.0,
-            |input| mixed_input_sort_key(seed.as_deref(), input),
-            |output| mixed_output_sort_key(seed.as_deref(), output),
-        )
-    }
-
-    /// Order the PSBT as [`try_into_ordered_psbt`](Self::try_into_ordered_psbt)
-    /// does and hand it to [`M::Sorted`](Modifiability::Sorted).
-    ///
-    /// # Errors
-    /// Returns the errors of [`try_into_ordered_psbt`](Self::try_into_ordered_psbt),
-    /// or [`SortError::UndeterminedLockTime`] if `M` is [`Unmodifiable`] and
-    /// the inputs' lock time requirements conflict.
-    pub fn try_sort(self) -> Result<M::Sorted, SortError> {
-        hand_off::<M>(self.try_into_ordered_psbt()?).map_err(Into::into)
+    /// Returns [`UuidError::Conflict`] if the PSBT already has a different UUID.
+    pub fn try_set_uuid(mut self, uuid: TxUuid) -> Result<Sorter<M, Seeded<S>>, UuidError> {
+        join_uuid(&mut self.0.global, uuid)?;
+        Ok(Sorter::from_unordered(self.0))
     }
 }
 
-impl<M: Modifiability> Sorter<M, Seeded<Mixed>> {
-    /// Apply mixed-mode ordering with the sort seed set.
-    ///
-    /// # Errors
-    /// Returns [`SortError::DuplicateSortKey`] if two inputs (or two outputs)
-    /// end up with the same sort key.
-    pub fn try_into_ordered_psbt(self) -> Result<Psbt, SortError> {
-        Sorter::<M, Mixed>::from_unordered(self.0).try_into_ordered_psbt()
-    }
-
-    /// Order the PSBT as [`try_into_ordered_psbt`](Self::try_into_ordered_psbt)
-    /// does and hand it to [`M::Sorted`](Modifiability::Sorted).
-    ///
-    /// # Errors
-    /// Returns the errors of [`try_into_ordered_psbt`](Self::try_into_ordered_psbt),
-    /// or [`SortError::UndeterminedLockTime`] if `M` is [`Unmodifiable`] and
-    /// the inputs' lock time requirements conflict.
-    pub fn try_sort(self) -> Result<M::Sorted, SortError> {
-        hand_off::<M>(self.try_into_ordered_psbt()?).map_err(Into::into)
-    }
-}
-
-impl<M: Modifiability> Sorter<M, ExplicitKeysForbidden> {
-    /// Join `seed` into `PSBT_GLOBAL_SORT_SEED`: set it if unset, and keep it
-    /// if it is already `seed`.
-    ///
-    /// # Errors
-    /// Returns [`SeedConflict`] if the PSBT has a different seed, which
-    /// replacing would not be monotone.
-    pub fn try_set_seed(
-        self,
-        seed: SortSeed,
-    ) -> Result<Sorter<M, Seeded<ExplicitKeysForbidden>>, SeedConflict> {
-        self.try_with_seed(seed)
-    }
-
-    /// Apply deterministic ordering if the PSBT carries a sort seed.
-    ///
-    /// # Errors
-    /// Returns [`SortError::MissingSortSeed`] if `PSBT_GLOBAL_SORT_SEED` is not
-    /// set.
-    pub fn try_into_ordered_psbt(self) -> Result<Psbt, SortError> {
-        match self.0.global.sort_seed() {
-            Some(_) => Ok(
-                Sorter::<M, Seeded<ExplicitKeysForbidden>>::from_unordered(self.0)
-                    .into_ordered_psbt(),
-            ),
-            None => Err(SortError::MissingSortSeed),
-        }
-    }
-
-    /// Order the PSBT as [`try_into_ordered_psbt`](Self::try_into_ordered_psbt)
-    /// does and hand it to [`M::Sorted`](Modifiability::Sorted).
-    ///
-    /// # Errors
-    /// Returns the errors of [`try_into_ordered_psbt`](Self::try_into_ordered_psbt),
-    /// or [`SortError::UndeterminedLockTime`] if `M` is [`Unmodifiable`] and
-    /// the inputs' lock time requirements conflict.
-    pub fn try_sort(self) -> Result<M::Sorted, SortError> {
-        hand_off::<M>(self.try_into_ordered_psbt()?).map_err(Into::into)
-    }
-}
-
-impl<M: Modifiability> Sorter<M, Seeded<ExplicitKeysForbidden>> {
-    /// Apply deterministic ordering: derive sort keys from the seed, sort,
+impl<M: Modifiability, S: SortMode> Sorter<M, S>
+where
+    Seeded<S>: SortMode,
+{
+    /// Order the inputs and outputs as described [above](Sorter#ordering),
     /// and produce an ordered BIP 370 [`Psbt`].
     ///
-    /// Inputs are distinct by outpoint and outputs by unique ID, so their
-    /// derived sort keys differ unless SHA-256 collides.
-    pub fn into_ordered_psbt(self) -> Psbt {
-        let seed = self
-            .0
-            .global
-            .sort_seed()
-            .expect("a seeded sorter carries a sort seed")
-            .to_vec();
-
+    /// # Errors
+    /// Returns [`SortError::MissingUuid`] if `PSBT_GLOBAL_TX_UUID` is unset.
+    /// In [`ExplicitKeysRequired`] mode, then returns
+    /// [`SortError::MissingInputSortKey`] or [`SortError::MissingOutputSortKey`]
+    /// if an input or output has no sort key.
+    pub fn try_into_ordered_psbt(self) -> Result<Psbt, SortError> {
         ordered_psbt(
             self.0,
-            |input| derived_input_sort_key(Some(&seed), input),
-            |output| derived_output_sort_key(Some(&seed), output),
+            S::SORT_KEY_DERIVATION == Some(SortKeyDerivation::ExplicitKeysRequired),
         )
-        .expect("derived sort keys of distinct inputs and outputs do not collide")
     }
 
-    /// Order the PSBT as [`into_ordered_psbt`](Self::into_ordered_psbt) does
-    /// and hand it to [`M::Sorted`](Modifiability::Sorted).
+    /// Order the PSBT as [`try_into_ordered_psbt`](Self::try_into_ordered_psbt)
+    /// does and hand it to [`M::Sorted`](Modifiability::Sorted).
     ///
     /// # Errors
-    /// Returns [`M::Error`](Modifiability::Error): `Infallible` while `M` is
-    /// modifiable, or [`DetermineLockTimeError`](psbt_v2::v2::DetermineLockTimeError)
-    /// if `M` is [`Unmodifiable`] and the inputs' lock time requirements
-    /// conflict.
-    pub fn try_sort(self) -> Result<M::Sorted, M::Error> {
-        hand_off::<M>(self.into_ordered_psbt())
+    /// Returns the errors of [`try_into_ordered_psbt`](Self::try_into_ordered_psbt),
+    /// or [`SortError::UndeterminedLockTime`] if `M` is [`Unmodifiable`] and
+    /// the inputs' lock time requirements conflict.
+    pub fn try_sort(self) -> Result<M::Sorted, SortError> {
+        hand_off::<M>(self.try_into_ordered_psbt()?).map_err(Into::into)
     }
 }
 
-impl<M: Modifiability> Sorter<M, ExplicitKeysRequired> {
-    /// Apply explicit ordering: sort by the `PSBT_IN_SORT_KEY` and
-    /// `PSBT_OUT_SORT_KEY` fields, and produce an ordered BIP 370 [`Psbt`].
+/// The infallible sorting of a [`Seeded`] mode that needs no explicit keys.
+macro_rules! infallible_sort {
+    ($($mode:ty),*) => {$(
+        impl<M: Modifiability> Sorter<M, Seeded<$mode>> {
+            /// Order the inputs and outputs as described
+            /// [above](Sorter#ordering), and produce an ordered BIP 370
+            /// [`Psbt`].
+            ///
+            /// The UUID is set and a missing explicit key counts as empty,
+            /// so this cannot fail.
+            pub fn into_ordered_psbt(self) -> Psbt {
+                ordered_psbt(self.0, false)
+                    .expect("a seeded sorter has a UUID, and this mode needs no explicit key")
+            }
+
+            /// Order the PSBT as [`into_ordered_psbt`](Self::into_ordered_psbt)
+            /// does and hand it to [`M::Sorted`](Modifiability::Sorted).
+            ///
+            /// # Errors
+            /// Returns [`M::Error`](Modifiability::Error): `Infallible` while
+            /// `M` is modifiable, or
+            /// [`DetermineLockTimeError`](psbt_v2::v2::DetermineLockTimeError)
+            /// if `M` is [`Unmodifiable`] and the inputs' lock time
+            /// requirements conflict.
+            pub fn try_sort(self) -> Result<M::Sorted, M::Error> {
+                hand_off::<M>(self.into_ordered_psbt())
+            }
+        }
+    )*};
+}
+
+infallible_sort!(Mixed, ExplicitKeysForbidden);
+
+impl<M: Modifiability> Sorter<M, Seeded<ExplicitKeysRequired>> {
+    /// Order the inputs and outputs as described [above](Sorter#ordering),
+    /// and produce an ordered BIP 370 [`Psbt`].
     ///
     /// # Errors
-    /// Returns [`SortError::MissingInputSortKey`] or [`SortError::MissingOutputSortKey`]
-    /// if any input or output is missing a sort key, or
-    /// [`SortError::DuplicateSortKey`] if two inputs (or two outputs) carry the
-    /// same sort key.
+    /// Returns [`SortError::MissingInputSortKey`] or
+    /// [`SortError::MissingOutputSortKey`] if an input or output has no sort
+    /// key.
     pub fn try_into_ordered_psbt(self) -> Result<Psbt, SortError> {
-        ordered_psbt(self.0, explicit_input_sort_key, explicit_output_sort_key)
+        ordered_psbt(self.0, true)
     }
 
     /// Order the PSBT as [`try_into_ordered_psbt`](Self::try_into_ordered_psbt)
@@ -297,41 +273,45 @@ pub(crate) mod sealed {
     pub trait SortMode {
         /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` in this mode.
         const SORT_KEY_DERIVATION: Option<SortKeyDerivation>;
-        /// Whether this mode requires `PSBT_GLOBAL_SORT_SEED`.
+        /// Whether this mode requires `PSBT_GLOBAL_TX_UUID`.
         const SEEDED: bool;
     }
 }
 
 /// A sort mode that a PSBT's sort fields select: [`Mixed`] if
 /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` is unset, [`ExplicitKeysForbidden`] if it
-/// is `0x01`, [`ExplicitKeysRequired`] if it is `0x00`, and [`Seeded`]
-/// [`Mixed`] or [`ExplicitKeysForbidden`] if `PSBT_GLOBAL_SORT_SEED` is set
-/// too.
+/// is `0x01`, and [`ExplicitKeysRequired`] if it is `0x00`, each [`Seeded`] if
+/// `PSBT_GLOBAL_TX_UUID` is set.
 pub trait SortMode: sealed::SortMode {}
 
 macro_rules! sort_mode {
-    ($($mode:ty => $sort_key_derivation:expr, $seeded:expr;)*) => {$(
+    ($($mode:ty => $sort_key_derivation:expr;)*) => {$(
         impl SortMode for $mode {}
 
         impl sealed::SortMode for $mode {
             const SORT_KEY_DERIVATION: Option<SortKeyDerivation> = $sort_key_derivation;
-            const SEEDED: bool = $seeded;
+            const SEEDED: bool = false;
+        }
+
+        impl SortMode for Seeded<$mode> {}
+
+        impl sealed::SortMode for Seeded<$mode> {
+            const SORT_KEY_DERIVATION: Option<SortKeyDerivation> = $sort_key_derivation;
+            const SEEDED: bool = true;
         }
     )*};
 }
 
 sort_mode! {
-    Mixed => None, false;
-    Seeded<Mixed> => None, true;
-    ExplicitKeysForbidden => Some(SortKeyDerivation::ExplicitKeysForbidden), false;
-    Seeded<ExplicitKeysForbidden> => Some(SortKeyDerivation::ExplicitKeysForbidden), true;
-    ExplicitKeysRequired => Some(SortKeyDerivation::ExplicitKeysRequired), false;
+    Mixed => None;
+    ExplicitKeysForbidden => Some(SortKeyDerivation::ExplicitKeysForbidden);
+    ExplicitKeysRequired => Some(SortKeyDerivation::ExplicitKeysRequired);
 }
 
-/// Check that `psbt`'s sort fields select sort mode `S`. Besides matching
-/// `PSBT_GLOBAL_SORT_KEY_DERIVATION` and requiring a seed in a [`Seeded`] mode,
-/// an [`ExplicitKeysRequired`] PSBT must have no sort seed and an
-/// [`ExplicitKeysForbidden`] one no sort keys, since neither would be used.
+/// Check that `psbt`'s sort fields select sort mode `S`: they match
+/// `PSBT_GLOBAL_SORT_KEY_DERIVATION`, a [`Seeded`] mode has a
+/// `PSBT_GLOBAL_TX_UUID`, and an [`ExplicitKeysForbidden`] PSBT has no sort
+/// keys, since they would not be used.
 ///
 /// # Errors
 /// Returns the first [`SortModeError`] in that order.
@@ -343,7 +323,6 @@ pub(crate) fn check_sort_mode<S: SortMode>(psbt: &UnorderedPsbt) -> Result<(), S
             actual,
         });
     }
-    let seeded = psbt.global.sort_seed().is_some();
     let sort_keyed = || {
         psbt.inputs.values().any(|input| input.sort_key().is_some())
             || psbt
@@ -352,10 +331,7 @@ pub(crate) fn check_sort_mode<S: SortMode>(psbt: &UnorderedPsbt) -> Result<(), S
                 .any(|output| output.sort_key().is_some())
     };
     match S::SORT_KEY_DERIVATION {
-        _ if S::SEEDED && !seeded => Err(SortModeError::MissingSortSeed),
-        Some(SortKeyDerivation::ExplicitKeysRequired) if seeded => {
-            Err(SortModeError::UnexpectedSortSeed)
-        }
+        _ if S::SEEDED && !has_uuid(&psbt.global) => Err(SortModeError::MissingUuid),
         Some(SortKeyDerivation::ExplicitKeysForbidden) if sort_keyed() => {
             Err(SortModeError::UnexpectedSortKey)
         }
@@ -367,13 +343,9 @@ pub(crate) fn check_sort_mode<S: SortMode>(psbt: &UnorderedPsbt) -> Result<(), S
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::global::Global;
+    use crate::global::{Global, TxUuid};
     use crate::input::{Input, InputSet, SortKey};
     use crate::output::{Output, OutputSet, UniqueId};
-
-    fn sort_seed(bytes: Vec<u8>) -> SortSeed {
-        SortSeed::try_from(bytes).expect("test seeds are at least 16 bytes")
-    }
 
     fn sort_key(bytes: Vec<u8>) -> SortKey {
         SortKey::try_from(bytes).expect("test sort keys are at most 32 bytes")
@@ -413,9 +385,12 @@ mod tests {
         Sorter::<M, Mixed>::try_from_unordered_psbt(psbt).err()
     }
 
+    /// A PSBT with no inputs or outputs and `PSBT_GLOBAL_TX_UUID` `[13; 16]`.
     fn empty_psbt() -> UnorderedPsbt {
+        let mut global = Global::default();
+        global.set_uuid(TxUuid::try_from(vec![13; 16]).unwrap());
         UnorderedPsbt {
-            global: Global::default(),
+            global,
             inputs: InputSet::default(),
             outputs: OutputSet::default(),
         }
@@ -467,49 +442,45 @@ mod tests {
         #[derive(Clone, Copy)]
         enum Outcome {
             Admits,
-            MissingSeed,
-            SeedForbidden,
             KeyForbidden,
+            NoUuid,
             /// The sort key derivation does not match the one in here.
             Wants(Option<SortKeyDerivation>),
         }
 
-        /// Each row is a PSBT's sort key derivation, whether it has a seed and
-        /// which entry has a sort key, then what `Mixed`, `Seeded<Mixed>`,
-        /// `ExplicitKeysForbidden`, `Seeded<ExplicitKeysForbidden>` and
-        /// `ExplicitKeysRequired` do with it.
+        /// Each row is a PSBT's sort key derivation, its UUID (unset, empty or
+        /// set) and which entry has a sort key, then what `Mixed`,
+        /// `ExplicitKeysForbidden`, `ExplicitKeysRequired` and their [`Seeded`]
+        /// refinements do with it. Only a seeded mode needs the UUID, and
+        /// checks it after the derivation and before the sort keys.
         #[test]
         fn the_sort_fields_select_the_sort_mode() {
-            use Outcome::{Admits, KeyForbidden, MissingSeed, SeedForbidden, Wants};
+            use Outcome::{Admits, KeyForbidden, NoUuid, Wants};
             use SortKeyOn as K;
             const U: Option<SortKeyDerivation> = None;
             const D: Option<SortKeyDerivation> = Some(SortKeyDerivation::ExplicitKeysForbidden);
             const E: Option<SortKeyDerivation> = Some(SortKeyDerivation::ExplicitKeysRequired);
+            const SET: Option<&[u8]> = Some(&[13; 16]);
 
             #[rustfmt::skip]
             let rows = [
-                (U, false, K::Neither, [Admits, MissingSeed, Wants(D), Wants(D), Wants(E)]),
-                (U, false, K::Input,   [Admits, MissingSeed, Wants(D), Wants(D), Wants(E)]),
-                (U, true,  K::Neither, [Admits, Admits, Wants(D), Wants(D), Wants(E)]),
-                (U, true,  K::Output,  [Admits, Admits, Wants(D), Wants(D), Wants(E)]),
-                (D, false, K::Neither, [Wants(U), Wants(U), Admits, MissingSeed, Wants(E)]),
-                (D, false, K::Input,   [Wants(U), Wants(U), KeyForbidden, MissingSeed, Wants(E)]),
-                (D, true,  K::Neither, [Wants(U), Wants(U), Admits, Admits, Wants(E)]),
-                (D, true,  K::Input,   [Wants(U), Wants(U), KeyForbidden, KeyForbidden, Wants(E)]),
-                (D, true,  K::Output,  [Wants(U), Wants(U), KeyForbidden, KeyForbidden, Wants(E)]),
-                (E, false, K::Neither, [Wants(U), Wants(U), Wants(D), Wants(D), Admits]),
-                (E, false, K::Input,   [Wants(U), Wants(U), Wants(D), Wants(D), Admits]),
-                (E, false, K::Output,  [Wants(U), Wants(U), Wants(D), Wants(D), Admits]),
-                (E, true,  K::Input,   [Wants(U), Wants(U), Wants(D), Wants(D), SeedForbidden]),
+                (U, SET,   K::Neither, [Admits,   Wants(D),     Wants(E), Admits,   Wants(D),     Wants(E)]),
+                (U, None,  K::Input,   [Admits,   Wants(D),     Wants(E), NoUuid,   Wants(D),     Wants(E)]),
+                (U, SET,   K::Output,  [Admits,   Wants(D),     Wants(E), Admits,   Wants(D),     Wants(E)]),
+                (D, SET,   K::Neither, [Wants(U), Admits,       Wants(E), Wants(U), Admits,       Wants(E)]),
+                (D, None,  K::Neither, [Wants(U), Admits,       Wants(E), Wants(U), NoUuid,       Wants(E)]),
+                (D, SET,   K::Input,   [Wants(U), KeyForbidden, Wants(E), Wants(U), KeyForbidden, Wants(E)]),
+                (D, None,  K::Output,  [Wants(U), KeyForbidden, Wants(E), Wants(U), NoUuid,       Wants(E)]),
+                (E, SET,   K::Neither, [Wants(U), Wants(D),     Admits,   Wants(U), Wants(D),     Admits]),
+                (E, None,  K::Output,  [Wants(U), Wants(D),     Admits,   Wants(U), Wants(D),     NoUuid]),
+                (E, SET,   K::Input,   [Wants(U), Wants(D),     Admits,   Wants(U), Wants(D),     Admits]),
             ];
-            for (derivation, seeded, sort_key_on, outcomes) in rows {
+            for (derivation, uuid, sort_key_on, outcomes) in rows {
                 let mut psbt = empty_psbt();
                 if let Some(derivation) = derivation {
                     psbt.global.set_sort_key_derivation(derivation);
                 }
-                if seeded {
-                    psbt.global.set_sort_seed(sort_seed(vec![0; 16]));
-                }
+                psbt.global.uuid = uuid.map(|uuid| TxUuid::try_from(uuid.to_vec()).unwrap());
                 let mut input = make_input(1, 0);
                 let mut output = make_output_with_uid(1);
                 match sort_key_on {
@@ -520,27 +491,22 @@ mod tests {
                 psbt.inputs = InputSet::try_from_inputs([input]).unwrap();
                 psbt.outputs = OutputSet::try_from_outputs([output]).unwrap();
 
+                fn error<S: SortMode>(psbt: &UnorderedPsbt) -> Option<SorterError> {
+                    Sorter::<Unmodifiable, S>::try_from_unordered_psbt(psbt.clone()).err()
+                }
                 let errors = [
-                    Sorter::<Unmodifiable, Mixed>::try_from_unordered_psbt(psbt.clone()).err(),
-                    Sorter::<Unmodifiable, Seeded<Mixed>>::try_from_unordered_psbt(psbt.clone())
-                        .err(),
-                    Sorter::<Unmodifiable, ExplicitKeysForbidden>::try_from_unordered_psbt(
-                        psbt.clone(),
-                    )
-                    .err(),
-                    Sorter::<Unmodifiable, Seeded<ExplicitKeysForbidden>>::try_from_unordered_psbt(
-                        psbt.clone(),
-                    )
-                    .err(),
-                    Sorter::<Unmodifiable, ExplicitKeysRequired>::try_from_unordered_psbt(psbt)
-                        .err(),
+                    error::<Mixed>(&psbt),
+                    error::<ExplicitKeysForbidden>(&psbt),
+                    error::<ExplicitKeysRequired>(&psbt),
+                    error::<Seeded<Mixed>>(&psbt),
+                    error::<Seeded<ExplicitKeysForbidden>>(&psbt),
+                    error::<Seeded<ExplicitKeysRequired>>(&psbt),
                 ];
                 let expected = outcomes.map(|outcome| {
                     let error = match outcome {
                         Admits => return None,
-                        MissingSeed => SortModeError::MissingSortSeed,
-                        SeedForbidden => SortModeError::UnexpectedSortSeed,
                         KeyForbidden => SortModeError::UnexpectedSortKey,
+                        NoUuid => SortModeError::MissingUuid,
                         Wants(expected) => SortModeError::SortKeyDerivation {
                             expected,
                             actual: derivation,
@@ -550,7 +516,7 @@ mod tests {
                 });
                 assert_eq!(
                     errors, expected,
-                    "{derivation:?}, seeded: {seeded}, {sort_key_on:?}"
+                    "{derivation:?}, UUID {uuid:?}, {sort_key_on:?}"
                 );
             }
         }
@@ -568,13 +534,16 @@ mod tests {
             );
         }
 
-        /// The orders are those of `SHA-256(tag || tag || seed || identifier)`
-        /// for `tag = SHA-256("concurrent-psbt/deterministic-ordering")`,
-        /// computed outside this crate.
+        /// The orders are those of the derived keys for the UUID `[13; 16]`
+        /// and the seed `[42; 32]`, computed outside this crate. With
+        /// `T(tag, x) = SHA-256(SHA-256(tag) || SHA-256(tag) || x)` and tags
+        /// under `concurrent-psbt/`, a key is `T(deterministic-ordering,
+        /// T(sort-seed, T(uuid, uuid) || T(aux-sort-seed, seed)) ||
+        /// identifier)`.
         #[test]
-        fn derived_order_follows_the_tagged_hash_of_seed_and_identifier() {
+        fn derived_order_follows_the_tagged_hash_of_uuid_seed_and_identifier() {
             let mut psbt = empty_psbt();
-            psbt.global.set_sort_seed(sort_seed(vec![42; 32]));
+            psbt.global.set_sort_seed(SortSeed::from(vec![42; 32]));
             psbt.inputs =
                 InputSet::try_from_inputs((1..=5).map(|txid| make_input(txid, 0))).unwrap();
             psbt.outputs = OutputSet::try_from_outputs((0..=4).map(make_output_with_uid)).unwrap();
@@ -591,30 +560,37 @@ mod tests {
                 .iter()
                 .map(|input| input.previous_txid)
                 .collect();
-            let expected_txids = [1, 5, 3, 4, 2].map(|txid| *make_input(txid, 0).previous_txid());
+            let expected_txids = [2, 5, 1, 4, 3].map(|txid| *make_input(txid, 0).previous_txid());
             assert_eq!(txids, expected_txids);
             let uids: Vec<_> = ordered
                 .outputs
                 .iter()
                 .map(|output| read_output(output).unique_id().as_bytes().to_vec())
                 .collect();
-            assert_eq!(uids, [4, 2, 0, 3, 1].map(|uid| vec![uid; 16]));
+            assert_eq!(uids, [3, 2, 4, 1, 0].map(|uid| vec![uid; 16]));
         }
 
-        /// Without explicit keys the derived order of these inputs is 1, 3, 2
-        /// and of these outputs 2, 1.
+        /// With the hashes of
+        /// [`derived_order_follows_the_tagged_hash_of_uuid_seed_and_identifier`],
+        /// the derived order of inputs 1 to 5 is 2, 5, 1, 4, 3 and of outputs
+        /// 1 to 3 is 3, 2, 1. A missing explicit key sorts as an empty one, and
+        /// derived keys break ties, here against the order of the txids and
+        /// unique IDs.
         #[test]
-        fn mixed_orders_explicit_keys_among_derived_ones() {
+        fn mixed_orders_by_explicit_key_then_derived_key() {
             let mut psbt = empty_psbt();
-            psbt.global.set_sort_seed(sort_seed(vec![42; 32]));
-            let [mut high, derived, mut low] = [1, 2, 3].map(|txid| make_input(txid, 0));
-            high.set_sort_key(sort_key(vec![0xff]));
-            low.set_sort_key(sort_key(vec![0x00]));
-            psbt.inputs = InputSet::try_from_inputs([high, derived, low]).unwrap();
-            let mut explicit = make_output_with_uid(1);
-            explicit.set_sort_key(sort_key(vec![0xfe]));
-            psbt.outputs =
-                OutputSet::try_from_outputs([explicit, make_output_with_uid(2)]).unwrap();
+            psbt.global.set_sort_seed(SortSeed::from(vec![42; 32]));
+            let [mut one, mut two, unkeyed, mut empty, mut zero] =
+                [1, 2, 3, 4, 5].map(|txid| make_input(txid, 0));
+            one.set_sort_key(sort_key(vec![0x01]));
+            two.set_sort_key(sort_key(vec![0x01]));
+            empty.set_sort_key(sort_key(vec![]));
+            zero.set_sort_key(sort_key(vec![0x00]));
+            psbt.inputs = InputSet::try_from_inputs([one, two, unkeyed, empty, zero]).unwrap();
+            let [mut first, mut second, unkeyed] = [1, 2, 3].map(make_output_with_uid);
+            first.set_sort_key(sort_key(vec![0xfe]));
+            second.set_sort_key(sort_key(vec![0xfe]));
+            psbt.outputs = OutputSet::try_from_outputs([first, second, unkeyed]).unwrap();
 
             let ordered = Sorter::<Unmodifiable, Mixed>::try_from_unordered_psbt(psbt)
                 .unwrap()
@@ -628,131 +604,142 @@ mod tests {
                 .collect();
             assert_eq!(
                 txids,
-                [3, 2, 1].map(|txid| *make_input(txid, 0).previous_txid())
+                [4, 3, 5, 2, 1].map(|txid| *make_input(txid, 0).previous_txid())
             );
             let uids: Vec<_> = ordered
                 .outputs
                 .iter()
                 .map(|output| read_output(output).unique_id().as_bytes().to_vec())
                 .collect();
-            assert_eq!(uids, [vec![2; 16], vec![1; 16]]);
+            assert_eq!(uids, [vec![3; 16], vec![2; 16], vec![1; 16]]);
         }
 
+        /// Every mode needs a UUID and reports its absence before a missing
+        /// explicit key.
         #[test]
-        fn deriving_keys_requires_a_seed() {
-            let missing_seed = |psbt: UnorderedPsbt| {
-                Sorter::<Unmodifiable, Mixed>::try_from_unordered_psbt(psbt)
+        fn sorting_requires_a_uuid() {
+            for inputs in [vec![], vec![make_input(1, 0)]] {
+                let mut psbt = empty_psbt();
+                psbt.global.uuid = None;
+                psbt.inputs = InputSet::try_from_inputs(inputs).unwrap();
+                let errors = [
+                    Sorter::<Unmodifiable, Mixed>::try_from_unordered_psbt(psbt.clone())
+                        .unwrap()
+                        .try_into_ordered_psbt()
+                        .err(),
+                    Sorter::<Unmodifiable, ExplicitKeysForbidden>::try_from_unordered_psbt(
+                        with_derivation(psbt.clone(), SortKeyDerivation::ExplicitKeysForbidden),
+                    )
+                    .unwrap()
+                    .try_sort()
+                    .err(),
+                    Sorter::<Unmodifiable, ExplicitKeysRequired>::try_from_unordered_psbt(
+                        with_derivation(psbt, SortKeyDerivation::ExplicitKeysRequired),
+                    )
                     .unwrap()
                     .try_into_ordered_psbt()
-            };
+                    .err(),
+                ];
+                for error in errors {
+                    assert!(matches!(error, Some(SortError::MissingUuid)), "{error:?}");
+                }
+            }
+        }
 
-            let mut input = empty_psbt();
-            input.inputs = InputSet::try_from_inputs([make_input(1, 0)]).unwrap();
+        /// Missing explicit keys are reported whether or not the mode is
+        /// seeded.
+        #[test]
+        fn explicit_reports_missing_keys() {
+            let mut missing_input = empty_psbt();
+            missing_input.inputs = InputSet::try_from_inputs([make_input(1, 0)]).unwrap();
             assert!(matches!(
-                missing_seed(input),
-                Err(SortError::MissingSortSeed)
+                Sorter::<Unmodifiable, ExplicitKeysRequired>(missing_input, PhantomData)
+                    .try_into_ordered_psbt(),
+                Err(SortError::MissingInputSortKey(_))
             ));
 
-            let mut output = empty_psbt();
-            output.outputs = OutputSet::try_from_outputs([make_output_with_uid(1)]).unwrap();
+            let mut missing_output = empty_psbt();
+            missing_output.outputs =
+                OutputSet::try_from_outputs([make_output_with_uid(1)]).unwrap();
             assert!(matches!(
-                missing_seed(output),
-                Err(SortError::MissingSortSeed)
-            ));
-
-            let explicit_keys_forbidden =
-                Sorter::<Unmodifiable, ExplicitKeysForbidden>::try_from_unordered_psbt(
-                    with_derivation(empty_psbt(), SortKeyDerivation::ExplicitKeysForbidden),
-                )
-                .unwrap();
-            assert!(matches!(
-                explicit_keys_forbidden.try_into_ordered_psbt(),
-                Err(SortError::MissingSortSeed)
+                Sorter::<Unmodifiable, Seeded<ExplicitKeysRequired>>(missing_output, PhantomData)
+                    .try_into_ordered_psbt(),
+                Err(SortError::MissingOutputSortKey)
             ));
         }
 
-        /// Every `try_sort` of a sorter that is `Unmodifiable` fails exactly
-        /// when the inputs' lock time requirements conflict, and otherwise
-        /// hands the ordered PSBT to the updater.
+        /// Every `try_sort` of a sorter that is `Unmodifiable`, seeded or not,
+        /// fails exactly when the inputs' lock time requirements conflict,
+        /// and otherwise hands the ordered PSBT to the updater.
         #[test]
         fn try_sort_fails_exactly_when_lock_times_conflict() {
-            fn check<E: Into<SortError>>(
-                conflicting: bool,
-                result: Result<Updater, E>,
-                ordered: Psbt,
-            ) {
+            fn check(conflicting: bool, result: Result<Updater, SortError>, ordered: Psbt) {
                 assert_eq!(result.is_err(), conflicting);
                 match result {
                     Ok(updater) => assert_eq!(updater.psbt(), ordered),
-                    Err(error) => {
-                        assert!(matches!(error.into(), SortError::UndeterminedLockTime(_)))
-                    }
+                    Err(error) => assert!(matches!(error, SortError::UndeterminedLockTime(_))),
                 }
             }
 
             for conflicting in [false, true] {
-                let psbt = |seeded: bool, keyed: bool| {
+                let psbt = |keyed: bool| {
                     let mut psbt = empty_psbt();
-                    if seeded {
-                        psbt.global.set_sort_seed(sort_seed(vec![9; 16]));
-                    }
                     let mut inputs = crate::test_support::conflicting_lock_time_inputs();
                     if !conflicting {
                         inputs[0].set_min_time(None);
                     }
                     if keyed {
                         for (key, input) in inputs.iter_mut().enumerate() {
-                            input.set_sort_key(sort_key(vec![key as u8]));
+                            input.set_sort_key(sort_key(vec![key as u8 + 1]));
                         }
                     }
                     psbt.inputs = InputSet::try_from_inputs(inputs).unwrap();
                     psbt
                 };
-                let mixed =
-                    |psbt| Sorter::<Unmodifiable, Mixed>::try_from_unordered_psbt(psbt).unwrap();
-                let derived = |psbt| {
-                    Sorter::<Unmodifiable, ExplicitKeysForbidden>::try_from_unordered_psbt(
-                        with_derivation(psbt, SortKeyDerivation::ExplicitKeysForbidden),
-                    )
-                    .unwrap()
-                };
-                let explicit = |psbt| {
-                    Sorter::<Unmodifiable, ExplicitKeysRequired>::try_from_unordered_psbt(
-                        with_derivation(psbt, SortKeyDerivation::ExplicitKeysRequired),
-                    )
-                    .unwrap()
-                };
+                fn sorter<S: SortMode>(psbt: UnorderedPsbt) -> Sorter<Unmodifiable, S> {
+                    let derivation = S::SORT_KEY_DERIVATION;
+                    let psbt = match derivation {
+                        Some(derivation) => with_derivation(psbt, derivation),
+                        None => psbt,
+                    };
+                    Sorter::try_from_unordered_psbt(psbt).unwrap()
+                }
+                let mixed = sorter::<Mixed>;
+                let derived = sorter::<ExplicitKeysForbidden>;
+                let explicit = sorter::<ExplicitKeysRequired>;
+                let seeded_mixed = sorter::<Seeded<Mixed>>;
+                let seeded_derived = sorter::<Seeded<ExplicitKeysForbidden>>;
+                let seeded_explicit = sorter::<Seeded<ExplicitKeysRequired>>;
 
                 check(
                     conflicting,
-                    mixed(psbt(true, true)).try_sort(),
-                    mixed(psbt(true, true)).try_into_ordered_psbt().unwrap(),
+                    mixed(psbt(true)).try_sort(),
+                    mixed(psbt(true)).try_into_ordered_psbt().unwrap(),
                 );
                 check(
                     conflicting,
-                    mixed(psbt(false, true))
-                        .try_set_seed(sort_seed(vec![9; 16]))
-                        .unwrap()
-                        .try_sort(),
-                    mixed(psbt(true, true)).try_into_ordered_psbt().unwrap(),
+                    derived(psbt(false)).try_sort(),
+                    derived(psbt(false)).try_into_ordered_psbt().unwrap(),
                 );
                 check(
                     conflicting,
-                    derived(psbt(true, false)).try_sort(),
-                    derived(psbt(true, false)).try_into_ordered_psbt().unwrap(),
+                    explicit(psbt(true)).try_sort(),
+                    explicit(psbt(true)).try_into_ordered_psbt().unwrap(),
                 );
                 check(
                     conflicting,
-                    derived(psbt(false, false))
-                        .try_set_seed(sort_seed(vec![9; 16]))
-                        .unwrap()
-                        .try_sort(),
-                    derived(psbt(true, false)).try_into_ordered_psbt().unwrap(),
+                    seeded_mixed(psbt(true)).try_sort().map_err(Into::into),
+                    seeded_mixed(psbt(true)).into_ordered_psbt(),
                 );
                 check(
                     conflicting,
-                    explicit(psbt(false, true)).try_sort(),
-                    explicit(psbt(false, true)).try_into_ordered_psbt().unwrap(),
+                    seeded_derived(psbt(false)).try_sort().map_err(Into::into),
+                    seeded_derived(psbt(false)).into_ordered_psbt(),
+                );
+                check(
+                    conflicting,
+                    seeded_explicit(psbt(true)).try_sort(),
+                    seeded_explicit(psbt(true)).try_into_ordered_psbt().unwrap(),
                 );
             }
         }
@@ -771,13 +758,16 @@ mod tests {
 
     #[cfg(feature = "prop-tests")]
     mod prop {
-        use super::super::key::{derive_sort_key, write_input_sort_identifier};
         use super::*;
-        use bitcoin::hashes::HashEngine;
+        use bitcoin::hashes::{Hash, HashEngine, sha256};
         use proptest::prelude::*;
         use psbt_v2::v2;
 
         fn seeds() -> impl Strategy<Value = Vec<u8>> {
+            proptest::collection::vec(any::<u8>(), 0..=32)
+        }
+
+        fn uuids() -> impl Strategy<Value = Vec<u8>> {
             proptest::collection::vec(any::<u8>(), 16..=32)
         }
 
@@ -797,39 +787,25 @@ mod tests {
             ]
         }
 
-        /// Up to five distinct sort keys, each with whether the item carries
-        /// it. Some keys are prefixes of others. The first key is empty and
-        /// the others end in their index, so no two are equal.
+        /// Up to five short sort keys, each with whether the item carries it.
+        /// Keys often repeat, and some are prefixes of others.
         fn keys() -> impl Strategy<Value = Vec<(Vec<u8>, bool)>> {
             proptest::collection::vec(
-                (proptest::collection::vec(0u8..3, 0..=4), any::<bool>()),
+                (proptest::collection::vec(0u8..2, 0..=2), any::<bool>()),
                 0..=5,
             )
-            .prop_map(|keys| {
-                keys.into_iter()
-                    .enumerate()
-                    .map(|(index, (mut key, carried))| {
-                        if index == 0 {
-                            key.clear();
-                        } else {
-                            key.push(index as u8);
-                        }
-                        (key, carried)
-                    })
-                    .collect()
-            })
         }
 
-        /// The sort key an item has in `mode`: all of them in the explicit
-        /// mode, those that carry one in the mixed mode, none in the derived
-        /// mode.
+        /// The sort key an item has in `mode`: the key in the explicit mode,
+        /// the key if the item carries it in the mixed mode, and none in the
+        /// derived mode.
         fn explicit_key(mode: Mode, key: &[u8], carried: bool) -> Option<SortKey> {
             match mode {
-                Mode::ExplicitKeysRequired => true,
-                Mode::Mixed => carried,
-                Mode::ExplicitKeysForbidden => false,
+                Mode::ExplicitKeysRequired => Some(key.to_vec()),
+                Mode::Mixed => carried.then(|| key.to_vec()),
+                Mode::ExplicitKeysForbidden => None,
             }
-            .then(|| sort_key(key.to_vec()))
+            .map(sort_key)
         }
 
         fn inputs(mode: Mode, keys: &[(Vec<u8>, bool)]) -> Vec<Input> {
@@ -858,22 +834,25 @@ mod tests {
                 .collect()
         }
 
-        /// An unordered PSBT whose sort fields select `mode`.
+        /// An unordered PSBT with `uuid` and `seed` whose sort fields select
+        /// `mode`.
         fn unordered(
             mode: Mode,
+            uuid: &[u8],
             seed: &[u8],
             inputs: Vec<Input>,
             outputs: Vec<Output>,
         ) -> UnorderedPsbt {
             let mut psbt = empty_psbt();
             psbt.global.set_unordered();
+            psbt.global
+                .set_uuid(TxUuid::try_from(uuid.to_vec()).unwrap());
+            psbt.global.set_sort_seed(SortSeed::from(seed.to_vec()));
             match mode {
-                Mode::Mixed => psbt.global.set_sort_seed(sort_seed(seed.to_vec())),
-                Mode::ExplicitKeysForbidden => {
-                    psbt.global.set_sort_seed(sort_seed(seed.to_vec()));
-                    psbt.global
-                        .set_sort_key_derivation(SortKeyDerivation::ExplicitKeysForbidden);
-                }
+                Mode::Mixed => {}
+                Mode::ExplicitKeysForbidden => psbt
+                    .global
+                    .set_sort_key_derivation(SortKeyDerivation::ExplicitKeysForbidden),
                 Mode::ExplicitKeysRequired => psbt
                     .global
                     .set_sort_key_derivation(SortKeyDerivation::ExplicitKeysRequired),
@@ -883,84 +862,112 @@ mod tests {
             psbt
         }
 
-        fn order(mode: Mode, psbt: UnorderedPsbt) -> Psbt {
-            match mode {
-                Mode::Mixed => Sorter::<Unmodifiable, Mixed>::try_from_unordered_psbt(psbt)
-                    .unwrap()
-                    .try_into_ordered_psbt(),
-                Mode::ExplicitKeysForbidden => {
-                    Sorter::<Unmodifiable, ExplicitKeysForbidden>::try_from_unordered_psbt(psbt)
-                        .unwrap()
-                        .try_into_ordered_psbt()
-                }
-                Mode::ExplicitKeysRequired => {
-                    Sorter::<Unmodifiable, ExplicitKeysRequired>::try_from_unordered_psbt(psbt)
-                        .unwrap()
-                        .try_into_ordered_psbt()
-                }
-            }
-            .unwrap()
+        fn sorter<S: SortMode>(psbt: UnorderedPsbt) -> Sorter<Unmodifiable, S> {
+            Sorter::try_from_unordered_psbt(psbt).unwrap()
         }
 
-        /// The updater that `try_sort` hands the ordered PSBT to.
-        fn hand_off(mode: Mode, psbt: UnorderedPsbt) -> v2::Updater {
-            match mode {
-                Mode::Mixed => Sorter::<Unmodifiable, Mixed>::try_from_unordered_psbt(psbt)
-                    .unwrap()
-                    .try_sort(),
-                Mode::ExplicitKeysForbidden => {
-                    Sorter::<Unmodifiable, ExplicitKeysForbidden>::try_from_unordered_psbt(psbt)
-                        .unwrap()
-                        .try_sort()
+        /// The ordered PSBT of the sorter for `mode`, [`Seeded`] if `seeded`.
+        fn order(mode: Mode, seeded: bool, psbt: UnorderedPsbt) -> Psbt {
+            match (mode, seeded) {
+                (Mode::Mixed, false) => sorter::<Mixed>(psbt).try_into_ordered_psbt().unwrap(),
+                (Mode::Mixed, true) => sorter::<Seeded<Mixed>>(psbt).into_ordered_psbt(),
+                (Mode::ExplicitKeysForbidden, false) => sorter::<ExplicitKeysForbidden>(psbt)
+                    .try_into_ordered_psbt()
+                    .unwrap(),
+                (Mode::ExplicitKeysForbidden, true) => {
+                    sorter::<Seeded<ExplicitKeysForbidden>>(psbt).into_ordered_psbt()
                 }
-                Mode::ExplicitKeysRequired => {
-                    Sorter::<Unmodifiable, ExplicitKeysRequired>::try_from_unordered_psbt(psbt)
-                        .unwrap()
-                        .try_sort()
-                }
+                (Mode::ExplicitKeysRequired, false) => sorter::<ExplicitKeysRequired>(psbt)
+                    .try_into_ordered_psbt()
+                    .unwrap(),
+                (Mode::ExplicitKeysRequired, true) => sorter::<Seeded<ExplicitKeysRequired>>(psbt)
+                    .try_into_ordered_psbt()
+                    .unwrap(),
             }
-            .unwrap()
+        }
+
+        /// The updater that `try_sort` of the sorter for `mode`, [`Seeded`]
+        /// if `seeded`, hands the ordered PSBT to.
+        fn hand_off(mode: Mode, seeded: bool, psbt: UnorderedPsbt) -> v2::Updater {
+            match (mode, seeded) {
+                (Mode::Mixed, false) => sorter::<Mixed>(psbt).try_sort().unwrap(),
+                (Mode::Mixed, true) => sorter::<Seeded<Mixed>>(psbt).try_sort().unwrap(),
+                (Mode::ExplicitKeysForbidden, false) => {
+                    sorter::<ExplicitKeysForbidden>(psbt).try_sort().unwrap()
+                }
+                (Mode::ExplicitKeysForbidden, true) => {
+                    sorter::<Seeded<ExplicitKeysForbidden>>(psbt)
+                        .try_sort()
+                        .unwrap()
+                }
+                (Mode::ExplicitKeysRequired, false) => {
+                    sorter::<ExplicitKeysRequired>(psbt).try_sort().unwrap()
+                }
+                (Mode::ExplicitKeysRequired, true) => sorter::<Seeded<ExplicitKeysRequired>>(psbt)
+                    .try_sort()
+                    .unwrap(),
+            }
+        }
+
+        /// `SHA-256(SHA-256(tag) || SHA-256(tag) || data)` for the tag
+        /// `concurrent-psbt/<tag>`.
+        fn tagged(tag: &str, data: &[u8]) -> [u8; 32] {
+            let tag = sha256::Hash::hash(format!("concurrent-psbt/{tag}").as_bytes());
+            let mut engine = sha256::Hash::engine();
+            engine.input(tag.as_byte_array());
+            engine.input(tag.as_byte_array());
+            engine.input(data);
+            sha256::Hash::from_engine(engine).to_byte_array()
+        }
+
+        /// The derived sort key of the identifier `id` under `uuid` and the
+        /// auxiliary `seed`.
+        fn derived_key(uuid: &[u8], seed: &[u8], id: &[u8]) -> [u8; 32] {
+            let entropy = [tagged("uuid", uuid), tagged("aux-sort-seed", seed)].concat();
+            let sort_seed = tagged("sort-seed", &entropy);
+            tagged("deterministic-ordering", &[&sort_seed[..], id].concat())
         }
 
         /// `items` ordered by their keys.
-        fn sorted_by_key<T>(mut items: Vec<(Vec<u8>, T)>) -> Vec<T> {
+        fn sorted_by_key<K: Ord, T>(mut items: Vec<(K, T)>) -> Vec<T> {
             items.sort_by(|(left, _), (right, _)| left.cmp(right));
             items.into_iter().map(|(_, item)| item).collect()
         }
 
         proptest! {
             /// Sorting keeps every input and output whole, orders them by
-            /// their explicit keys, or by keys derived from the seed where
-            /// they have none, and clears the unordered flag. Building the
-            /// PSBT from the items in reverse gives the same ordered PSBT,
-            /// and `try_sort` hands it to the updater.
+            /// their explicit keys, empty where they have none, then by keys
+            /// derived from the UUID, the seed and their identifiers, and
+            /// clears the unordered flag. Building the PSBT from the items in
+            /// reverse gives the same ordered PSBT, and `try_sort` hands it to
+            /// the updater. A [`Seeded`] sorter orders the same way.
             #[test]
             fn sorting_orders_inputs_and_outputs_by_their_sort_keys(
                 mode in modes(),
+                seeded in any::<bool>(),
+                uuid in uuids(),
                 seed in seeds(),
                 input_keys in keys(),
                 output_keys in keys(),
             ) {
                 let inputs = inputs(mode, &input_keys);
                 let outputs = outputs(mode, &output_keys);
-                let ordered = order(mode, unordered(mode, &seed, inputs.clone(), outputs.clone()));
-                let handed_off = hand_off(mode, unordered(mode, &seed, inputs.clone(), outputs.clone()));
+                let unordered = |inputs, outputs| unordered(mode, &uuid, &seed, inputs, outputs);
+                let ordered = order(mode, seeded, unordered(inputs.clone(), outputs.clone()));
+                let handed_off = hand_off(mode, seeded, unordered(inputs.clone(), outputs.clone()));
                 prop_assert_eq!(handed_off.psbt(), ordered.clone());
 
+                let explicit = |key: Option<&[u8]>| key.unwrap_or_default().to_vec();
                 let expected_inputs = sorted_by_key(
                     inputs
                         .iter()
                         .map(|input| {
-                            let key = input.sort_key().map(<[u8]>::to_vec).unwrap_or_else(|| {
-                                let outpoint = bitcoin::OutPoint {
-                                    txid: *input.previous_txid(),
-                                    vout: *input.spent_output_index(),
-                                };
-                                derive_sort_key(&seed, |engine| {
-                                    engine.input(&bitcoin::consensus::serialize(&outpoint))
-                                })
-                                .to_vec()
-                            });
+                            let outpoint = bitcoin::OutPoint {
+                                txid: *input.previous_txid(),
+                                vout: *input.spent_output_index(),
+                            };
+                            let id = bitcoin::consensus::serialize(&outpoint);
+                            let key = (explicit(input.sort_key()), derived_key(&uuid, &seed, &id));
                             (key, input.clone())
                         })
                         .collect(),
@@ -969,12 +976,8 @@ mod tests {
                     outputs
                         .iter()
                         .map(|output| {
-                            let key = output.sort_key().map(<[u8]>::to_vec).unwrap_or_else(|| {
-                                derive_sort_key(&seed, |engine| {
-                                    engine.input(output.unique_id().as_bytes())
-                                })
-                                .to_vec()
-                            });
+                            let id = output.unique_id().as_bytes();
+                            let key = (explicit(output.sort_key()), derived_key(&uuid, &seed, id));
                             (key, output.clone())
                         })
                         .collect(),
@@ -993,9 +996,8 @@ mod tests {
 
                 let reversed = order(
                     mode,
+                    seeded,
                     unordered(
-                        mode,
-                        &seed,
                         inputs.into_iter().rev().collect(),
                         outputs.into_iter().rev().collect(),
                     ),
@@ -1034,7 +1036,7 @@ mod tests {
                 let psbt = |seed: Option<&Vec<u8>>| {
                     let mut psbt = empty_psbt();
                     if let Some(seed) = seed {
-                        psbt.global.set_sort_seed(sort_seed(seed.clone()));
+                        psbt.global.set_sort_seed(SortSeed::from(seed.clone()));
                     }
                     psbt.inputs = InputSet::try_from_inputs((0..4).map(|txid| make_input(txid, 0))).unwrap();
                     psbt.outputs = OutputSet::try_from_outputs((0..4).map(make_output_with_uid)).unwrap();
@@ -1048,60 +1050,100 @@ mod tests {
                     ))
                     .unwrap()
                 };
+                let set = || SortSeed::from(seed.clone());
 
                 match old_seed.filter(|old| **old != seed) {
                     None => {
                         prop_assert_eq!(
-                            mixed(old_seed).try_set_seed(sort_seed(seed.clone())).unwrap().try_into_ordered_psbt().unwrap(),
+                            mixed(old_seed).try_set_seed(set()).unwrap().try_sort().unwrap().psbt(),
                             mixed(Some(&seed)).try_into_ordered_psbt().unwrap()
                         );
                         prop_assert_eq!(
-                            mixed(old_seed).try_set_seed(sort_seed(seed.clone())).unwrap().try_sort().unwrap().psbt(),
-                            mixed(Some(&seed)).try_into_ordered_psbt().unwrap()
-                        );
-                        prop_assert_eq!(
-                            derived(old_seed).try_set_seed(sort_seed(seed.clone())).unwrap().into_ordered_psbt(),
+                            derived(old_seed).try_set_seed(set()).unwrap().try_into_ordered_psbt().unwrap(),
                             derived(Some(&seed)).try_into_ordered_psbt().unwrap()
                         );
                     }
                     Some(old) => {
                         let conflict = SeedConflict {
-                            existing: sort_seed(old.clone()),
-                            requested: sort_seed(seed.clone()),
+                            existing: SortSeed::from(old.clone()),
+                            requested: set(),
                         };
                         prop_assert_eq!(
-                            mixed(old_seed).try_set_seed(sort_seed(seed.clone())).err(),
+                            mixed(old_seed).try_set_seed(set()).err(),
                             Some(conflict.clone())
                         );
                         prop_assert_eq!(
-                            derived(old_seed).try_set_seed(sort_seed(seed.clone())).err(),
+                            derived(old_seed).try_set_seed(set()).err(),
                             Some(conflict)
                         );
                     }
                 }
             }
 
+            /// Setting a UUID refines the mode to [`Seeded`] and orders like a
+            /// PSBT that already carries that UUID. A different preset UUID is
+            /// rejected.
+            #[test]
+            fn try_set_uuid_joins_a_preset_uuid(
+                uuid in uuids(),
+                other in uuids(),
+                preset in 0u8..3, // unset, the same UUID, or another UUID
+                mode in modes(),
+            ) {
+                let old_uuid = match preset {
+                    0 => None,
+                    1 => Some(&uuid),
+                    _ => Some(&other),
+                };
+                let keys = [(vec![0], true), (vec![1], false), (vec![0], false)];
+                let psbt = |uuid: Option<&Vec<u8>>| {
+                    let mut psbt =
+                        unordered(mode, &[13; 16], &[], inputs(mode, &keys), outputs(mode, &keys));
+                    psbt.global.uuid = uuid.cloned().map(|uuid| TxUuid::try_from(uuid).unwrap());
+                    psbt
+                };
+                let joined = |psbt: UnorderedPsbt| -> Result<Psbt, UuidError> {
+                    let set = TxUuid::try_from(uuid.clone()).unwrap();
+                    match mode {
+                        Mode::Mixed => sorter::<Mixed>(psbt).try_set_uuid(set).map(|s| s.into_ordered_psbt()),
+                        Mode::ExplicitKeysForbidden => sorter::<ExplicitKeysForbidden>(psbt).try_set_uuid(set).map(|s| s.into_ordered_psbt()),
+                        Mode::ExplicitKeysRequired => sorter::<ExplicitKeysRequired>(psbt)
+                            .try_set_uuid(set)
+                            .map(|s| s.try_into_ordered_psbt().unwrap()),
+                    }
+                };
+
+                let expected = match old_uuid.filter(|old| **old != uuid) {
+                    None => Ok(order(mode, false, psbt(Some(&uuid)))),
+                    Some(old) => Err(UuidError::Conflict {
+                        existing: TxUuid::try_from(old.clone()).unwrap(),
+                        requested: TxUuid::try_from(uuid.clone()).unwrap(),
+                    }),
+                };
+                prop_assert_eq!(joined(psbt(old_uuid)), expected);
+            }
+
             /// `try_sort` hands the ordered PSBT, with its flags, to the role
             /// that matches the modifiability.
             #[test]
             fn try_sort_hands_the_ordered_psbt_to_the_role_for_its_modifiability(
-                seed in seeds(),
+                uuid in uuids(),
             ) {
-                fn sorter<M: Modifiability>(flags: u8, seed: &[u8]) -> Sorter<M, Seeded<ExplicitKeysForbidden>> {
+                fn sorter<M: Modifiability>(flags: u8, uuid: &[u8]) -> Sorter<M, ExplicitKeysForbidden> {
                     let mut psbt = empty_psbt();
                     psbt.global.set_tx_modifiable_flags(flags);
-                    psbt.global.set_sort_seed(sort_seed(seed.to_vec()));
+                    psbt.global.set_uuid(TxUuid::try_from(uuid.to_vec()).unwrap());
                     psbt.inputs = InputSet::try_from_inputs([make_input(1, 0), make_input(2, 0)]).unwrap();
                     psbt.outputs = OutputSet::try_from_outputs([make_output_with_uid(1)]).unwrap();
                     Sorter::try_from_unordered_psbt(with_derivation(psbt, SortKeyDerivation::ExplicitKeysForbidden)).unwrap()
                 }
 
-                let both: v2::Constructor<v2::Modifiable> = sorter::<BothModifiable>(0x03, &seed).try_sort().unwrap();
-                let inputs: v2::Constructor<v2::InputsOnlyModifiable> = sorter::<InputsModifiable>(0x01, &seed).try_sort().unwrap();
-                let outputs: v2::Constructor<v2::OutputsOnlyModifiable> = sorter::<OutputsModifiable>(0x02, &seed).try_sort().unwrap();
-                let updater: v2::Updater = sorter::<Unmodifiable>(0x00, &seed).try_sort().unwrap();
+                let both: v2::Constructor<v2::Modifiable> = sorter::<BothModifiable>(0x03, &uuid).try_sort().unwrap();
+                let inputs: v2::Constructor<v2::InputsOnlyModifiable> = sorter::<InputsModifiable>(0x01, &uuid).try_sort().unwrap();
+                let outputs: v2::Constructor<v2::OutputsOnlyModifiable> = sorter::<OutputsModifiable>(0x02, &uuid).try_sort().unwrap();
+                let updater: v2::Updater = sorter::<Unmodifiable>(0x00, &uuid).try_sort().unwrap();
 
-                let ordered = sorter::<Unmodifiable>(0x00, &seed).into_ordered_psbt();
+                let ordered = sorter::<Unmodifiable>(0x00, &uuid).try_into_ordered_psbt().unwrap();
                 let handed_off = [
                     (0x03, both.psbt().unwrap()),
                     (0x01, inputs.psbt().unwrap()),
@@ -1113,67 +1155,6 @@ mod tests {
                     prop_assert_eq!(psbt.inputs, ordered.inputs.clone());
                     prop_assert_eq!(psbt.outputs, ordered.outputs.clone());
                 }
-            }
-
-            #[test]
-            fn explicit_reports_missing_and_duplicate_keys(
-                duplicate_key in proptest::collection::vec(any::<u8>(), 0..=8),
-            ) {
-                let mut missing_input = empty_psbt();
-                missing_input.inputs = InputSet::try_from_inputs([make_input(1, 0)]).unwrap();
-                prop_assert!(matches!(
-                    Sorter::<Unmodifiable, ExplicitKeysRequired>(missing_input, PhantomData).try_into_ordered_psbt(),
-                    Err(SortError::MissingInputSortKey(_))
-                ));
-
-                let mut missing_output = empty_psbt();
-                missing_output.outputs = OutputSet::try_from_outputs([make_output_with_uid(1)]).unwrap();
-                prop_assert!(matches!(
-                    Sorter::<Unmodifiable, ExplicitKeysRequired>(missing_output, PhantomData).try_into_ordered_psbt(),
-                    Err(SortError::MissingOutputSortKey)
-                ));
-
-                let mut duplicates = empty_psbt();
-                duplicates.outputs = OutputSet::try_from_outputs([1, 2].map(|uid| {
-                    let mut output = make_output_with_uid(uid);
-                    output.set_sort_key(sort_key(duplicate_key.clone()));
-                    output
-                }))
-                .unwrap();
-                prop_assert!(matches!(
-                    Sorter::<Unmodifiable, ExplicitKeysRequired>(duplicates, PhantomData).try_into_ordered_psbt(),
-                    Err(SortError::DuplicateSortKey(_))
-                ));
-            }
-
-            #[test]
-            fn mixed_rejects_tied_sort_keys(
-                seed in seeds(),
-                key in proptest::collection::vec(any::<u8>(), 0..=8),
-            ) {
-                let mut explicit_tie = empty_psbt();
-                explicit_tie.outputs = OutputSet::try_from_outputs([1, 2].map(|uid| {
-                    let mut output = make_output_with_uid(uid);
-                    output.set_sort_key(sort_key(key.clone()));
-                    output
-                }))
-                .unwrap();
-                prop_assert!(matches!(
-                    Sorter::<Unmodifiable, Mixed>::try_from_unordered_psbt(explicit_tie).unwrap().try_into_ordered_psbt(),
-                    Err(SortError::DuplicateSortKey(tied)) if tied == key
-                ));
-
-                let derived = make_input(2, 0);
-                let derived_key = derive_sort_key(&seed, |engine| write_input_sort_identifier(&derived, engine)).to_vec();
-                let mut explicit = make_input(1, 0);
-                explicit.set_sort_key(sort_key(derived_key.clone()));
-                let mut mixed_tie = empty_psbt();
-                mixed_tie.global.set_sort_seed(sort_seed(seed));
-                mixed_tie.inputs = InputSet::try_from_inputs([explicit, derived]).unwrap();
-                prop_assert!(matches!(
-                    Sorter::<Unmodifiable, Mixed>::try_from_unordered_psbt(mixed_tie).unwrap().try_into_ordered_psbt(),
-                    Err(SortError::DuplicateSortKey(tied)) if tied == derived_key
-                ));
             }
         }
     }
