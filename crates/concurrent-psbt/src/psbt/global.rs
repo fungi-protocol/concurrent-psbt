@@ -171,10 +171,10 @@ pub const PSBT_GLOBAL_SORT_KEY_DERIVATION_SUBTYPE: u8 = 0x12;
 pub enum SortKeyDerivation {
     /// `0x00`: every input and output needs an explicit sort key, and there is
     /// no sort seed.
-    Explicit,
+    ExplicitKeysRequired,
     /// `0x01`: every sort key is derived from the sort seed, and explicit sort
     /// keys are not allowed.
-    Derived,
+    ExplicitKeysForbidden,
 }
 
 impl SortKeyDerivation {
@@ -182,16 +182,16 @@ impl SortKeyDerivation {
     /// `0x01`.
     fn from_value(value: Vec<u8>) -> Result<Self, Vec<u8>> {
         match value.as_slice() {
-            [0x00] => Ok(Self::Explicit),
-            [0x01] => Ok(Self::Derived),
+            [0x00] => Ok(Self::ExplicitKeysRequired),
+            [0x01] => Ok(Self::ExplicitKeysForbidden),
             _ => Err(value),
         }
     }
 
     pub(crate) fn to_byte(self) -> u8 {
         match self {
-            Self::Explicit => 0x00,
-            Self::Derived => 0x01,
+            Self::ExplicitKeysRequired => 0x00,
+            Self::ExplicitKeysForbidden => 0x01,
         }
     }
 }
@@ -325,12 +325,12 @@ mod tests {
             };
             let mut global = Global::default();
             global.set_sort_seed(SortSeed::try_from(vec![0xaa; 16]).unwrap());
-            global.set_sort_key_derivation(SortKeyDerivation::Derived);
+            global.set_sort_key_derivation(SortKeyDerivation::ExplicitKeysForbidden);
             assert!(global.is_unordered());
             assert_eq!(global.sort_seed(), Some([0xaa; 16].as_slice()));
             assert_eq!(
                 global.sort_key_derivation(),
-                Some(SortKeyDerivation::Derived)
+                Some(SortKeyDerivation::ExplicitKeysForbidden)
             );
             let v2 = global.clone().into_v2(0, 0);
             assert_eq!(v2.proprietaries.get(&key(0x10)), Some(&vec![0x03]));
@@ -339,7 +339,7 @@ mod tests {
             assert_eq!(Global::try_from(v2), Ok(global.clone()));
 
             global.clear_unordered();
-            global.set_sort_key_derivation(SortKeyDerivation::Explicit);
+            global.set_sort_key_derivation(SortKeyDerivation::ExplicitKeysRequired);
             assert!(!global.is_unordered());
             let v2 = global.into_v2(0, 0);
             assert!(!v2.proprietaries.contains_key(&key(0x10)));
@@ -457,8 +457,8 @@ mod tests {
                 proptest::option::of(0u8..2),
                 proptest::bool::ANY,
                 proptest::option::of(prop_oneof![
-                    Just(SortKeyDerivation::Explicit),
-                    Just(SortKeyDerivation::Derived),
+                    Just(SortKeyDerivation::ExplicitKeysRequired),
+                    Just(SortKeyDerivation::ExplicitKeysForbidden),
                 ]),
                 proptest::option::of(proptest::collection::vec(any::<u8>(), 16..=17)),
                 proptest::collection::btree_map(
@@ -590,8 +590,8 @@ mod tests {
             ) {
                 let v2 = v2_with_fields(&[(PSBT_GLOBAL_SORT_KEY_DERIVATION_SUBTYPE, value.clone())]);
                 let derivation = match value.as_slice() {
-                    [0x00] => SortKeyDerivation::Explicit,
-                    [0x01] => SortKeyDerivation::Derived,
+                    [0x00] => SortKeyDerivation::ExplicitKeysRequired,
+                    [0x01] => SortKeyDerivation::ExplicitKeysForbidden,
                     _ => {
                         let error = Global::try_from(v2).unwrap_err();
                         let bytes = format!("{value:02x?}");

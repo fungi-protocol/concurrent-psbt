@@ -89,11 +89,11 @@ pub enum SortModeError {
     /// The mode is [`Seeded`](super::Seeded) but `PSBT_GLOBAL_SORT_SEED` is
     /// not set.
     MissingSortSeed,
-    /// The mode is [`ExplicitOnly`](super::ExplicitOnly) but `PSBT_GLOBAL_SORT_SEED`
-    /// is set.
+    /// The mode is [`ExplicitKeysRequired`](super::ExplicitKeysRequired) but
+    /// `PSBT_GLOBAL_SORT_SEED` is set.
     UnexpectedSortSeed,
-    /// The mode is [`DerivedOnly`](super::DerivedOnly) but an input or
-    /// output has a sort key.
+    /// The mode is [`ExplicitKeysForbidden`](super::ExplicitKeysForbidden) but
+    /// an input or output has a sort key.
     UnexpectedSortKey,
 }
 
@@ -111,9 +111,15 @@ impl std::fmt::Display for SortModeError {
             ),
             Self::MissingSortSeed => write!(f, "PSBT_GLOBAL_SORT_SEED not set"),
             Self::UnexpectedSortSeed => {
-                write!(f, "PSBT_GLOBAL_SORT_SEED is set in explicit-only sort mode")
+                write!(
+                    f,
+                    "PSBT_GLOBAL_SORT_SEED is set in a sort mode that requires explicit keys"
+                )
             }
-            Self::UnexpectedSortKey => write!(f, "a sort key is set in derived-only sort mode"),
+            Self::UnexpectedSortKey => write!(
+                f,
+                "a sort key is set in a sort mode that forbids explicit keys"
+            ),
         }
     }
 }
@@ -260,11 +266,12 @@ mod tests {
                 ),
                 (
                     SorterError::from(SortModeError::UnexpectedSortSeed).to_string(),
-                    "PSBT_GLOBAL_SORT_SEED is set in explicit-only sort mode".to_owned(),
+                    "PSBT_GLOBAL_SORT_SEED is set in a sort mode that requires explicit keys"
+                        .to_owned(),
                 ),
                 (
                     SortModeError::UnexpectedSortKey.to_string(),
-                    "a sort key is set in derived-only sort mode".to_owned(),
+                    "a sort key is set in a sort mode that forbids explicit keys".to_owned(),
                 ),
                 (
                     SeedConflict {
@@ -282,22 +289,22 @@ mod tests {
 
         #[test]
         fn a_derivation_mismatch_names_both_values() {
-            use SortKeyDerivation::{Derived, Explicit};
+            use SortKeyDerivation::{ExplicitKeysForbidden, ExplicitKeysRequired};
 
             let examples = [
                 (
                     None,
-                    Some(Derived),
+                    Some(ExplicitKeysForbidden),
                     "PSBT_GLOBAL_SORT_KEY_DERIVATION is unset, expected 0x01",
                 ),
                 (
-                    Some(Explicit),
+                    Some(ExplicitKeysRequired),
                     None,
                     "PSBT_GLOBAL_SORT_KEY_DERIVATION is 0x00, expected unset",
                 ),
                 (
-                    Some(Derived),
-                    Some(Explicit),
+                    Some(ExplicitKeysForbidden),
+                    Some(ExplicitKeysRequired),
                     "PSBT_GLOBAL_SORT_KEY_DERIVATION is 0x01, expected 0x00",
                 ),
             ];
@@ -317,8 +324,8 @@ mod tests {
 
         fn derivation() -> impl Strategy<Value = Option<SortKeyDerivation>> {
             proptest::option::of(prop_oneof![
-                Just(SortKeyDerivation::Explicit),
-                Just(SortKeyDerivation::Derived)
+                Just(SortKeyDerivation::ExplicitKeysRequired),
+                Just(SortKeyDerivation::ExplicitKeysForbidden)
             ])
         }
 
