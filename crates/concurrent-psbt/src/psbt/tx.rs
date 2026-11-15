@@ -12,7 +12,9 @@ use crate::lattice::partial::{Conflict, JoinResult, PartialJoin};
 use crate::{Conflicts, Lift, ResultWrapped};
 
 use super::conflicts::PsbtConflict;
-use super::global::{Global, InvalidGlobal, ResultGlobal, SortKeyDerivation, SortSeed};
+use super::global::{
+    Global, InvalidGlobal, InvalidTxUuid, ResultGlobal, SortKeyDerivation, SortSeed,
+};
 use super::input::{DuplicateInput, Input, InputSet, ResultInputSet, SortKey, out_point};
 use super::output::{DuplicateOutput, InvalidOutput, Output, OutputSet, ResultOutputSet, UniqueId};
 
@@ -58,6 +60,8 @@ pub enum UnorderedPsbtError {
     /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` is present but its value is neither
     /// `0x00` nor `0x01`.
     InvalidSortKeyDerivation(Vec<u8>),
+    /// The length of `PSBT_GLOBAL_TX_UUID` is outside the allowed range.
+    InvalidTxUuid(InvalidTxUuid),
     /// `PSBT_GLOBAL_SORT_SEED` is shorter than [`SortSeed::MIN_LEN`]; this is
     /// its length.
     SortSeedTooShort(usize),
@@ -116,6 +120,7 @@ impl From<InvalidGlobal> for UnorderedPsbtError {
         match error {
             InvalidGlobal::UnorderedFlag(value) => Self::InvalidUnorderedFlag(value),
             InvalidGlobal::SortKeyDerivation(value) => Self::InvalidSortKeyDerivation(value),
+            InvalidGlobal::TxUuid(error) => Self::InvalidTxUuid(error),
             InvalidGlobal::SortSeed(error) => Self::SortSeedTooShort(error.0.len()),
         }
     }
@@ -148,6 +153,7 @@ impl fmt::Display for UnorderedPsbtError {
                 f,
                 "PSBT_GLOBAL_SORT_KEY_DERIVATION is {value:02x?}, not 0x00 or 0x01"
             ),
+            Self::InvalidTxUuid(error) => error.fmt(f),
             Self::SortSeedTooShort(len) => write!(
                 f,
                 "PSBT_GLOBAL_SORT_SEED is {len} bytes, fewer than {}",
@@ -944,6 +950,35 @@ mod tests {
             ];
             for (error, message) in cases {
                 assert_eq!(error.to_string(), message);
+            }
+        }
+
+        #[test]
+        fn psbt_import_checks_the_uuid_length() {
+            use crate::global::PSBT_GLOBAL_TX_UUID_SUBTYPE;
+
+            for (len, valid) in [(0, false), (15, false), (16, true), (32, true), (33, false)] {
+                let bytes = vec![0; len];
+                let mut psbt = v2_psbt_with(Global::default(), vec![], vec![]);
+                psbt.global.proprietaries.insert(
+                    crate::psbt::proprietary::key(PSBT_GLOBAL_TX_UUID_SUBTYPE),
+                    bytes.clone(),
+                );
+                if valid {
+                    let parsed = UnorderedPsbt::try_from_psbt(psbt).unwrap();
+                    assert_eq!(parsed.global().uuid(), Some(bytes.as_slice()));
+                } else {
+                    let error = UnorderedPsbtError::InvalidTxUuid(InvalidTxUuid(bytes));
+                    assert_eq!(
+                        error.to_string(),
+                        format!("PSBT_GLOBAL_TX_UUID is {len} bytes, expected 16 to 32"),
+                    );
+                    assert_eq!(
+                        UnorderedPsbt::try_from_psbt(psbt.clone()),
+                        Err(error.clone())
+                    );
+                    assert_eq!(ResultUnorderedPsbt::try_from_psbt(psbt), Err(error));
+                }
             }
         }
 
