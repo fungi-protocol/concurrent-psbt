@@ -1,42 +1,38 @@
 use psbt_v2::v2::Psbt;
 
 use super::SortError;
-use crate::input::Input;
-use crate::output::Output;
+use super::key::{derivation_engine, input_sort_key, output_sort_key};
 use crate::tx::UnorderedPsbt;
 
-pub(super) fn ordered_psbt<I, O>(
-    psbt: UnorderedPsbt,
-    mut input_key: I,
-    mut output_key: O,
-) -> Result<Psbt, SortError>
-where
-    I: FnMut(&Input) -> Result<Vec<u8>, SortError>,
-    O: FnMut(&Output) -> Result<Vec<u8>, SortError>,
-{
+/// Order `psbt` by full sort key, as [`input_sort_key`] and
+/// [`output_sort_key`] compute it, and clear `PSBT_GLOBAL_TX_UNORDERED`.
+///
+/// Inputs are distinct by outpoint and outputs by unique ID, so their full
+/// sort keys differ unless SHA-256 collides, and the order is total.
+///
+/// # Errors
+/// Returns [`SortError::MissingUuid`] if `PSBT_GLOBAL_TX_UUID` is unset,
+/// then the first input, then the first output, missing an explicit
+/// sort key if `explicit`.
+pub(super) fn ordered_psbt(psbt: UnorderedPsbt, explicit: bool) -> Result<Psbt, SortError> {
+    let engine = derivation_engine(&psbt.global)?;
     let mut inputs: Vec<_> = psbt.inputs.into_iter().collect();
     let mut outputs: Vec<_> = psbt.outputs.into_iter().collect();
 
     let mut input_keys = inputs
         .iter()
         .enumerate()
-        .map(|(i, input)| input_key(input).map(|key| (key, i)))
+        .map(|(i, input)| input_sort_key(&engine, explicit, input).map(|key| (key, i)))
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut output_keys = outputs
         .iter()
         .enumerate()
-        .map(|(i, output)| output_key(output).map(|key| (key, i)))
+        .map(|(i, output)| output_sort_key(&engine, explicit, output).map(|key| (key, i)))
         .collect::<Result<Vec<_>, _>>()?;
 
     input_keys.sort_by(|(left, _), (right, _)| left.cmp(right));
     output_keys.sort_by(|(left, _), (right, _)| left.cmp(right));
-
-    for keys in [&input_keys, &output_keys] {
-        if let Some(pair) = keys.windows(2).find(|pair| pair[0].0 == pair[1].0) {
-            return Err(SortError::DuplicateSortKey(pair[0].0.clone()));
-        }
-    }
 
     apply_permutation(&mut inputs, &mut input_keys);
     apply_permutation(&mut outputs, &mut output_keys);

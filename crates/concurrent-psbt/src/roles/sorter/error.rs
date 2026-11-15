@@ -1,20 +1,20 @@
 use psbt_v2::v2::DetermineLockTimeError;
 
-use crate::global::{SortKeyDerivation, SortSeed};
+use crate::global::{SortKeyDerivation, SortSeed, TxUuid};
 use crate::lattice::partial::Conflict;
 
 /// Error type for sort operations.
 #[derive(Debug)]
 pub enum SortError {
-    /// An input is missing a sort key and no seed is available to derive one.
+    /// In [`ExplicitKeysRequired`](super::ExplicitKeysRequired) mode, the input
+    /// spending this outpoint has no sort key.
     MissingInputSortKey(bitcoin::OutPoint),
-    /// An output is missing a sort key and no seed is available to derive one.
+    /// In [`ExplicitKeysRequired`](super::ExplicitKeysRequired) mode, an output
+    /// has no sort key.
     MissingOutputSortKey,
-    /// Two inputs, or two outputs, have this sort key, so their relative
-    /// order is undetermined.
-    DuplicateSortKey(Vec<u8>),
-    /// Sort seed is required but not set.
-    MissingSortSeed,
+    /// In an unseeded mode, `PSBT_GLOBAL_TX_UUID` is unset, so no
+    /// sort key can be derived.
+    MissingUuid,
     /// The inputs' lock time requirements conflict, so the ordered PSBT
     /// cannot be handed to the [`Updater`](psbt_v2::v2::Updater).
     UndeterminedLockTime(DetermineLockTimeError),
@@ -25,14 +25,7 @@ impl std::fmt::Display for SortError {
         match self {
             Self::MissingInputSortKey(op) => write!(f, "input {op} missing sort key"),
             Self::MissingOutputSortKey => write!(f, "output missing sort key"),
-            Self::DuplicateSortKey(k) => {
-                let encoded = k
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>();
-                write!(f, "duplicate sort key: {encoded}")
-            }
-            Self::MissingSortSeed => write!(f, "PSBT_GLOBAL_SORT_SEED not set"),
+            Self::MissingUuid => write!(f, "PSBT_GLOBAL_TX_UUID unset"),
             Self::UndeterminedLockTime(error) => write!(f, "{error}"),
         }
     }
@@ -86,12 +79,9 @@ pub enum SortModeError {
         /// The PSBT's value, `None` for unset.
         actual: Option<SortKeyDerivation>,
     },
-    /// The mode is [`Seeded`](super::Seeded) but `PSBT_GLOBAL_SORT_SEED` is
-    /// not set.
-    MissingSortSeed,
-    /// The mode is [`ExplicitKeysRequired`](super::ExplicitKeysRequired) but
-    /// `PSBT_GLOBAL_SORT_SEED` is set.
-    UnexpectedSortSeed,
+    /// The mode is [`Seeded`](super::Seeded) but `PSBT_GLOBAL_TX_UUID` is
+    /// unset.
+    MissingUuid,
     /// The mode is [`ExplicitKeysForbidden`](super::ExplicitKeysForbidden) but
     /// an input or output has a sort key.
     UnexpectedSortKey,
@@ -109,13 +99,7 @@ impl std::fmt::Display for SortModeError {
                 show(actual),
                 show(expected)
             ),
-            Self::MissingSortSeed => write!(f, "PSBT_GLOBAL_SORT_SEED not set"),
-            Self::UnexpectedSortSeed => {
-                write!(
-                    f,
-                    "PSBT_GLOBAL_SORT_SEED is set in a sort mode that requires explicit keys"
-                )
-            }
+            Self::MissingUuid => write!(f, "PSBT_GLOBAL_TX_UUID unset in a seeded sort mode"),
             Self::UnexpectedSortKey => write!(
                 f,
                 "a sort key is set in a sort mode that forbids explicit keys"
@@ -195,6 +179,46 @@ impl std::fmt::Display for SeedConflict {
 
 impl std::error::Error for SeedConflict {}
 
+/// Error when joining a UUID into `PSBT_GLOBAL_TX_UUID`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UuidError {
+    /// `PSBT_GLOBAL_TX_UUID` is already a different UUID. A UUID is joined
+    /// rather than replaced, so that setting one is monotone, and two
+    /// different UUIDs do not join.
+    Conflict {
+        /// The UUID the PSBT has.
+        existing: TxUuid,
+        /// The UUID that was to be set.
+        requested: TxUuid,
+    },
+}
+
+impl UuidError {
+    /// Read the UUIDs off the conflict of joining `requested` into
+    /// `existing`, which holds the two in that order.
+    pub(crate) fn from_conflict(conflict: Conflict<TxUuid>) -> Self {
+        let mut uuids = conflict.into_iter();
+        let mut next = || uuids.next().expect("joining two UUIDs conflicts on both");
+        let existing = next();
+        Self::Conflict {
+            existing,
+            requested: next(),
+        }
+    }
+}
+
+impl std::fmt::Display for UuidError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Conflict { .. } => {
+                write!(f, "PSBT_GLOBAL_TX_UUID is already set to a different UUID")
+            }
+        }
+    }
+}
+
+impl std::error::Error for UuidError {}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -241,12 +265,8 @@ mod tests {
                     "output missing sort key".to_owned(),
                 ),
                 (
-                    SortError::DuplicateSortKey(vec![0x00, 0x0f, 0xff]).to_string(),
-                    "duplicate sort key: 000fff".to_owned(),
-                ),
-                (
-                    SortError::MissingSortSeed.to_string(),
-                    "PSBT_GLOBAL_SORT_SEED not set".to_owned(),
+                    SortError::MissingUuid.to_string(),
+                    "PSBT_GLOBAL_TX_UUID unset".to_owned(),
                 ),
                 (
                     SortError::from(lock_time.clone()).to_string(),
@@ -261,22 +281,25 @@ mod tests {
                     "tx_modifiable_flags mismatch: expected 0x01, got 0x02".to_owned(),
                 ),
                 (
-                    SortModeError::MissingSortSeed.to_string(),
-                    "PSBT_GLOBAL_SORT_SEED not set".to_owned(),
-                ),
-                (
-                    SorterError::from(SortModeError::UnexpectedSortSeed).to_string(),
-                    "PSBT_GLOBAL_SORT_SEED is set in a sort mode that requires explicit keys"
-                        .to_owned(),
-                ),
-                (
-                    SortModeError::UnexpectedSortKey.to_string(),
+                    SorterError::from(SortModeError::UnexpectedSortKey).to_string(),
                     "a sort key is set in a sort mode that forbids explicit keys".to_owned(),
                 ),
                 (
+                    SorterError::from(SortModeError::MissingUuid).to_string(),
+                    "PSBT_GLOBAL_TX_UUID unset in a seeded sort mode".to_owned(),
+                ),
+                (
+                    UuidError::Conflict {
+                        existing: TxUuid::try_from(vec![1; 16]).unwrap(),
+                        requested: TxUuid::try_from(vec![2; 16]).unwrap(),
+                    }
+                    .to_string(),
+                    "PSBT_GLOBAL_TX_UUID is already set to a different UUID".to_owned(),
+                ),
+                (
                     SeedConflict {
-                        existing: SortSeed::try_from(vec![1; 16]).unwrap(),
-                        requested: SortSeed::try_from(vec![2; 16]).unwrap(),
+                        existing: SortSeed::from(vec![1; 16]),
+                        requested: SortSeed::from(vec![2; 16]),
                     }
                     .to_string(),
                     "PSBT_GLOBAL_SORT_SEED is already set to a different seed".to_owned(),
@@ -319,7 +342,6 @@ mod tests {
     #[cfg(feature = "prop-tests")]
     mod prop {
         use super::*;
-        use bitcoin::hex::DisplayHex;
         use proptest::prelude::*;
 
         fn derivation() -> impl Strategy<Value = Option<SortKeyDerivation>> {
@@ -334,18 +356,16 @@ mod tests {
                 (derivation(), derivation()).prop_map(|(expected, actual)| {
                     SortModeError::SortKeyDerivation { expected, actual }
                 }),
-                Just(SortModeError::MissingSortSeed),
-                Just(SortModeError::UnexpectedSortSeed),
+                Just(SortModeError::MissingUuid),
                 Just(SortModeError::UnexpectedSortKey),
             ]
         }
 
         proptest! {
             #[test]
-            fn sort_errors_name_the_offending_input_or_key(
+            fn sort_errors_name_the_offending_input(
                 txid_byte in any::<u8>(),
                 vout in any::<u32>(),
-                key in proptest::collection::vec(any::<u8>(), 0..=8),
             ) {
                 let outpoint = bitcoin::OutPoint {
                     txid: bitcoin::Txid::from_byte_array([txid_byte; 32]),
@@ -355,11 +375,6 @@ mod tests {
                 prop_assert_eq!(
                     SortError::MissingInputSortKey(outpoint).to_string(),
                     format!("input {txid}:{vout} missing sort key")
-                );
-                let hex = key.to_lower_hex_string();
-                prop_assert_eq!(
-                    SortError::DuplicateSortKey(key).to_string(),
-                    format!("duplicate sort key: {hex}")
                 );
             }
 
