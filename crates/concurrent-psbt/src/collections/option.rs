@@ -59,6 +59,7 @@ impl<V: PartialJoin> ResultOptionExt for Option<JoinResult<V>> {
 }
 
 #[cfg(test)]
+#[cfg(any(feature = "unit-tests", feature = "prop-tests"))]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;

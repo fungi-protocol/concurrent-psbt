@@ -159,7 +159,7 @@ macro_rules! joinable_struct {
             /// callers can tell which entry conflicts. For scalar and option
             /// fields `key` is `None`.
             #[cfg_attr(
-                not(test),
+                not(all(test, feature = "unit-tests")),
                 expect(dead_code, reason = "only tests enumerate conflicted fields so far")
             )]
             pub(crate) fn for_each_conflict(

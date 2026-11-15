@@ -89,11 +89,13 @@ impl<V: PartialJoin> Conflict<V> {
 
     /// Number of distinct conflicting values.
     #[cfg(test)]
+    #[cfg(any(feature = "unit-tests", feature = "prop-tests"))]
     pub(crate) fn len(&self) -> usize {
         self.0.len()
     }
 
     #[cfg(test)]
+    #[cfg(any(feature = "unit-tests", feature = "prop-tests"))]
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

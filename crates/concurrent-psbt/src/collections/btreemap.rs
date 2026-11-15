@@ -67,6 +67,7 @@ impl<K: Ord, V: Join> JoinMut for BTreeMap<K, V> {
 }
 
 #[cfg(test)]
+#[cfg(any(feature = "unit-tests", feature = "prop-tests"))]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;

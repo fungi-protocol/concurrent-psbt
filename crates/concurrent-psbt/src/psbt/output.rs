@@ -47,6 +47,7 @@ impl UniqueId {
 
     /// Create a `UniqueId` from raw bytes without checking their length.
     #[cfg(test)]
+    #[cfg(any(feature = "unit-tests", feature = "prop-tests"))]
     pub(crate) fn new(bytes: Vec<u8>) -> Self {
         Self(bytes)
     }
@@ -146,6 +147,7 @@ impl OutputUniqueIdExt for Output {
 }
 
 #[cfg(test)]
+#[cfg(any(feature = "unit-tests", feature = "prop-tests"))]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;

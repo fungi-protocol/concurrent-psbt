@@ -52,7 +52,7 @@ joinable_struct! {
 
 /// Extract the [`OutPoint`] this input spends (previous txid + output index).
 #[cfg_attr(
-    not(test),
+    not(all(test, feature = "unit-tests")),
     expect(
         dead_code,
         reason = "used by InputSet once inputs are keyed by spent outpoint"
@@ -67,6 +67,7 @@ pub(crate) fn out_point(input: &Input) -> OutPoint {
 }
 
 #[cfg(test)]
+#[cfg(any(feature = "unit-tests", feature = "prop-tests"))]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
