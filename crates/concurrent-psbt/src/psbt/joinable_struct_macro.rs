@@ -259,7 +259,7 @@ macro_rules! joinable_struct {
     };
 }
 
-#[cfg(all(test, feature = "unit-tests"))]
+#[cfg(all(test, any(feature = "unit-tests", feature = "prop-tests")))]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::collections::BTreeMap;
@@ -285,37 +285,116 @@ mod tests {
         }
     }
 
-    fn sample(scalar: u8, option: u8, value: u8) -> Sample {
-        Sample {
-            scalar,
-            option: Some(option),
-            map: BTreeMap::from([(0, value)]),
+    #[cfg(feature = "unit-tests")]
+    mod unit {
+        use super::*;
+
+        fn sample(scalar: u8, option: u8, value: u8) -> Sample {
+            Sample {
+                scalar,
+                option: Some(option),
+                map: BTreeMap::from([(0, value)]),
+            }
+        }
+
+        #[test]
+        fn equal_structs_join_and_unwrap() {
+            let joined = sample(1, 2, 3).wrap().join(sample(1, 2, 3).wrap());
+            assert!(joined.is_ok());
+            assert_eq!(joined.try_unwrap().ok(), Some(sample(1, 2, 3)));
+        }
+
+        #[test]
+        fn conflicting_fields_are_reported_by_name_and_key() {
+            let joined = sample(1, 2, 3).wrap().join(sample(4, 5, 6).wrap());
+            assert!(!joined.is_ok());
+            let mut fields = Vec::new();
+            joined.for_each_conflict(|field, key, _| {
+                fields.push((field.to_owned(), key.map(|k| format!("{k:?}"))));
+            });
+            assert_eq!(
+                fields,
+                [
+                    ("scalar".to_owned(), None),
+                    ("option".to_owned(), None),
+                    ("map".to_owned(), Some("0".to_owned())),
+                ]
+            );
+            assert!(joined.try_unwrap().is_err());
         }
     }
 
-    #[test]
-    fn equal_structs_join_and_unwrap() {
-        let joined = sample(1, 2, 3).wrap().join(sample(1, 2, 3).wrap());
-        assert!(joined.is_ok());
-        assert_eq!(joined.try_unwrap().ok(), Some(sample(1, 2, 3)));
-    }
+    // Small domains make equal values, missing options and shared map keys
+    // common, so both clean and conflicted entries show up in one join.
+    #[cfg(feature = "prop-tests")]
+    mod prop {
+        use proptest::collection::btree_map;
+        use proptest::option;
+        use proptest::prelude::*;
 
-    #[test]
-    fn conflicting_fields_are_reported_by_name_and_key() {
-        let joined = sample(1, 2, 3).wrap().join(sample(4, 5, 6).wrap());
-        assert!(!joined.is_ok());
-        let mut fields = Vec::new();
-        joined.for_each_conflict(|field, key, _| {
-            fields.push((field.to_owned(), key.map(|k| format!("{k:?}"))));
-        });
-        assert_eq!(
-            fields,
-            [
-                ("scalar".to_owned(), None),
-                ("option".to_owned(), None),
-                ("map".to_owned(), Some("0".to_owned())),
-            ]
-        );
-        assert!(joined.try_unwrap().is_err());
+        use super::*;
+        use crate::lattice::partial::Conflict;
+
+        fn arb_sample() -> impl Strategy<Value = Sample> {
+            (0u8..3, option::of(0u8..3), btree_map(0u8..4, 0u8..3, 0..4)).prop_map(
+                |(scalar, option, map)| Sample {
+                    scalar,
+                    option,
+                    map,
+                },
+            )
+        }
+
+        type Visit = (&'static str, Option<String>, String);
+
+        fn conflict(a: u8, b: u8) -> String {
+            format!("{:?}", Conflict::from_values([a, b]))
+        }
+
+        /// The disagreements between `a` and `b`, in field order and then
+        /// key order: exactly what `for_each_conflict` should report.
+        fn disagreements(a: &Sample, b: &Sample) -> Vec<Visit> {
+            let mut expected = Vec::new();
+            if a.scalar != b.scalar {
+                expected.push(("scalar", None, conflict(a.scalar, b.scalar)));
+            }
+            if let (Some(x), Some(y)) = (a.option, b.option)
+                && x != y
+            {
+                expected.push(("option", None, conflict(x, y)));
+            }
+            for (k, &x) in &a.map {
+                if let Some(&y) = b.map.get(k)
+                    && x != y
+                {
+                    expected.push(("map", Some(format!("{k:?}")), conflict(x, y)));
+                }
+            }
+            expected
+        }
+
+        proptest! {
+            #[test]
+            fn for_each_conflict_visits_exactly_the_disagreements(
+                a in arb_sample(),
+                b in arb_sample(),
+            ) {
+                let expected = disagreements(&a, &b);
+                let joined = a.wrap().join(b.wrap());
+
+                let mut visited: Vec<Visit> = Vec::new();
+                joined.for_each_conflict(|field, key, conflict| {
+                    let field = ["scalar", "option", "map"]
+                        .into_iter()
+                        .find(|name| *name == field)
+                        .expect("visited an unknown field");
+                    visited.push((field, key.map(|k| format!("{k:?}")), format!("{conflict:?}")));
+                });
+
+                prop_assert_eq!(&visited, &expected);
+                prop_assert_eq!(joined.is_ok(), expected.is_empty());
+                prop_assert_eq!(joined.try_unwrap().is_ok(), expected.is_empty());
+            }
+        }
     }
 }
