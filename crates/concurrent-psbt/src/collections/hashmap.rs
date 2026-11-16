@@ -23,7 +23,7 @@ where
 
 /// Extension trait for transforming `HashMap` values while preserving keys.
 #[cfg_attr(
-    not(test),
+    not(all(test, any(feature = "unit-tests", feature = "prop-tests"))),
     expect(
         dead_code,
         reason = "temporary helper is consumed by PSBT set wrappers in later commits"
@@ -77,7 +77,7 @@ impl<V: PartialJoin> HashMapResultValue for JoinResult<V> {
 
 /// Extension trait for result-domain `HashMap` values.
 #[cfg_attr(
-    not(test),
+    not(all(test, any(feature = "unit-tests", feature = "prop-tests"))),
     expect(
         dead_code,
         reason = "temporary helper is consumed by PSBT set wrappers in later commits"
@@ -123,6 +123,7 @@ impl<K: Hash + Eq, V: HashMapResultValue> ResultHashMapExt for HashMap<K, V> {
 }
 
 #[cfg(test)]
+#[cfg(any(feature = "unit-tests", feature = "prop-tests"))]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;

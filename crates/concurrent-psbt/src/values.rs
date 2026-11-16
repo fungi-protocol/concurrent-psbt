@@ -20,6 +20,7 @@ impl IdempotentValue for usize {}
 impl IdempotentValue for Vec<u8> {}
 
 #[cfg(test)]
+#[cfg(any(feature = "unit-tests", feature = "prop-tests"))]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;

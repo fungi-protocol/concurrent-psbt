@@ -1,6 +1,6 @@
 #![allow(clippy::result_large_err)]
 #![cfg_attr(
-    not(test),
+    not(all(test, any(feature = "unit-tests", feature = "prop-tests"))),
     expect(
         dead_code,
         reason = "exported once UnorderedPsbt composes the PSBT types"
@@ -44,6 +44,7 @@ joinable_struct! {
 }
 
 #[cfg(test)]
+#[cfg(any(feature = "unit-tests", feature = "prop-tests"))]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
