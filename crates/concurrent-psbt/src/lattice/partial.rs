@@ -27,11 +27,6 @@ pub trait PartialJoin: Sized + PartialEq {
     /// `Conflict` is joined with another value, new entries are appended, so a multi-way fold does
     /// not preserve per-operand attribution.
     fn try_join(self, other: Self) -> JoinResult<Self>;
-
-    /// Lift a value into the result domain as `Ok(self)`.
-    fn wrap(self) -> JoinResult<Self> {
-        Ok(self)
-    }
 }
 
 /// Result of a fallible join: `Ok(v)` where `v` is the least upper bound if one exists,
@@ -228,6 +223,7 @@ mod tests {
     #[cfg(feature = "unit-tests")]
     mod unit {
         use super::*;
+        use crate::Lift;
 
         #[test]
         fn result_ok_ok_different_produces_conflict() {
@@ -336,6 +332,7 @@ mod tests {
     #[cfg(feature = "prop-tests")]
     mod prop {
         use super::*;
+        use crate::Lift;
         use proptest::prelude::*;
 
         fn arb_foo() -> impl Strategy<Value = Foo> {

@@ -1,11 +1,4 @@
 #![allow(clippy::result_large_err)]
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "exported once UnorderedPsbt composes the PSBT types"
-    )
-)]
 
 //! PSBT global field merging.
 //!
@@ -13,13 +6,15 @@
 //! enabling field-by-field merging that accumulates conflicts without short-circuiting.
 //! [`GlobalExt::wrap`] lifts a clean [`Global`] into the result domain.
 
+use std::collections::BTreeMap;
+
 use bitcoin::bip32::{KeySource, Xpub};
 use bitcoin::locktime::absolute;
 use bitcoin::transaction;
 
 use psbt_v2::Version;
 use psbt_v2::raw;
-use psbt_v2::v2::Global;
+pub use psbt_v2::v2::Global;
 
 joinable_struct! {
     /// Result-domain wrapper around a BIP 370 [`Global`].
@@ -29,6 +24,17 @@ joinable_struct! {
     /// [`ResultGlobal::try_unwrap`] to extract.
     source: Global,
     result: ResultGlobal,
+    conflicts: GlobalConflict, GlobalField {
+        Version => version: Version,
+        InputCount => input_count: usize,
+        OutputCount => output_count: usize,
+        TxVersion => tx_version: transaction::Version,
+        FallbackLockTime => fallback_lock_time: absolute::LockTime,
+        TxModifiableFlags => tx_modifiable_flags: u8,
+        Xpub => xpubs[Xpub]: KeySource,
+        Proprietary => proprietaries[raw::ProprietaryKey]: Vec<u8>,
+        Unknown => unknowns[raw::Key]: Vec<u8>,
+    },
     ext: GlobalExt,
     fields: {
         version: Version,
@@ -65,16 +71,16 @@ mod tests {
         }
 
         #[test]
-        fn for_each_conflict_reports_the_conflicted_field() {
+        fn conflicts_identify_the_field() {
             let mut a = Global::default();
             let mut b = Global::default();
             a.tx_version = transaction::Version::ONE;
             b.tx_version = transaction::Version::TWO;
-            let mut fields = Vec::new();
-            a.wrap()
-                .join(b.wrap())
-                .for_each_conflict(|field, _, _| fields.push(field.to_owned()));
-            assert_eq!(fields, ["tx_version"]);
+            let joined = a.wrap().join(b.wrap());
+            assert_eq!(
+                joined.conflicts().map(|c| c.path()).collect::<Vec<_>>(),
+                [GlobalField::TxVersion]
+            );
         }
     }
 

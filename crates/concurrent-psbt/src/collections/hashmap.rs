@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
+use crate::lattice::conflicts::Conflicts;
 use crate::lattice::join::{Join, JoinMut};
-use crate::lattice::partial::{JoinResult, PartialJoin};
+use crate::lattice::lift::{Lift, ResultWrapped};
 
 /// [`JoinMut`] (in-place join) for `HashMap`: matching keys are joined, disjoint keys are unioned.
 impl<K, V> JoinMut for HashMap<K, V>
@@ -21,90 +22,38 @@ where
     }
 }
 
-/// Extension trait for transforming `HashMap` values while preserving keys.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "temporary helper is consumed by PSBT set wrappers in later commits"
-    )
-)]
-pub(crate) trait HashMapExt {
-    type Key;
-    type Value;
-    /// Transform each value, preserving keys.
-    fn map_values<ResultValue>(
-        self,
-        f: impl FnMut(Self::Value) -> ResultValue,
-    ) -> HashMap<Self::Key, ResultValue>;
-}
+impl<K: Hash + Eq, V: Lift> Lift for HashMap<K, V> {
+    type Result = HashMap<K, V::Result>;
 
-impl<K: Hash + Eq, V> HashMapExt for HashMap<K, V> {
-    type Key = K;
-    type Value = V;
-    fn map_values<ResultValue>(
-        self,
-        mut f: impl FnMut(V) -> ResultValue,
-    ) -> HashMap<K, ResultValue> {
-        self.into_iter().map(|(k, v)| (k, f(v))).collect()
+    fn wrap(self) -> Self::Result {
+        self.into_iter()
+            .map(|(key, value)| (key, value.wrap()))
+            .collect()
     }
 }
 
-/// Value stored in a result-domain map.
-pub(crate) trait HashMapResultValue: Sized {
-    /// Clean value extracted when the result-domain value has no conflicts.
-    type Clean;
-    /// Returns `true` when this value contains no conflicts.
-    fn is_ok(&self) -> bool;
-    /// Extract the clean value, or return the original result-domain value.
-    fn try_unwrap(self) -> Result<Self::Clean, Self>;
-}
+impl<K, R: Conflicts> Conflicts for HashMap<K, R> {
+    type Item<'a>
+        = (&'a K, R::Item<'a>)
+    where
+        Self: 'a;
 
-impl<V: PartialJoin> HashMapResultValue for JoinResult<V> {
-    type Clean = V;
-
-    fn is_ok(&self) -> bool {
-        Result::is_ok(self)
+    fn conflicts(&self) -> impl Iterator<Item = Self::Item<'_>> {
+        self.iter()
+            .flat_map(|(key, value)| value.conflicts().map(move |conflict| (key, conflict)))
     }
-
-    fn try_unwrap(self) -> Result<V, Self> {
-        match self {
-            Ok(value) => Ok(value),
-            Err(conflict) => Err(Err(conflict)),
-        }
-    }
-}
-
-/// Extension trait for result-domain `HashMap` values.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "temporary helper is consumed by PSBT set wrappers in later commits"
-    )
-)]
-pub(crate) trait ResultHashMapExt: Sized {
-    type Key;
-    type Value: HashMapResultValue;
-    /// Returns `true` if every value in the map is conflict-free.
-    fn is_ok(&self) -> bool;
-    /// Extract the plain map, or return `self` if any value is a conflict.
-    fn try_unwrap(
-        self,
-    ) -> Result<HashMap<Self::Key, <Self::Value as HashMapResultValue>::Clean>, Self>;
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-fn unwrap_after_is_ok<V: HashMapResultValue>(value: V) -> V::Clean {
+fn unwrap_after_is_ok<V: ResultWrapped>(value: V) -> V::Clean {
     match value.try_unwrap() {
         Ok(value) => value,
         Err(_) => unreachable!("is_ok() guard verified all entries"),
     }
 }
 
-impl<K: Hash + Eq, V: HashMapResultValue> ResultHashMapExt for HashMap<K, V> {
-    type Key = K;
-    type Value = V;
+impl<K: Hash + Eq, V: ResultWrapped> ResultWrapped for HashMap<K, V> {
+    type Clean = HashMap<K, V::Clean>;
 
     fn is_ok(&self) -> bool {
         self.values().all(|v| v.is_ok())
@@ -126,7 +75,7 @@ impl<K: Hash + Eq, V: HashMapResultValue> ResultHashMapExt for HashMap<K, V> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::lattice::partial::Conflict;
+    use crate::lattice::partial::{Conflict, JoinResult, PartialJoin};
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct Val(u8);
@@ -145,14 +94,29 @@ mod tests {
     mod unit {
         use super::*;
 
-        fn wrap_map<K: Eq + Hash>(m: HashMap<K, Val>) -> HashMap<K, JoinResult<Val>> {
-            m.map_values(PartialJoin::wrap)
+        #[test]
+        fn nested_maps_lift_join_and_preserve_conflicts() {
+            let a: HashMap<u8, Option<HashMap<u8, Val>>> =
+                [(1, Some([(2, Val(3))].into())), (4, None)].into();
+            let b: HashMap<u8, Option<HashMap<u8, Val>>> = [(1, Some([(2, Val(5))].into()))].into();
+            assert_eq!(ResultWrapped::try_unwrap(a.clone().wrap()), Ok(a.clone()));
+            let joined = a.wrap().join(b.wrap());
+            assert!(!ResultWrapped::is_ok(&joined));
+            assert_eq!(
+                ResultWrapped::try_unwrap(joined.clone()),
+                Err(joined.clone())
+            );
+            let keys: Vec<_> = joined
+                .conflicts()
+                .map(|(outer, (inner, _))| (*outer, *inner))
+                .collect();
+            assert_eq!(keys, [(1, 2)]);
         }
 
         #[test]
-        fn map_values_preserves_keys() {
+        fn wrap_preserves_keys() {
             let m: HashMap<&str, Val> = [("a", Val(1)), ("b", Val(2))].into();
-            let w = wrap_map(m);
+            let w = m.wrap();
             assert_eq!(w.len(), 2);
             assert_eq!(w.get("a"), Some(&Ok(Val(1))));
         }
@@ -160,7 +124,7 @@ mod tests {
         #[test]
         fn try_unwrap_ok() {
             let m: HashMap<&str, Val> = [("a", Val(1))].into();
-            assert_eq!(wrap_map(m.clone()).try_unwrap().unwrap(), m);
+            assert_eq!(m.clone().wrap().try_unwrap().unwrap(), m);
         }
 
         #[test]
@@ -175,7 +139,7 @@ mod tests {
             let a: HashMap<u8, Val> = [(0, Val(0))].into();
             let c: HashMap<u8, Val> = [(0, Val(1))].into();
             assert_eq!(
-                wrap_map(a).join(wrap_map(c)),
+                a.wrap().join(c.wrap()),
                 [(0, Err(Conflict::from_values([Val(0), Val(1)])))].into()
             );
         }
@@ -185,7 +149,7 @@ mod tests {
             let a: HashMap<u8, Val> = [(0, Val(0))].into();
             let c: HashMap<u8, Val> = [(0, Val(1))].into();
             assert_eq!(
-                wrap_map(a).join(wrap_map(c)).try_unwrap(),
+                a.wrap().join(c.wrap()).try_unwrap(),
                 Err([(0, Err(Conflict::from_values([Val(0), Val(1)])))].into())
             );
         }
@@ -218,21 +182,12 @@ mod tests {
         // Type-specific
         proptest! {
             #[test]
-            fn result_value_try_unwrap_preserves_conflict(a in arb_val(), b in arb_val()) {
-                let value: JoinResult<Val> = Err(Conflict::from_values([a, b]));
-                prop_assert_eq!(
-                    HashMapResultValue::try_unwrap(value.clone()),
-                    Err(value),
-                );
-            }
-
-            #[test]
-            fn wrap_try_unwrap_roundtrip(m in proptest::collection::hash_map(0u8..4, arb_val(), 0..=3)) {
+            fn lift_try_unwrap_roundtrip(m in proptest::collection::hash_map(0u8..4, arb_val(), 0..=3)) {
                 let len = m.len();
-                let wrapped: HashMap<u8, JoinResult<Val>> = m.map_values(PartialJoin::wrap);
+                let wrapped: HashMap<u8, JoinResult<Val>> = m.clone().wrap();
                 prop_assert_eq!(wrapped.len(), len);
                 prop_assert!(wrapped.is_ok());
-                prop_assert!(wrapped.try_unwrap().is_ok());
+                prop_assert_eq!(wrapped.try_unwrap(), Ok(m));
             }
 
             #[test]
@@ -241,6 +196,15 @@ mod tests {
             ) {
                 let has_conflict = m.values().any(|v| v.is_err());
                 prop_assert_eq!(m.is_ok(), !has_conflict);
+            }
+
+            #[test]
+            fn visits_each_conflict_under_its_key(m in arb_hashmap()) {
+                let visited: std::collections::BTreeMap<_, _> = m.conflicts().collect();
+                let expected: std::collections::BTreeMap<_, _> = m.iter()
+                    .filter_map(|(key, value)| value.as_ref().err().map(|conflict| (key, conflict)))
+                    .collect();
+                prop_assert_eq!(visited, expected);
             }
 
             #[test]
