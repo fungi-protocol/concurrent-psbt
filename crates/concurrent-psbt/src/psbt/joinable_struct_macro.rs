@@ -1,5 +1,5 @@
-/// Generate a result-domain product type and its lattice operations from a
-/// single field list using standard Rust type syntax.
+/// Generate a product type, its result-domain counterpart, and their lattice
+/// operations from a single field list using standard Rust type syntax.
 ///
 /// Each field's result-domain type is `<Type as Lift>::Result`, so a field
 /// joins the way its type [`Lift`](crate::lattice::lift::Lift)s: a
@@ -7,26 +7,149 @@
 /// [`JoinResult`](crate::JoinResult), and `Option`, `BTreeMap` and `HashMap` by lifting
 /// their contents. Paths and type aliases resolve like any other type.
 ///
-/// Generates:
-/// 1. `$Result` struct with the lifted field types
-/// 2. `$Ext` trait with `wrap` method on the source type
-/// 3. `Join for $Result`
-/// 4. `$Result::is_ok` and `$Result::try_unwrap`
-/// 5. `Lift for $Source` and `ResultWrapped for $Result`
+/// Mirrored fields are private, with public getters and setters by default.
+/// Prefix a field with `[accessors(pub(crate))]` to restrict its accessors.
+/// Fields of `$Result` are `pub(crate)`.
 ///
-/// The field list must name at least one field: `is_ok` is generated as the
-/// conjunction of the per-field checks.
+/// Generates:
+/// 1. `$Source` struct with the fields as written
+/// 2. `$Result` struct with the lifted field types
+/// 3. `$Source::wrap`
+/// 4. `Join for $Result`
+/// 5. `$Result::is_ok` and `$Result::try_unwrap`
+/// 6. `Lift for $Source` and `ResultWrapped for $Result`
+///
+/// Each entry in `fields` mirrors the field of the same name in the `v2` type.
+/// Each entry in `proprietary` is written
+/// `name: Type = Codec`, and is stored in a proprietary key of `v2` by the
+/// [`ProprietaryField`](crate::psbt::proprietary::ProprietaryField) impl
+/// for `Codec`. The struct then has private conversions:
+///
+/// - `from_v2_fields(v2, proprietary...)` moves the mirrored fields out of
+///   `v2` and takes the proprietary fields as given;
+/// - `decode_v2(v2)` decodes the proprietary fields in order, removing their
+///   keys, then moves the mirrored fields;
+/// - `encode_v2(self, base)` moves the mirrored fields into `base` and
+///   encodes the proprietary fields into its proprietary keys. Fields of
+///   `base` that are not mirrored are kept.
 macro_rules! joinable_struct {
     (
-        $(#[$result_meta:meta])*
+        $(#[$source_meta:meta])*
         source: $Source:ident,
+        $(#[$result_meta:meta])*
         result: $Result:ident,
-        conflicts: $Conflict:ident, $Field:ident { $($conflict_fields:tt)* },
-        ext: $Ext:ident,
+        v2: $V2:path,
         fields: {
-            $( $field:ident : $T:ty ),+ $(,)?
+            $(
+                $(#[$field_meta:meta])*
+                $( [accessors($accessor_vis:vis)] )?
+                $field:ident : $T:ty
+            ),+ $(,)?
+        },
+        proprietary: {
+            $(
+                $(#[$proprietary_meta:meta])* $proprietary_vis:vis
+                $proprietary:ident : $P:ty = $Codec:ty
+            ),* $(,)?
+        } $(,)?
+    ) => {
+        joinable_struct! {
+            $(#[$source_meta])*
+            source: $Source,
+            $(#[$result_meta])*
+            result: $Result,
+            fields: {
+                $( $(#[$field_meta])* $field: $T , )+
+                $( $(#[$proprietary_meta])* $proprietary_vis $proprietary: $P , )*
+            }
+        }
+
+        impl $Source {
+            $( joinable_struct!(@accessors $(($accessor_vis))? $field: $T); )+
+        }
+
+        impl $Source {
+            /// The mirrored fields of `v2`, with these proprietary fields.
+            fn from_v2_fields(v2: $V2, $( $proprietary: $P ),*) -> Self {
+                Self {
+                    $( $field: v2.$field, )+
+                    $( $proprietary, )*
+                }
+            }
+
+            /// Decode the proprietary fields of `v2`, removing their keys, and
+            /// move its mirrored fields.
+            ///
+            /// # Errors
+            /// Returns the error of the first proprietary field that does not
+            /// decode.
+            fn decode_v2<E>(v2: $V2) -> Result<Self, E>
+            where
+                $( E: From<<$Codec as $crate::psbt::proprietary::ProprietaryField>::Error>, )*
+            {
+                joinable_struct!(@decode v2 [ $( $proprietary $Codec ),* ])
+            }
+
+            /// Move the mirrored fields into `base`, and encode the proprietary
+            /// fields into its proprietary keys.
+            ///
+            /// If a proprietary field encodes to `None`, its key is removed from
+            /// `base`, even if `self.proprietaries` has it.
+            fn encode_v2(self, mut base: $V2) -> $V2 {
+                $( base.$field = self.$field; )+
+                $(
+                    let key = $crate::psbt::proprietary::key(
+                        <$Codec as $crate::psbt::proprietary::ProprietaryField>::SUBTYPE,
+                    );
+                    base.proprietaries.remove(&key);
+                    base.proprietaries.extend(
+                        <$Codec as $crate::psbt::proprietary::ProprietaryField>::encode(
+                            self.$proprietary,
+                        )
+                        .map(|value| (key, value)),
+                    );
+                )*
+                base
+            }
+        }
+    };
+
+    (@decode $v2:ident []) => {
+        Ok(Self::from_v2_fields($v2))
+    };
+
+    (@decode $v2:ident [ $( $proprietary:ident $Codec:ty ),+ ]) => {{
+        let mut $v2 = $v2;
+        $(
+            let $proprietary =
+                <$Codec as $crate::psbt::proprietary::ProprietaryField>::decode(
+                    $v2.proprietaries.remove(&$crate::psbt::proprietary::key(
+                        <$Codec as $crate::psbt::proprietary::ProprietaryField>::SUBTYPE,
+                    )),
+                )?;
+        )+
+        Ok(Self::from_v2_fields($v2, $( $proprietary ),+))
+    }};
+
+    (
+        $(#[$source_meta:meta])*
+        source: $Source:ident,
+        $(#[$result_meta:meta])*
+        result: $Result:ident,
+        fields: {
+            $( $(#[$field_meta:meta])* $vis:vis $field:ident : $T:ty
+                 ),+ $(,)?
         }
     ) => {
+        $(#[$source_meta])*
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub struct $Source {
+            $(
+                $(#[$field_meta])*
+                $vis $field: $T,
+            )+
+        }
+
         $(#[$result_meta])*
         #[derive(Debug, Clone, PartialEq)]
         pub struct $Result {
@@ -35,7 +158,16 @@ macro_rules! joinable_struct {
             )+
         }
 
-        pub use $crate::Lift as $Ext;
+        impl $Source {
+            #[doc = concat!(
+                "Lift into the result domain as a conflict-free [`",
+                stringify!($Result),
+                "`]."
+            )]
+            pub fn wrap(self) -> $Result {
+                $crate::lattice::lift::Lift::wrap(self)
+            }
+        }
 
         impl $crate::lattice::lift::Lift for $Source {
             type Result = $Result;
@@ -82,10 +214,6 @@ macro_rules! joinable_struct {
             }
         }
 
-        record_conflicts! {
-            $Result, $Conflict, $Field { $($conflict_fields)* }
-        }
-
         impl $crate::lattice::lift::ResultWrapped for $Result {
             type Clean = $Source;
 
@@ -98,6 +226,22 @@ macro_rules! joinable_struct {
             }
         }
     };
+    (@accessors $field:ident: $T:ty) => {
+        joinable_struct!(@accessors (pub) $field: $T);
+    };
+    (@accessors ($vis:vis) $field:ident: $T:ty) => {
+        pastey::paste! {
+            #[doc = concat!("The `", stringify!($field), "` field.")]
+            $vis fn $field(&self) -> &$T {
+                &self.$field
+            }
+
+            #[doc = concat!("Replace the `", stringify!($field), "` field.")]
+            $vis fn [<set_ $field>](&mut self, $field: $T) {
+                self.$field = $field;
+            }
+        }
+    };
 }
 
 // Outside the `coverage(off)` test module, so that this expansion of the
@@ -106,29 +250,21 @@ macro_rules! joinable_struct {
 mod sample {
     use std::collections::BTreeMap;
 
-    /// One field per kind of lifting, the option spelled as a path.
-    #[derive(Debug, PartialEq)]
-    pub struct Sample {
-        pub scalar: u8,
-        pub option: std::option::Option<u8>,
-        pub map: BTreeMap<u8, u8>,
+    joinable_struct! {
+        /// One field per kind of lifting, the option spelled as a path.
+        source: Sample,
+        /// Result-domain form of [`Sample`].
+        result: ResultSample,
+        fields: {
+            pub scalar: u8,
+            pub option: std::option::Option<u8>,
+            pub map: BTreeMap<u8, u8>,
+        }
     }
 
-    joinable_struct! {
-        /// Result-domain form of [`Sample`].
-        source: Sample,
-        result: ResultSample,
-        conflicts: SampleConflict, SampleField {
-            Scalar => scalar: u8,
-            Option => option: u8,
-            Map => map[u8]: u8,
-        },
-        ext: SampleExt,
-        fields: {
-            scalar: u8,
-            option: std::option::Option<u8>,
-            map: BTreeMap<u8, u8>,
-        }
+    impl Sample {
+        joinable_struct!(@accessors scalar: u8);
+        joinable_struct!(@accessors (pub(crate)) option: std::option::Option<u8>);
     }
 }
 
@@ -137,9 +273,9 @@ mod sample {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::sample::{Sample, SampleExt};
+    use super::sample::Sample;
     use crate::lattice::join::Join;
-    use crate::lattice::lift::ResultWrapped;
+    use crate::lattice::lift::{Lift, ResultWrapped};
 
     fn sample(scalar: u8, option: u8, value: u8) -> Sample {
         Sample {
@@ -147,6 +283,17 @@ mod tests {
             option: Some(option),
             map: BTreeMap::from([(0, value)]),
         }
+    }
+
+    #[test]
+    fn default_and_restricted_accessors_read_and_update_fields() {
+        let mut value = sample(1, 2, 3);
+        assert_eq!(value.scalar(), &1);
+        assert_eq!(value.option(), &Some(2));
+        value.set_scalar(4);
+        value.set_option(None);
+        assert_eq!(value.scalar(), &4);
+        assert_eq!(value.option(), &None);
     }
 
     #[test]
@@ -171,28 +318,9 @@ mod tests {
     }
 
     #[test]
-    fn conflicting_fields_retain_typed_paths() {
+    fn conflicting_fields_preserve_failed_unwrap() {
         let joined = sample(1, 2, 3).wrap().join(sample(4, 5, 6).wrap());
         assert!(!joined.is_ok());
-        use super::sample::SampleField;
-        assert_eq!(
-            joined.conflicts().map(|c| c.path()).collect::<Vec<_>>(),
-            [
-                SampleField::Scalar,
-                SampleField::Option,
-                SampleField::Map(&0)
-            ]
-        );
-        use super::sample::SampleConflict;
-        for (conflict, expected) in joined.conflicts().zip([[1, 4], [2, 5], [3, 6]]) {
-            match conflict {
-                SampleConflict::Scalar { values }
-                | SampleConflict::Option { values }
-                | SampleConflict::Map { values, .. } => {
-                    assert_eq!(values.into_iter().copied().collect::<Vec<_>>(), expected);
-                }
-            }
-        }
         assert_eq!(ResultWrapped::try_unwrap(joined.clone()), Err(joined));
     }
 }

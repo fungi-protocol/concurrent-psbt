@@ -1,10 +1,13 @@
 #![allow(clippy::result_large_err)]
-
-//! PSBT global field merging.
+#![cfg_attr(
+    not(test),
+    expect(dead_code, reason = "global serialization is used by UnorderedPsbt")
+)]
+//! PSBT global fields and their merging.
 //!
-//! [`ResultGlobal`] wraps each global field in the internal result domain,
-//! enabling field-by-field merging that accumulates conflicts without short-circuiting.
-//! [`GlobalExt::wrap`] lifts a clean [`Global`] into the result domain.
+//! [`Global`] holds the global fields of a PSBT, and [`ResultGlobal`] wraps
+//! each of them in the internal result domain, enabling field-by-field merging
+//! that accumulates conflicts without short-circuiting.
 
 use std::collections::BTreeMap;
 
@@ -12,40 +15,56 @@ use bitcoin::bip32::{KeySource, Xpub};
 use bitcoin::locktime::absolute;
 use bitcoin::transaction;
 
-use psbt_v2::Version;
 use psbt_v2::raw;
-pub use psbt_v2::v2::Global;
 
 joinable_struct! {
-    /// Result-domain wrapper around a BIP 370 [`Global`].
+    /// The global fields of a PSBT.
     ///
-    /// Produced by joining two [`Global`] values via [`GlobalExt::wrap`].
+    /// Mirrors the BIP 370 global map except `PSBT_GLOBAL_VERSION`, which is
+    /// always 2, and the input and output counts, which are filled in when
+    /// converting to a BIP 370 PSBT.
+    source: Global,
+    /// Result-domain counterpart of [`Global`].
+    ///
+    /// Produced by joining [`Global`] values lifted with [`Global::wrap`].
     /// Use [`ResultGlobal::is_ok`] to check for conflicts and
     /// [`ResultGlobal::try_unwrap`] to extract.
-    source: Global,
     result: ResultGlobal,
-    conflicts: GlobalConflict, GlobalField {
-        Version => version: Version,
-        InputCount => input_count: usize,
-        OutputCount => output_count: usize,
-        TxVersion => tx_version: transaction::Version,
-        FallbackLockTime => fallback_lock_time: absolute::LockTime,
-        TxModifiableFlags => tx_modifiable_flags: u8,
-        Xpub => xpubs[Xpub]: KeySource,
-        Proprietary => proprietaries[raw::ProprietaryKey]: Vec<u8>,
-        Unknown => unknowns[raw::Key]: Vec<u8>,
-    },
-    ext: GlobalExt,
+    v2: psbt_v2::v2::Global,
     fields: {
-        version: Version,
         tx_version: transaction::Version,
         fallback_lock_time: Option<absolute::LockTime>,
         tx_modifiable_flags: u8,
-        input_count: usize,
-        output_count: usize,
         xpubs: BTreeMap<Xpub, KeySource>,
         proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
         unknowns: BTreeMap<raw::Key, Vec<u8>>,
+    },
+    proprietary: {},
+}
+
+impl Default for Global {
+    fn default() -> Self {
+        Self::from_v2_fields(psbt_v2::v2::Global::default())
+    }
+}
+
+/// Drops the version and the input and output counts.
+impl From<psbt_v2::v2::Global> for Global {
+    fn from(global: psbt_v2::v2::Global) -> Self {
+        let Ok(global) = Self::decode_v2::<std::convert::Infallible>(global);
+        global
+    }
+}
+
+impl Global {
+    /// Convert to a BIP 370 global map for a PSBT with `input_count` inputs
+    /// and `output_count` outputs.
+    pub(crate) fn into_v2(self, input_count: usize, output_count: usize) -> psbt_v2::v2::Global {
+        self.encode_v2(psbt_v2::v2::Global {
+            input_count,
+            output_count,
+            ..psbt_v2::v2::Global::default()
+        })
     }
 }
 
@@ -71,15 +90,10 @@ mod tests {
         }
 
         #[test]
-        fn conflicts_identify_the_field() {
-            let mut a = Global::default();
-            let mut b = Global::default();
-            a.tx_version = transaction::Version::ONE;
-            b.tx_version = transaction::Version::TWO;
-            let joined = a.wrap().join(b.wrap());
+        fn default_is_an_empty_v2_global() {
             assert_eq!(
-                joined.conflicts().map(|c| c.path()).collect::<Vec<_>>(),
-                [GlobalField::TxVersion]
+                Global::default().into_v2(0, 0),
+                psbt_v2::v2::Global::default()
             );
         }
     }
@@ -87,6 +101,9 @@ mod tests {
     #[cfg(feature = "prop-tests")]
     mod prop {
         use super::*;
+        use bitcoin::Network;
+        use bitcoin::bip32::{DerivationPath, Xpriv};
+        use bitcoin::secp256k1::Secp256k1;
         use proptest::prelude::*;
 
         fn arb_proprietary_key() -> impl Strategy<Value = raw::ProprietaryKey> {
@@ -102,13 +119,19 @@ mod tests {
                 })
         }
 
+        /// The master xpub of `seed`, with its own fingerprint as key source.
+        fn xpub_from_seed(seed: u8) -> (Xpub, KeySource) {
+            let xpriv = Xpriv::new_master(Network::Bitcoin, &[seed; 16]).expect("valid seed");
+            let xpub = Xpub::from_priv(&Secp256k1::new(), &xpriv);
+            (xpub, (xpub.fingerprint(), DerivationPath::master()))
+        }
+
         fn arb_global() -> impl Strategy<Value = Global> {
             (
                 proptest::bool::ANY,
                 0u8..4,
                 proptest::bool::ANY,
-                0usize..4,
-                0usize..4,
+                proptest::option::of(0u8..2),
                 proptest::collection::btree_map(
                     arb_proprietary_key(),
                     proptest::collection::vec(0u8..=255, 0..=8),
@@ -122,33 +145,21 @@ mod tests {
                 ),
             )
                 .prop_map(
-                    |(
-                        use_v1,
-                        flags,
-                        has_lock_time,
-                        in_count,
-                        out_count,
+                    |(use_v1, flags, has_lock_time, xpub, proprietaries, unknowns)| Global {
+                        tx_version: if use_v1 {
+                            transaction::Version::ONE
+                        } else {
+                            transaction::Version::TWO
+                        },
+                        tx_modifiable_flags: flags,
+                        fallback_lock_time: if has_lock_time {
+                            Some(absolute::LockTime::from_consensus(500_000))
+                        } else {
+                            None
+                        },
+                        xpubs: xpub.map(xpub_from_seed).into_iter().collect(),
                         proprietaries,
                         unknowns,
-                    )| {
-                        Global {
-                            tx_version: if use_v1 {
-                                transaction::Version::ONE
-                            } else {
-                                transaction::Version::TWO
-                            },
-                            tx_modifiable_flags: flags,
-                            fallback_lock_time: if has_lock_time {
-                                Some(absolute::LockTime::from_consensus(500_000))
-                            } else {
-                                None
-                            },
-                            input_count: in_count,
-                            output_count: out_count,
-                            proprietaries,
-                            unknowns,
-                            ..Global::default()
-                        }
                     },
                 )
         }
@@ -168,6 +179,18 @@ mod tests {
                 let wrapped = a.wrap();
                 let unwrapped = wrapped.clone().try_unwrap().expect("freshly wrapped");
                 prop_assert_eq!(unwrapped.wrap(), wrapped);
+            }
+
+            #[test]
+            fn v2_roundtrip_derives_version_and_counts(
+                a in arb_global(),
+                input_count in 0usize..4,
+                output_count in 0usize..4,
+            ) {
+                let v2 = a.clone().into_v2(input_count, output_count);
+                prop_assert_eq!(v2.version, psbt_v2::Version::TWO);
+                prop_assert_eq!((v2.input_count, v2.output_count), (input_count, output_count));
+                prop_assert_eq!(Global::from(v2), a);
             }
 
             #[test]
