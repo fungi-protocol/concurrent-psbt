@@ -151,6 +151,21 @@ macro_rules! joinable_struct {
         }
 
         $(#[$result_meta])*
+        ///
+        #[doc = concat!(
+            "Use [`", stringify!($Source), "::wrap`] to lift a record into this type."
+        )]
+        /// [`Join::join`](crate::Join::join) merges fields independently.
+        ///
+        /// - Scalar fields keep equal values and retain differing values in a
+        ///   [`Conflict`](crate::Conflict).
+        /// - `Option` fields keep a value present on one side and join the
+        ///   values when both sides have one.
+        /// - Map fields take the union of their keys and join values at keys
+        ///   present on both sides.
+        ///
+        /// Use [`is_ok`](Self::is_ok) to check for conflicts and
+        /// [`try_unwrap`](Self::try_unwrap) to recover the clean record.
         #[derive(Debug, Clone, PartialEq)]
         pub struct $Result {
             $(

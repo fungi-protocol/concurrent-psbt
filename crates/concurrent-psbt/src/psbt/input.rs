@@ -20,10 +20,6 @@ joinable_struct! {
     /// A PSBT input, mirroring the BIP 370 per-input map.
     source: Input,
     /// Result-domain counterpart of [`Input`].
-    ///
-    /// Each field holds a clean value or a conflict. [`Input::wrap`] lifts an
-    /// [`Input`] into this type, and [`ResultInput::try_unwrap`] returns it if
-    /// no field conflicts.
     result: ResultInput,
     v2: psbt_v2::v2::Input,
     fields: {

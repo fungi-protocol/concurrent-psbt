@@ -23,8 +23,6 @@ joinable_struct! {
     /// cannot change afterwards.
     source: Output,
     /// Result-domain counterpart of [`Output`].
-    ///
-    /// Each field holds a clean value or a conflict.
     result: ResultOutput,
     v2: psbt_v2::v2::Output,
     fields: {
