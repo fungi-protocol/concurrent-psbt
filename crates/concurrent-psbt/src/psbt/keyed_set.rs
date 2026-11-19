@@ -264,6 +264,17 @@ impl<K: Hash + Eq, V> ResultKeyedSet<K, V> {
         self.len().is_ok()
     }
 
+    /// The entries, with those sharing a key joined into one.
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.entries.0.iter()
+    }
+
+    /// The entries, mutably, for marking fields that break a rule spanning
+    /// several entries.
+    pub(crate) fn entries_mut(&mut self) -> impl Iterator<Item = (&K, &mut V)> {
+        self.entries.0.iter_mut()
+    }
+
     /// Record another operand's frozen key set, deduplicating exact matches.
     /// This accumulates membership constraints without changing any recorded
     /// key set. Distinct sets are retained even when one is a subset of another,

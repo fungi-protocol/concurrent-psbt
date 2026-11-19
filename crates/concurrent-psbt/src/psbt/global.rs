@@ -21,6 +21,8 @@ joinable_struct! {
     /// Mirrors the BIP 370 global map except `PSBT_GLOBAL_VERSION`, which is
     /// always 2, and the input and output counts, which are filled in when
     /// converting to a BIP 370 PSBT.
+    ///
+    /// A new global map from [`Default::default`] sets `PSBT_GLOBAL_TX_UNORDERED`.
     source: Global,
     /// Result-domain counterpart of [`Global`].
     result: ResultGlobal,
@@ -43,7 +45,7 @@ joinable_struct! {
 
 impl Default for Global {
     fn default() -> Self {
-        Self::from_v2_fields(psbt_v2::v2::Global::default(), false, None, None)
+        Self::from_v2_fields(psbt_v2::v2::Global::default(), true, None, None)
     }
 }
 
@@ -93,6 +95,7 @@ impl TryFrom<psbt_v2::v2::Global> for Global {
 impl Global {
     /// Convert to a BIP 370 global map for a PSBT with `input_count` inputs
     /// and `output_count` outputs.
+    /// The unordered marker follows [`is_unordered`](Self::is_unordered).
     pub(crate) fn into_v2(self, input_count: usize, output_count: usize) -> psbt_v2::v2::Global {
         self.encode_v2(psbt_v2::v2::Global {
             input_count,
@@ -321,7 +324,6 @@ mod tests {
                 key: vec![],
             };
             let mut global = Global::default();
-            global.set_unordered();
             global.set_sort_seed(SortSeed::try_from(vec![0xaa; 16]).unwrap());
             global.set_sort_key_derivation(SortKeyDerivation::Derived);
             assert!(global.is_unordered());
@@ -385,11 +387,21 @@ mod tests {
         }
 
         #[test]
-        fn default_is_an_empty_v2_global() {
+        fn default_sets_the_unordered_marker() {
+            let global = Global::default();
+            assert!(global.is_unordered());
             assert_eq!(
-                Global::default().into_v2(0, 0),
-                psbt_v2::v2::Global::default()
+                global.into_v2(0, 0),
+                v2_with_fields(&[(PSBT_GLOBAL_TX_UNORDERED_SUBTYPE, vec![0x03])])
             );
+        }
+
+        #[test]
+        fn v2_without_a_marker_decodes_as_ordered() {
+            let wire = psbt_v2::v2::Global::default();
+            let global = Global::try_from(wire.clone()).unwrap();
+            assert!(!global.is_unordered());
+            assert_eq!(global.into_v2(0, 0), wire);
         }
 
         #[test]
@@ -488,11 +500,9 @@ mod tests {
                             xpubs: xpub.map(xpub_from_seed).into_iter().collect(),
                             proprietaries,
                             unknowns,
+                            unordered,
                             ..Global::default()
                         };
-                        if unordered {
-                            global.set_unordered();
-                        }
                         if let Some(derivation) = derivation {
                             global.set_sort_key_derivation(derivation);
                         }
