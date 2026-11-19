@@ -74,6 +74,11 @@ impl<K: Hash + Eq, V> KeyedSet<K, V> {
     pub(crate) fn contains_key(&self, key: &K) -> bool {
         self.0.contains_key(key)
     }
+
+    /// Iterate over the entries' values, in no particular order.
+    pub(crate) fn values(&self) -> impl Iterator<Item = &V> {
+        self.0.values()
+    }
 }
 
 impl<K, V> IntoIterator for KeyedSet<K, V> {
