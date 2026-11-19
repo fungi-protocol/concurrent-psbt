@@ -25,10 +25,6 @@ joinable_struct! {
     /// converting to a BIP 370 PSBT.
     source: Global,
     /// Result-domain counterpart of [`Global`].
-    ///
-    /// Produced by joining [`Global`] values lifted with [`Global::wrap`].
-    /// Use [`ResultGlobal::is_ok`] to check for conflicts and
-    /// [`ResultGlobal::try_unwrap`] to extract.
     result: ResultGlobal,
     v2: psbt_v2::v2::Global,
     fields: {
