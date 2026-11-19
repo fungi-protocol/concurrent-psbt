@@ -11,7 +11,9 @@
 //! for transactions whose input and output positions can still change.
 //! [`UnorderedPsbt::into_psbt`] returns the inputs and outputs in arbitrary
 //! order. Participants must agree on their order before signing.
-//! Use the [`Sorter`](crate::sorter::Sorter) to put the entries in signing order.
+//!
+//! For application code, use the [construction roles](crate::roles) to track
+//! which additions are permitted and when the transaction can be sorted.
 
 #![allow(clippy::result_large_err)]
 
@@ -227,6 +229,18 @@ const OUTPUTS_MODIFIABLE: u8 = 0x02;
 /// `tx_modifiable_flags` bit marking a `SIGHASH_SINGLE` signature (BIP 370).
 const HAS_SIGHASH_SINGLE: u8 = 0x04;
 
+pub(crate) fn check_input_sighash(input: &Input) -> Result<(), UnorderedPsbtError> {
+    if input
+        .sighash_type()
+        .is_some_and(|sighash| sighash.to_u32() != EcdsaSighashType::All.to_u32())
+    {
+        return Err(UnorderedPsbtError::UnorderedInputSighashNotAll(out_point(
+            input,
+        )));
+    }
+    Ok(())
+}
+
 /// Check that the unordered marker is present and the global `Has SIGHASH_SINGLE`
 /// bit is clear.
 fn check_unordered(global: &Global) -> Result<(), UnorderedPsbtError> {
@@ -281,6 +295,24 @@ fn marked_sort_keys<'a, K: 'a>(
     entries: impl Iterator<Item = (&'a K, &'a Option<JoinResult<SortKey>>)>,
 ) -> impl Iterator<Item = &'a K> {
     entries.filter_map(|(key, sort_key)| matches!(sort_key, Some(Err(_))).then_some(key))
+}
+
+impl UnorderedPsbt {
+    /// Clear the inputs' `tx_modifiable_flags` bit and freeze the inputs.
+    pub(crate) fn no_more_inputs(mut self) -> Self {
+        self.global
+            .set_tx_modifiable_flags(self.global.tx_modifiable_flags() & !INPUTS_MODIFIABLE);
+        self.inputs = self.inputs.freeze();
+        self
+    }
+
+    /// Clear the outputs' `tx_modifiable_flags` bit and freeze the outputs.
+    pub(crate) fn no_more_outputs(mut self) -> Self {
+        self.global
+            .set_tx_modifiable_flags(self.global.tx_modifiable_flags() & !OUTPUTS_MODIFIABLE);
+        self.outputs = self.outputs.freeze();
+        self
+    }
 }
 
 impl UnorderedPsbt {
@@ -438,15 +470,7 @@ impl ResultUnorderedPsbt {
             })
             .collect::<Result<Vec<_>, _>>()?;
         check_unordered(&global)?;
-        if let Some(input) = inputs.iter().find(|input| {
-            input
-                .sighash_type()
-                .is_some_and(|sighash| sighash.to_u32() != EcdsaSighashType::All.to_u32())
-        }) {
-            return Err(UnorderedPsbtError::UnorderedInputSighashNotAll(out_point(
-                input,
-            )));
-        }
+        inputs.iter().try_for_each(check_input_sighash)?;
 
         let inputs = InputSet::try_from_inputs(inputs)?;
         let inputs = if global.tx_modifiable_flags() & INPUTS_MODIFIABLE == 0 {
