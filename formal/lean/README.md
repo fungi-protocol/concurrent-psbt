@@ -1,10 +1,11 @@
 # Lean 4
 
 Lean proves theorems for all types and sizes, which the bounded checkers can't.
-Both modules are transcriptions, not the crate's code: they model
-`crates/concurrent-psbt/src/lattice/partial.rs` in core Lean 4 (no Mathlib, no
-lake), with `JoinResult::join` transcribed arm for arm and parameterised by the
-`try_join` in use.
+`JoinResult.lean` and `Modulo.lean` are transcriptions, not the crate's code:
+they model `crates/concurrent-psbt/src/lattice/partial.rs` in core Lean 4, with
+`JoinResult::join` transcribed arm for arm and parameterised by the `try_join`
+in use. `PaymentGraph.lean` and `PaymentConfirmation.lean` are separate protocol
+models and use Mathlib. There is no lake project.
 
 ## Structural equality
 
@@ -74,6 +75,37 @@ for conflicts. "keep only the maximal values in a conflict" (in #97, #102 and
 #105) gives one for a `try_join` that returns the greater operand; merging joins
 still have none.
 
+## Payment confirmation
+
+`PaymentGraph.lean` models finite weighted payment graphs and pairwise netting
+of GRANT totals. Internal incoming and outgoing totals count the same edges, so
+every nonempty residual graph has a vertex whose incoming total is at least its
+outstanding total. Strong induction on the remaining participant set turns that
+fact into a complete peeling order. `validated_peeling` also records an explicit
+validation predicate at every step; `peeling_order` and `netted_peeling_order`
+are the unconditional arithmetic results, without output-validation claims.
+
+`PaymentConfirmation.lean` separately models confirmation, receipt delivery, and
+signing as a transition system. Its soundness theorem preserves validation and
+receipt guards. At completion, `confirmed_protected` shows that a confirmed peer
+validated and has receipts from all confirmed payees;
+`confirmed_accounting_safe` states the corresponding conditional accounting
+bound for an externally supplied realized-balance function.
+
+The completion theorem is deliberately conditional: every participant with an
+outgoing payment must be an input owner, every participant must pass direct
+validation, and the trace must cooperatively execute confirmation, delivery, and
+signing. Funded peers may confirm directly; unfunded peers conservatively wait
+for all payees' receipts. Only input owners sign, and completion requires every
+input owner in the session to sign.
+
+These are fixed-context abstractions, not proofs about the Rust implementation.
+Cryptographic/script enforcement, output/fee validation, receipt transport,
+commitment/grant-ID binding, and deriving realized balances from actual
+transaction effects remain outside the model. In particular, belonging to
+`funded` must mean that the input really requires that peer's authorization, not
+merely that the peer once owned an outpoint.
+
 `Axioms.lean` is the audit the check runs: none of the theorems may depend on
 `sorryAx`, and no module may report a `sorry` warning.
 
@@ -86,16 +118,19 @@ constrain the transcribed `join`.
 ## Nix
 
 `checks.formal-lean` typechecks the modules with a plain `lean` from nixpkgs
-(`pkgs.lean4`, also in `nix develop .#formal`), then runs the audit. It needs
-no network and no Mathlib, and it checks in seconds on top of the Lean
-toolchain.
+(`pkgs.leanPackages.lean4`, also in `nix develop .#formal`), putting nixpkgs'
+pinned Mathlib and its dependencies on `LEAN_PATH`, then runs the audit. The
+proofs need no network or lake. A cold setup normally downloads the cached Lean
+and Mathlib closures from cache.nixos.org, substantially more data than the old
+core-only check; a cold-build timing has not been measured.
 
 Good for: general theorems over all types and sizes, which bounded checkers
-can't give, and for pinning down exactly which trait contract is needed. The
-congruence is how the spec for a `try_join` that merges semantically is stated
-at all.
+can't give, for pinning down exactly which trait contract is needed, and for
+making the payment-confirmation assumptions explicit. The congruence is how the
+spec for a `try_join` that merges semantically is stated at all.
 
-Weak for: tying the result to the code. The models are transcriptions, so they
-can drift from `partial.rs` unnoticed, and a proof says nothing about a real
-`try_join` implementation. Without Mathlib the proofs are by hand, and each
+Weak for: tying the result to the code. The lattice models are transcriptions,
+so they can drift from `partial.rs` unnoticed, and a proof says nothing about a
+real `try_join` implementation. The payment models are more abstract still:
+their premises and fixed-context boundaries must be justified separately. Each
 change to a model needs its proofs reworked.

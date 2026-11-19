@@ -1,12 +1,19 @@
-# Lean 4 proofs about the `JoinResult` lattice model (formal/lean).
+# Lean 4 proofs about the `JoinResult` lattice and payment-confirmation models
+# (formal/lean).
 #
-# Core Lean only (no Mathlib/lake), so the check is a plain `lean` invocation.
+# The payment-graph modules use Mathlib from nixpkgs. There is no lake project:
+# the check invokes `lean` directly with the dependency modules on `LEAN_PATH`.
 # Typechecking proves the theorems; the audit rejects any `sorry`.
+{ lib, ... }:
 {
   perSystem =
     { pkgs, ... }:
     let
-      lean = pkgs.lean4;
+      lp = pkgs.leanPackages;
+      lean = lp.lean4;
+      leanPath = lib.concatMapStringsSep ":" (p: "${p}/.lake/build/lib/lean") (
+        [ lp.mathlib ] ++ lp.mathlib.allLeanDeps
+      );
 
       # Typecheck every module of `src`, then audit the axioms of the theorems
       # listed in Axioms.lean. A `sorry` shows up as a warning when its module
@@ -21,10 +28,11 @@
           ''
             set -o pipefail
             cp $src/*.lean . && mkdir -p $out
-            for m in JoinResult Modulo; do
+            export LEAN_PATH=${leanPath}:$out
+            for m in JoinResult Modulo PaymentGraph PaymentConfirmation; do
               lean -o $out/$m.olean $m.lean | tee -a $out/lean.txt
             done
-            LEAN_PATH=$out lean Axioms.lean | tee $out/axioms.txt
+            lean Axioms.lean | tee $out/axioms.txt
             if grep -q -e sorryAx -e "declaration uses 'sorry'" $out/*.txt; then
               echo "a theorem depends on sorry" >&2
               exit 1
