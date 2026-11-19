@@ -94,9 +94,9 @@ pub enum UnorderedPsbtError {
     /// The PSBT is unordered but `tx_modifiable_flags` has the
     /// `Has SIGHASH_SINGLE` bit set.
     UnorderedSighashSingle,
-    /// The input spending this outpoint requests `SIGHASH_SINGLE`,
-    /// including when combined with `SIGHASH_ANYONECANPAY`.
-    UnorderedInputSighashSingle(OutPoint),
+    /// The input spending this outpoint requests a sighash other than
+    /// `SIGHASH_ALL`, including Taproot `DEFAULT` or a nonstandard value.
+    UnorderedInputSighashNotAll(OutPoint),
     /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` is `0x00`, so sort keys are never
     /// derived, but `PSBT_GLOBAL_SORT_SEED` is set.
     UnexpectedSortSeed,
@@ -191,8 +191,11 @@ impl fmt::Display for UnorderedPsbtError {
             Self::UnorderedSighashSingle => {
                 write!(f, "unordered PSBT has the SIGHASH_SINGLE flag set")
             }
-            Self::UnorderedInputSighashSingle(outpoint) => {
-                write!(f, "the input spending {outpoint} requests SIGHASH_SINGLE")
+            Self::UnorderedInputSighashNotAll(outpoint) => {
+                write!(
+                    f,
+                    "the input spending {outpoint} requests a sighash other than SIGHASH_ALL"
+                )
             }
             Self::UnexpectedSortSeed => write!(
                 f,
@@ -402,9 +405,10 @@ impl ResultUnorderedPsbt {
     ///
     /// Then returns [`UnorderedPsbtError::NotUnordered`] for an ordered PSBT,
     /// [`UnorderedPsbtError::UnorderedSighashSingle`] if the `SIGHASH_SINGLE`
-    /// flag is set, or [`UnorderedPsbtError::UnorderedInputSighashSingle`] for
-    /// the first input that requests that sighash mode. Finally, checks for
-    /// repeated input outpoints and then repeated output unique IDs.
+    /// flag is set, or [`UnorderedPsbtError::UnorderedInputSighashNotAll`] for
+    /// the first input whose requested sighash is not exactly `SIGHASH_ALL`.
+    /// Finally, checks for repeated input outpoints and then repeated output
+    /// unique IDs.
     pub fn try_from_psbt(psbt: Psbt) -> Result<Self, UnorderedPsbtError> {
         let Psbt {
             global,
@@ -446,13 +450,11 @@ impl ResultUnorderedPsbt {
             .collect::<Result<Vec<_>, _>>()?;
         check_unordered(&global)?;
         if let Some(input) = inputs.iter().find(|input| {
-            input.sighash_type().is_some_and(|sighash| {
-                // The requested type can be nonstandard and still use the
-                // consensus SINGLE base mode.
-                EcdsaSighashType::from_consensus(sighash.to_u32()).is_single()
-            })
+            input
+                .sighash_type()
+                .is_some_and(|sighash| sighash.to_u32() != EcdsaSighashType::All.to_u32())
         }) {
-            return Err(UnorderedPsbtError::UnorderedInputSighashSingle(out_point(
+            return Err(UnorderedPsbtError::UnorderedInputSighashNotAll(out_point(
                 input,
             )));
         }
@@ -916,8 +918,11 @@ mod tests {
                     "unordered PSBT has the SIGHASH_SINGLE flag set".to_string(),
                 ),
                 (
-                    UnorderedPsbtError::UnorderedInputSighashSingle(outpoint(1)),
-                    format!("the input spending {} requests SIGHASH_SINGLE", outpoint(1)),
+                    UnorderedPsbtError::UnorderedInputSighashNotAll(outpoint(1)),
+                    format!(
+                        "the input spending {} requests a sighash other than SIGHASH_ALL",
+                        outpoint(1)
+                    ),
                 ),
                 (
                     UnorderedPsbtError::UnexpectedSortSeed,
@@ -1199,25 +1204,25 @@ mod tests {
 
             let cases = [
                 (None, false),
-                (Some(0x00), false), // Taproot DEFAULT
-                (Some(0x01), false),
-                (Some(0x02), false),
+                (Some(0x00), true),  // Taproot DEFAULT
+                (Some(0x01), false), // SIGHASH_ALL
+                (Some(0x02), true),
                 (Some(0x03), true),
-                (Some(0x81), false),
-                (Some(0x82), false),
+                (Some(0x81), true),
+                (Some(0x82), true),
                 (Some(0x83), true),
                 (Some(0x23), true),
                 (Some(0xa3), true),
                 (Some(0x103), true),
-                (Some(0xff), false),
+                (Some(0xff), true),
             ];
-            for (sighash, single) in cases {
+            for (sighash, invalid) in cases {
                 let mut input = psbt_v2::v2::Input::new(&outpoint(2));
                 input.sighash_type = sighash.map(PsbtSighashType::from_u32);
                 let inputs = vec![psbt_v2::v2::Input::new(&outpoint(1)), input];
                 let psbt = v2_psbt_with(Global::default(), inputs, vec![]);
-                let expected = if single {
-                    Err(UnorderedPsbtError::UnorderedInputSighashSingle(outpoint(2)))
+                let expected = if invalid {
+                    Err(UnorderedPsbtError::UnorderedInputSighashNotAll(outpoint(2)))
                 } else {
                     Ok(())
                 };
@@ -1249,7 +1254,7 @@ mod tests {
                 (flagged, UnorderedPsbtError::UnorderedSighashSingle),
                 (
                     Global::default(),
-                    UnorderedPsbtError::UnorderedInputSighashSingle(outpoint(2)),
+                    UnorderedPsbtError::UnorderedInputSighashNotAll(outpoint(2)),
                 ),
             ] {
                 let psbt = v2_psbt_with(global, vec![input(2), input(1)], vec![]);
@@ -1565,7 +1570,7 @@ mod tests {
                     (UnorderedPsbtError::DuplicateInput(outpoint), Some(outpoint.to_string())),
                     (UnorderedPsbtError::NotUnordered, None),
                     (UnorderedPsbtError::UnorderedSighashSingle, None),
-                    (UnorderedPsbtError::UnorderedInputSighashSingle(outpoint), Some(outpoint.to_string())),
+                    (UnorderedPsbtError::UnorderedInputSighashNotAll(outpoint), Some(outpoint.to_string())),
                     (UnorderedPsbtError::UnexpectedSortSeed, None),
                     (UnorderedPsbtError::UnexpectedInputSortKey(outpoint), Some(outpoint.to_string())),
                     (UnorderedPsbtError::UnexpectedOutputSortKey(id.clone()), Some(formatted_id.clone())),
