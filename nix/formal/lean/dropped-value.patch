@@ -1,0 +1,11 @@
+--- a/JoinResult.lean
++++ b/JoinResult.lean
+@@ -41,7 +41,7 @@
+ def join (tryJoin : V → V → JoinResult V) : JoinResult V → JoinResult V → JoinResult V
+   | ok a, ok b => tryJoin a b
+   | err a, err b => err (a.union b)
+-  | err a, ok b => err (a.union (.singleton b))
++  | err a, ok _ => err a
+   | ok a, err b => err ((Conflict.singleton a).union b)
+ 
+ /-- A flat `try_join`: the `Foo` impl from the `partial.rs` tests. -/
