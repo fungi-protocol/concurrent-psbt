@@ -1,0 +1,11 @@
+--- a/src/lattice/partial.rs
++++ b/src/lattice/partial.rs
+@@ -48,7 +48,7 @@
+         match (self, other) {
+             (Ok(a), Ok(b)) => a.try_join(b),
+             (Err(a), Err(b)) => Err(a.join(b)),
+-            (Err(a), Ok(b)) => Err(a.join(Conflict::singleton(b))),
++            (Err(a), Ok(_)) => Err(a),
+             (Ok(a), Err(b)) => Err(Conflict::singleton(a).join(b)),
+         }
+     }
