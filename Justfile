@@ -22,6 +22,11 @@ fmt:
 test:
     cargo nextest run
 
+# Run tests and save Perfetto traces to target/test-traces
+trace:
+    rm -rf target/test-traces
+    NEXTEST_TRACE_DIR="$PWD/target/test-traces" cargo nextest run
+
 # Run clippy lints
 clippy:
     cargo clippy --all-targets --all-features -- -D warnings
