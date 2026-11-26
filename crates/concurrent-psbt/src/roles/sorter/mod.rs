@@ -41,7 +41,7 @@ pub(crate) fn join_seed(global: &mut Global, seed: SortSeed) -> Result<(), SeedC
 }
 
 /// Whether the PSBT has the UUID required by a [`Seeded`] mode.
-fn has_uuid(global: &Global) -> bool {
+pub(crate) fn has_uuid(global: &Global) -> bool {
     global.uuid().is_some()
 }
 
