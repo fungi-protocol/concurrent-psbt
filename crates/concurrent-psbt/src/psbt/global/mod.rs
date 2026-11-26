@@ -17,9 +17,9 @@ mod fields;
 
 pub use fields::{
     PSBT_GLOBAL_SORT_KEY_DERIVATION_SUBTYPE, PSBT_GLOBAL_SORT_SEED_SUBTYPE,
-    PSBT_GLOBAL_TX_UNORDERED_SUBTYPE,
+    PSBT_GLOBAL_TX_UNORDERED_SUBTYPE, PSBT_GLOBAL_TX_UUID_SUBTYPE,
 };
-use fields::{SortKeyDerivationField, SortSeedField, TxUnorderedField};
+use fields::{SortKeyDerivationField, SortSeedField, TxUnorderedField, TxUuidField};
 
 joinable_struct! {
     /// The global fields of a PSBT.
@@ -46,12 +46,13 @@ joinable_struct! {
         pub(crate) unordered: bool = TxUnorderedField => Unordered,
         pub(crate) sort_key_derivation: Option<SortKeyDerivation> = SortKeyDerivationField => SortKeyDerivation(SortKeyDerivation),
         pub(crate) sort_seed: Option<SortSeed> = SortSeedField => SortSeed(SortSeed),
+        pub(crate) uuid: Option<TxUuid> = TxUuidField => TxUuid(TxUuid),
     },
 }
 
 impl Default for Global {
     fn default() -> Self {
-        Self::from_v2_fields(psbt_v2::v2::Global::default(), true, None, None)
+        Self::from_v2_fields(psbt_v2::v2::Global::default(), true, None, None, None)
     }
 }
 
@@ -64,8 +65,8 @@ pub enum InvalidGlobal {
     /// `PSBT_GLOBAL_SORT_KEY_DERIVATION` is present but its value is neither
     /// `0x00` nor `0x01`.
     SortKeyDerivation(Vec<u8>),
-    /// `PSBT_GLOBAL_SORT_SEED` is shorter than [`SortSeed::MIN_LEN`].
-    SortSeed(InvalidSortSeed),
+    /// The length of `PSBT_GLOBAL_TX_UUID` is outside the allowed range.
+    TxUuid(InvalidTxUuid),
 }
 
 impl std::fmt::Display for InvalidGlobal {
@@ -78,7 +79,7 @@ impl std::fmt::Display for InvalidGlobal {
                 f,
                 "PSBT_GLOBAL_SORT_KEY_DERIVATION is {value:02x?}, not 0x00 or 0x01"
             ),
-            Self::SortSeed(error) => write!(f, "{error}"),
+            Self::TxUuid(error) => error.fmt(f),
         }
     }
 }
@@ -112,59 +113,104 @@ impl Global {
     }
 }
 
-/// A `PSBT_GLOBAL_SORT_SEED` value, at least [`SortSeed::MIN_LEN`] bytes long.
+/// A `PSBT_GLOBAL_SORT_SEED` value: auxiliary bytes that the sort seed hashes
+/// together with the transaction's [`TxUuid`].
+///
+/// This seed may commit to extra information such as a protocol transcript.
+/// Derived sort keys use the same bytes for a missing seed and an empty one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SortSeed(Vec<u8>);
 
 impl SortSeed {
-    /// The minimum length of a sort seed in bytes (128 bits).
-    pub const MIN_LEN: usize = 16;
-
     /// Access the raw bytes of the seed.
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 }
 
-/// The seed is too short for a [`SortSeed`]; its bytes are returned unchanged.
+impl From<Vec<u8>> for SortSeed {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
+
+impl crate::values::IdempotentValue for SortSeed {}
+
+/// A 16- to 32-byte identifier for the transaction being constructed.
+///
+/// [`Self::generate`] produces a random 16-byte UUID.
+/// Sorting requires this identifier and uses it to derive every sort key.
+/// Different UUIDs conflict when two PSBTs join.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InvalidSortSeed(pub Vec<u8>);
+pub struct TxUuid(Vec<u8>);
 
-impl TryFrom<Vec<u8>> for SortSeed {
-    type Error = InvalidSortSeed;
+impl TxUuid {
+    /// The minimum UUID length in bytes.
+    pub const MIN_LEN: usize = 16;
+    /// The maximum UUID length in bytes.
+    pub const MAX_LEN: usize = 32;
 
-    fn try_from(bytes: Vec<u8>) -> Result<Self, InvalidSortSeed> {
-        if bytes.len() < Self::MIN_LEN {
-            return Err(InvalidSortSeed(bytes));
+    /// Access the raw bytes of the UUID.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Generate a fresh random 16-byte UUID from the operating system's RNG,
+    /// as [`UniqueId::generate`](crate::output::UniqueId::generate) does.
+    ///
+    /// # Panics
+    /// Panics if the operating system's RNG is unavailable.
+    pub fn generate() -> Self {
+        use rand::{RngCore, TryRngCore, rngs::OsRng};
+
+        let mut bytes = [0u8; Self::MIN_LEN];
+        OsRng.unwrap_err().fill_bytes(&mut bytes);
+        Self(bytes.to_vec())
+    }
+}
+
+/// The UUID's length is outside the allowed range; its bytes are returned
+/// unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidTxUuid(pub Vec<u8>);
+
+impl TryFrom<Vec<u8>> for TxUuid {
+    type Error = InvalidTxUuid;
+
+    fn try_from(bytes: Vec<u8>) -> Result<Self, InvalidTxUuid> {
+        if !(Self::MIN_LEN..=Self::MAX_LEN).contains(&bytes.len()) {
+            return Err(InvalidTxUuid(bytes));
         }
         Ok(Self(bytes))
     }
 }
 
-impl std::fmt::Display for InvalidSortSeed {
+impl std::fmt::Display for InvalidTxUuid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "sort seed is {} bytes, fewer than {}",
+            "PSBT_GLOBAL_TX_UUID is {} bytes, expected {} to {}",
             self.0.len(),
-            SortSeed::MIN_LEN
+            TxUuid::MIN_LEN,
+            TxUuid::MAX_LEN
         )
     }
 }
 
-impl std::error::Error for InvalidSortSeed {}
+impl std::error::Error for InvalidTxUuid {}
 
-impl crate::values::IdempotentValue for SortSeed {}
+impl crate::values::IdempotentValue for TxUuid {}
 
 /// A `PSBT_GLOBAL_SORT_KEY_DERIVATION` value: where sort keys come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortKeyDerivation {
-    /// `0x00`: every input and output needs an explicit sort key, and there is
-    /// no sort seed.
-    Explicit,
-    /// `0x01`: every sort key is derived from the sort seed, and explicit sort
-    /// keys are not allowed.
-    Derived,
+    /// `0x00`: every input and output needs a non-empty explicit sort key.
+    /// Inputs, or outputs, with the same explicit key are ordered by their
+    /// derived keys.
+    ExplicitKeysRequired,
+    /// `0x01`: inputs and outputs are ordered by their derived keys alone,
+    /// and explicit sort keys are not allowed.
+    ExplicitKeysForbidden,
 }
 
 impl SortKeyDerivation {
@@ -172,16 +218,16 @@ impl SortKeyDerivation {
     /// `0x01`.
     fn from_value(value: Vec<u8>) -> Result<Self, Vec<u8>> {
         match value.as_slice() {
-            [0x00] => Ok(Self::Explicit),
-            [0x01] => Ok(Self::Derived),
+            [0x00] => Ok(Self::ExplicitKeysRequired),
+            [0x01] => Ok(Self::ExplicitKeysForbidden),
             _ => Err(value),
         }
     }
 
-    fn to_byte(self) -> u8 {
+    pub(crate) fn to_byte(self) -> u8 {
         match self {
-            Self::Explicit => 0x00,
-            Self::Derived => 0x01,
+            Self::ExplicitKeysRequired => 0x00,
+            Self::ExplicitKeysForbidden => 0x01,
         }
     }
 }
@@ -206,14 +252,24 @@ impl Global {
         self.unordered = false;
     }
 
-    /// Get the sort seed, if set.
+    /// Get the auxiliary sort seed, if set.
     pub fn sort_seed(&self) -> Option<&[u8]> {
         self.sort_seed.as_ref().map(SortSeed::as_bytes)
     }
 
-    /// Set the sort seed.
+    /// Set the auxiliary sort seed.
     pub fn set_sort_seed(&mut self, seed: SortSeed) {
         self.sort_seed = Some(seed);
+    }
+
+    /// Get `PSBT_GLOBAL_TX_UUID`, if set.
+    pub fn uuid(&self) -> Option<&[u8]> {
+        self.uuid.as_ref().map(TxUuid::as_bytes)
+    }
+
+    /// Set `PSBT_GLOBAL_TX_UUID`.
+    pub fn set_uuid(&mut self, uuid: TxUuid) {
+        self.uuid = Some(uuid);
     }
 
     /// Get `PSBT_GLOBAL_SORT_KEY_DERIVATION`, if set.
@@ -248,6 +304,11 @@ mod tests {
         use super::*;
 
         #[test]
+        fn generated_uuid_is_sixteen_bytes() {
+            assert_eq!(TxUuid::generate().as_bytes().len(), 16);
+        }
+
+        #[test]
         fn sort_fields_are_encoded_under_the_crate_prefix() {
             let key = |subtype| raw::ProprietaryKey {
                 prefix: b"concurrent-psbt".to_vec(),
@@ -255,22 +316,25 @@ mod tests {
                 key: vec![],
             };
             let mut global = Global::default();
-            global.set_sort_seed(SortSeed::try_from(vec![0xaa; 16]).unwrap());
-            global.set_sort_key_derivation(SortKeyDerivation::Derived);
+            global.set_sort_seed(SortSeed::from(vec![0xaa; 16]));
+            global.set_sort_key_derivation(SortKeyDerivation::ExplicitKeysForbidden);
+            global.set_uuid(TxUuid::try_from(vec![0xbb; 16]).unwrap());
             assert!(global.is_unordered());
             assert_eq!(global.sort_seed(), Some([0xaa; 16].as_slice()));
+            assert_eq!(global.uuid(), Some([0xbb; 16].as_slice()));
             assert_eq!(
                 global.sort_key_derivation(),
-                Some(SortKeyDerivation::Derived)
+                Some(SortKeyDerivation::ExplicitKeysForbidden)
             );
             let v2 = global.clone().into_v2(0, 0);
             assert_eq!(v2.proprietaries.get(&key(16)), Some(&vec![0x03]));
             assert_eq!(v2.proprietaries.get(&key(17)), Some(&vec![0xaa; 16]));
             assert_eq!(v2.proprietaries.get(&key(18)), Some(&vec![0x01]));
+            assert_eq!(v2.proprietaries.get(&key(19)), Some(&vec![0xbb; 16]));
             assert_eq!(Global::try_from(v2), Ok(global.clone()));
 
             global.clear_unordered();
-            global.set_sort_key_derivation(SortKeyDerivation::Explicit);
+            global.set_sort_key_derivation(SortKeyDerivation::ExplicitKeysRequired);
             assert!(!global.is_unordered());
             let v2 = global.into_v2(0, 0);
             assert!(!v2.proprietaries.contains_key(&key(16)));
@@ -288,10 +352,6 @@ mod tests {
                     InvalidGlobal::SortKeyDerivation(vec![2]),
                     "PSBT_GLOBAL_SORT_KEY_DERIVATION is [02], not 0x00 or 0x01",
                 ),
-                (
-                    InvalidGlobal::SortSeed(InvalidSortSeed(vec![0; 15])),
-                    "sort seed is 15 bytes, fewer than 16",
-                ),
             ];
             for (error, message) in cases {
                 assert_eq!(error.to_string(), message);
@@ -302,17 +362,12 @@ mod tests {
         fn the_first_malformed_sort_field_is_reported() {
             let unordered = (PSBT_GLOBAL_TX_UNORDERED_SUBTYPE, vec![1]);
             let derivation = (PSBT_GLOBAL_SORT_KEY_DERIVATION_SUBTYPE, vec![2]);
-            let seed = (PSBT_GLOBAL_SORT_SEED_SUBTYPE, vec![0; 15]);
             assert_eq!(
-                Global::try_from(v2_with_fields(&[
-                    unordered,
-                    derivation.clone(),
-                    seed.clone()
-                ])),
+                Global::try_from(v2_with_fields(&[unordered, derivation.clone()])),
                 Err(InvalidGlobal::UnorderedFlag(vec![1]))
             );
             assert_eq!(
-                Global::try_from(v2_with_fields(&[derivation, seed])),
+                Global::try_from(v2_with_fields(&[derivation])),
                 Err(InvalidGlobal::SortKeyDerivation(vec![2]))
             );
         }
@@ -388,10 +443,11 @@ mod tests {
                 proptest::option::of(0u8..2),
                 proptest::bool::ANY,
                 proptest::option::of(prop_oneof![
-                    Just(SortKeyDerivation::Explicit),
-                    Just(SortKeyDerivation::Derived),
+                    Just(SortKeyDerivation::ExplicitKeysRequired),
+                    Just(SortKeyDerivation::ExplicitKeysForbidden),
                 ]),
-                proptest::option::of(proptest::collection::vec(any::<u8>(), 16..=17)),
+                proptest::option::of(proptest::collection::vec(any::<u8>(), 0..=17)),
+                proptest::option::of(proptest::collection::vec(any::<u8>(), 16..=32)),
                 proptest::collection::btree_map(
                     arb_proprietary_key(),
                     proptest::collection::vec(0u8..=255, 0..=8),
@@ -413,6 +469,7 @@ mod tests {
                         unordered,
                         derivation,
                         seed,
+                        uuid,
                         proprietaries,
                         unknowns,
                     )| {
@@ -438,8 +495,10 @@ mod tests {
                             global.set_sort_key_derivation(derivation);
                         }
                         if let Some(seed) = seed {
-                            global
-                                .set_sort_seed(SortSeed::try_from(seed).expect("16 bytes or more"));
+                            global.set_sort_seed(SortSeed::from(seed));
+                        }
+                        if let Some(uuid) = uuid {
+                            global.set_uuid(TxUuid::try_from(uuid).unwrap());
                         }
                         global
                     },
@@ -483,6 +542,7 @@ mod tests {
                     PSBT_GLOBAL_TX_UNORDERED_SUBTYPE,
                     PSBT_GLOBAL_SORT_SEED_SUBTYPE,
                     PSBT_GLOBAL_SORT_KEY_DERIVATION_SUBTYPE,
+                    PSBT_GLOBAL_TX_UUID_SUBTYPE,
                 ] {
                     shadowed
                         .proprietaries
@@ -521,8 +581,8 @@ mod tests {
             ) {
                 let v2 = v2_with_fields(&[(PSBT_GLOBAL_SORT_KEY_DERIVATION_SUBTYPE, value.clone())]);
                 let derivation = match value.as_slice() {
-                    [0x00] => SortKeyDerivation::Explicit,
-                    [0x01] => SortKeyDerivation::Derived,
+                    [0x00] => SortKeyDerivation::ExplicitKeysRequired,
+                    [0x01] => SortKeyDerivation::ExplicitKeysForbidden,
                     _ => {
                         let error = Global::try_from(v2).unwrap_err();
                         let bytes = format!("{value:02x?}");
@@ -535,18 +595,26 @@ mod tests {
             }
 
             #[test]
-            fn sort_seed_is_at_least_16_bytes(seed in proptest::collection::vec(any::<u8>(), 0..=24)) {
-                let v2 = v2_with_fields(&[(PSBT_GLOBAL_SORT_SEED_SUBTYPE, seed.clone())]);
-                match Global::try_from(v2) {
-                    Ok(global) => {
-                        prop_assert!(seed.len() >= SortSeed::MIN_LEN);
-                        prop_assert_eq!(global.sort_seed(), Some(seed.as_slice()));
-                    }
-                    Err(error) => {
-                        let length = format!("{} bytes", seed.len());
-                        prop_assert!(error.to_string().contains(&length));
-                        prop_assert_eq!(error, InvalidGlobal::SortSeed(InvalidSortSeed(seed)));
-                    }
+            fn sort_seed_is_any_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..=24)) {
+                let v2 = v2_with_fields(&[(PSBT_GLOBAL_SORT_SEED_SUBTYPE, bytes.clone())]);
+                let global = Global::try_from(v2).expect("any bytes are a seed");
+                prop_assert_eq!(global.sort_seed(), Some(bytes.as_slice()));
+            }
+
+            #[test]
+            fn uuid_length_is_checked(bytes in proptest::collection::vec(any::<u8>(), 0..=36)) {
+                let v2 = v2_with_fields(&[(PSBT_GLOBAL_TX_UUID_SUBTYPE, bytes.clone())]);
+                if (16..=32).contains(&bytes.len()) {
+                    let uuid = TxUuid::try_from(bytes.clone()).unwrap();
+                    prop_assert_eq!(uuid.as_bytes(), bytes.as_slice());
+                    let global = Global::try_from(v2).unwrap();
+                    prop_assert_eq!(global.uuid(), Some(bytes.as_slice()));
+                } else {
+                    let error = InvalidTxUuid(bytes.clone());
+                    prop_assert_eq!(TxUuid::try_from(bytes.clone()), Err(error.clone()));
+                    let error = InvalidGlobal::TxUuid(error);
+                    prop_assert_eq!(error.to_string(), format!("PSBT_GLOBAL_TX_UUID is {} bytes, expected 16 to 32", bytes.len()));
+                    prop_assert_eq!(Global::try_from(v2), Err(error));
                 }
             }
         }
