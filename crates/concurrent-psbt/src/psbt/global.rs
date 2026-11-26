@@ -1,8 +1,4 @@
 #![allow(clippy::result_large_err)]
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "global serialization is used by UnorderedPsbt")
-)]
 //! PSBT global fields and their merging.
 //!
 //! [`Global`] holds the global fields of a PSBT, and [`ResultGlobal`] wraps
