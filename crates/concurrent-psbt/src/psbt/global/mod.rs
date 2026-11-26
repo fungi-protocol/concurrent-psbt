@@ -138,7 +138,7 @@ impl crate::values::IdempotentValue for SortSeed {}
 
 /// A 16- to 32-byte identifier for the transaction being constructed.
 ///
-/// [`Self::generate`] produces a random 16-byte UUID.
+/// A new [`Creator`](crate::roles::Creator) generates a random 16-byte UUID.
 /// Sorting requires this identifier and uses it to derive every sort key.
 /// Different UUIDs conflict when two PSBTs join.
 #[derive(Debug, Clone, PartialEq, Eq)]

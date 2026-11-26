@@ -86,7 +86,9 @@ pub enum Mixed {}
 /// Sort mode refinement: [`Mixed`], [`ExplicitKeysForbidden`] or
 /// [`ExplicitKeysRequired`] with `PSBT_GLOBAL_TX_UUID` known to be set.
 ///
-/// Use [`Sorter::try_set_uuid`] to set a missing UUID and enter a seeded mode.
+/// The [`Creator`](crate::roles::creator::Creator) always sets a UUID and
+/// produces a seeded mode. A parsed PSBT may lack one: it enters an unseeded
+/// mode and is refined by `try_set_uuid`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Seeded<S>(PhantomData<S>, std::convert::Infallible);
 
