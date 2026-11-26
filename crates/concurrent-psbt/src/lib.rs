@@ -20,3 +20,10 @@ pub use psbt::tx;
 pub use lattice::lift::{Lift, ResultWrapped};
 
 pub use lattice::conflicts::Conflicts;
+
+/// Proprietary field prefix for all concurrent-psbt extensions.
+///
+/// All fields defined by this crate use this prefix in their
+/// [`ProprietaryKey`](psbt_v2::raw::ProprietaryKey). The subtype byte
+/// distinguishes individual fields.
+pub const PROPRIETARY_PREFIX: &[u8] = b"concurrent-psbt";

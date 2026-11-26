@@ -3,13 +3,12 @@
 
 use psbt_v2::raw;
 
-/// The prefix of every proprietary key this crate defines.
-pub(crate) const PREFIX: &[u8] = b"concurrent-psbt";
+use crate::PROPRIETARY_PREFIX;
 
-/// The proprietary key with `subtype` under [`PREFIX`].
+/// The proprietary key with `subtype` under [`PROPRIETARY_PREFIX`].
 pub(crate) fn key(subtype: u8) -> raw::ProprietaryKey {
     raw::ProprietaryKey {
-        prefix: PREFIX.to_vec(),
+        prefix: PROPRIETARY_PREFIX.to_vec(),
         subtype,
         key: vec![],
     }
@@ -20,7 +19,7 @@ pub(crate) fn key(subtype: u8) -> raw::ProprietaryKey {
 /// A field's key and encoding are defined by its codec, so changing them does
 /// not change the field's type or join.
 pub(crate) trait ProprietaryField {
-    /// The subtype of the field's key under [`PREFIX`].
+    /// The subtype of the field's key under [`PROPRIETARY_PREFIX`].
     const SUBTYPE: u8;
     /// The decoded field.
     type Value;

@@ -13,7 +13,11 @@ use bitcoin::taproot::TapTree;
 use bitcoin::{Amount, ScriptBuf, TapLeafHash};
 use psbt_v2::raw;
 
-use super::proprietary::ProprietaryField;
+use super::input::{InvalidSortKey, SortKey, SortKeyField};
+mod fields;
+
+use fields::UniqueIdField;
+pub use fields::{PSBT_OUT_SORT_KEY_SUBTYPE, PSBT_OUT_UNIQUE_ID_SUBTYPE};
 joinable_struct! {
     /// A PSBT output, mirroring the BIP 370 per-output map, identified by its
     /// [`UniqueId`].
@@ -39,6 +43,7 @@ joinable_struct! {
     },
     proprietary: {
         unique_id: UniqueId = UniqueIdField,
+        pub(crate) sort_key: Option<SortKey> = SortKeyField<PSBT_OUT_SORT_KEY_SUBTYPE>,
     },
 }
 
@@ -53,12 +58,23 @@ impl Output {
                 ..psbt_v2::v2::Output::default()
             },
             unique_id,
+            None,
         )
     }
 
     /// The [`UniqueId`] identifying this output.
     pub fn unique_id(&self) -> &UniqueId {
         &self.unique_id
+    }
+
+    /// Get the sort key, if set.
+    pub fn sort_key(&self) -> Option<&[u8]> {
+        self.sort_key.as_ref().map(SortKey::as_bytes)
+    }
+
+    /// Set the sort key.
+    pub fn set_sort_key(&mut self, sort_key: SortKey) {
+        self.sort_key = Some(sort_key);
     }
 }
 
@@ -70,6 +86,8 @@ pub enum InvalidOutput {
     /// Its `PSBT_OUT_UNIQUE_ID` is shorter than [`UniqueId::MIN_LEN`] or
     /// longer than [`UniqueId::MAX_LEN`] bytes.
     InvalidUniqueId(InvalidUniqueId),
+    /// Its `PSBT_OUT_SORT_KEY` is longer than [`SortKey::MAX_LEN`] bytes.
+    SortKeyTooLong(InvalidSortKey),
 }
 
 impl std::fmt::Display for InvalidOutput {
@@ -77,13 +95,24 @@ impl std::fmt::Display for InvalidOutput {
         match self {
             Self::MissingUniqueId => write!(f, "output missing PSBT_OUT_UNIQUE_ID"),
             Self::InvalidUniqueId(error) => write!(f, "output {error}"),
+            Self::SortKeyTooLong(error) => write!(f, "output {error}"),
         }
     }
 }
 
 impl std::error::Error for InvalidOutput {}
 
-/// Reads the unique ID from `PSBT_OUT_UNIQUE_ID`.
+impl From<InvalidSortKey> for InvalidOutput {
+    fn from(error: InvalidSortKey) -> Self {
+        Self::SortKeyTooLong(error)
+    }
+}
+
+/// Reads the unique ID and sort key out of `PSBT_OUT_UNIQUE_ID` and
+/// `PSBT_OUT_SORT_KEY`.
+///
+/// # Errors
+/// Returns the first of [`InvalidOutput`]'s variants that applies.
 impl TryFrom<psbt_v2::v2::Output> for Output {
     type Error = InvalidOutput;
 
@@ -92,7 +121,8 @@ impl TryFrom<psbt_v2::v2::Output> for Output {
     }
 }
 
-/// Writes the unique ID to `PSBT_OUT_UNIQUE_ID`.
+/// Writes the unique ID and sort key to `PSBT_OUT_UNIQUE_ID` and
+/// `PSBT_OUT_SORT_KEY`.
 impl From<Output> for psbt_v2::v2::Output {
     fn from(output: Output) -> Self {
         output.encode_v2(psbt_v2::v2::Output::default())
@@ -147,7 +177,8 @@ impl UniqueId {
 
 impl crate::values::IdempotentValue for UniqueId {}
 
-/// Output ID bytes whose length is outside the allowed range.
+/// The unique ID's length is outside the allowed range; its bytes are
+/// returned unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvalidUniqueId(pub Vec<u8>);
 
@@ -175,26 +206,6 @@ impl std::fmt::Display for InvalidUniqueId {
 }
 
 impl std::error::Error for InvalidUniqueId {}
-
-pub const PSBT_OUT_UNIQUE_ID_SUBTYPE: u8 = 0x01;
-
-/// Stores an output's unique ID in `PSBT_OUT_UNIQUE_ID`.
-struct UniqueIdField;
-
-impl ProprietaryField for UniqueIdField {
-    const SUBTYPE: u8 = PSBT_OUT_UNIQUE_ID_SUBTYPE;
-    type Value = UniqueId;
-    type Error = InvalidOutput;
-
-    fn decode(value: Option<Vec<u8>>) -> Result<UniqueId, InvalidOutput> {
-        let bytes = value.ok_or(InvalidOutput::MissingUniqueId)?;
-        UniqueId::try_from(bytes).map_err(InvalidOutput::InvalidUniqueId)
-    }
-
-    fn encode(unique_id: UniqueId) -> Option<Vec<u8>> {
-        Some(unique_id.into_bytes())
-    }
-}
 
 /// Sets `PSBT_OUT_UNIQUE_ID` on BIP 370 outputs, for tests that parse them.
 #[cfg(test)]
@@ -296,6 +307,29 @@ mod tests {
                 Ok(output)
             );
         }
+
+        #[test]
+        fn sort_key_is_encoded_under_the_crate_prefix() {
+            let key = psbt_v2::raw::ProprietaryKey {
+                prefix: b"concurrent-psbt".to_vec(),
+                subtype: 16,
+                key: vec![],
+            };
+            let mut output = output(1);
+            assert_eq!(output.sort_key(), None);
+            output.set_sort_key(SortKey::try_from(vec![0x42]).unwrap());
+            assert_eq!(output.sort_key(), Some([0x42].as_slice()));
+            let mut v2 = psbt_v2::v2::Output::from(output.clone());
+            assert_eq!(v2.proprietaries.get(&key), Some(&vec![0x42]));
+            assert_eq!(Output::try_from(v2.clone()), Ok(output));
+
+            v2.proprietaries.insert(key, vec![0; 33]);
+            let error = Output::try_from(v2).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "output sort key is 33 bytes, more than 32"
+            );
+        }
     }
 
     #[cfg(feature = "prop-tests")]
@@ -308,12 +342,14 @@ mod tests {
                 any::<u64>(),
                 proptest::option::of(proptest::collection::vec(0u8..255, 0..=8)),
                 proptest::option::of(proptest::collection::vec(0u8..255, 0..=8)),
+                proptest::option::of(proptest::collection::vec(0u8..3, 0..=2)),
             )
-                .prop_map(|(amount, redeem, witness)| Output {
+                .prop_map(|(amount, redeem, witness, sort_key)| Output {
                     amount: bitcoin::Amount::from_sat(amount),
                     script_pubkey: ScriptBuf::new(),
                     redeem_script: redeem.map(ScriptBuf::from_bytes),
                     witness_script: witness.map(ScriptBuf::from_bytes),
+                    sort_key: sort_key.map(|key| SortKey::try_from(key).expect("at most 2 bytes")),
                     ..output(1)
                 })
         }
@@ -348,6 +384,23 @@ mod tests {
                 prop_assert_eq!(o.redeem_script(), &redeem);
             }
 
+            #[test]
+            fn try_from_reads_the_sort_key(key in proptest::collection::vec(any::<u8>(), 0..=40)) {
+                let mut v2 = psbt_v2::v2::Output::from(output(1));
+                v2.proprietaries
+                    .insert(crate::psbt::proprietary::key(PSBT_OUT_SORT_KEY_SUBTYPE), key.clone());
+                match Output::try_from(v2.clone()) {
+                    Ok(output) => {
+                        prop_assert!(key.len() <= SortKey::MAX_LEN);
+                        prop_assert_eq!(output.sort_key(), Some(key.as_slice()));
+                        prop_assert_eq!(psbt_v2::v2::Output::from(output), v2);
+                    }
+                    Err(error) => {
+                        prop_assert!(key.len() > SortKey::MAX_LEN);
+                        prop_assert_eq!(error, InvalidOutput::SortKeyTooLong(InvalidSortKey(key)));
+                    }
+                }
+            }
         }
     }
 
@@ -419,7 +472,7 @@ mod tests {
         fn unique_id_is_encoded_under_the_crate_prefix() {
             let key = raw::ProprietaryKey {
                 prefix: b"concurrent-psbt".to_vec(),
-                subtype: 0x01,
+                subtype: 1,
                 key: vec![],
             };
             let v2 = psbt_v2::v2::Output::from(output(7));
