@@ -17,6 +17,8 @@ pub use psbt::input;
 pub use psbt::output;
 pub use psbt::tx;
 
+pub use psbt::conflicts;
+
 pub use lattice::lift::{Lift, ResultWrapped};
 
 pub use lattice::conflicts::Conflicts;

@@ -10,6 +10,8 @@
 /// Mirrored fields are private, with public getters and setters by default.
 /// Prefix a field with `[accessors(pub(crate))]` to restrict its accessors.
 /// Fields of `$Result` are `pub(crate)`.
+/// `=> Variant` names its conflict variant. Container fields also name the
+/// conflicted value type in parentheses and, for maps, the key type in brackets.
 ///
 /// Generates:
 /// 1. `$Source` struct with the fields as written
@@ -18,10 +20,12 @@
 /// 4. `Join for $Result`
 /// 5. `$Result::is_ok` and `$Result::try_unwrap`
 /// 6. `Lift for $Source` and `ResultWrapped for $Result`
+/// 7. Typed conflict paths and `Conflicts for $Result`
 ///
 /// Each entry in `fields` mirrors the field of the same name in the `v2` type.
 /// Each entry in `proprietary` is written
-/// `name: Type = Codec`, and is stored in a proprietary key of `v2` by the
+/// `name: Type = Codec => Variant`, with the same variant annotations as
+/// `fields`. It is stored in a proprietary key of `v2` by the
 /// [`ProprietaryField`](crate::psbt::proprietary::ProprietaryField) impl
 /// for `Codec`. The struct then has private conversions:
 ///
@@ -38,18 +42,21 @@ macro_rules! joinable_struct {
         source: $Source:ident,
         $(#[$result_meta:meta])*
         result: $Result:ident,
+        conflicts: $Conflict:ident, $Field:ident,
         v2: $V2:path,
         fields: {
             $(
                 $(#[$field_meta:meta])*
                 $( [accessors($accessor_vis:vis)] )?
                 $field:ident : $T:ty
+                => $Variant:ident $( [ $Key:ty ] )? $( ( $Value:ty ) )?
             ),+ $(,)?
         },
         proprietary: {
             $(
                 $(#[$proprietary_meta:meta])* $proprietary_vis:vis
                 $proprietary:ident : $P:ty = $Codec:ty
+                => $ProprietaryVariant:ident $( [ $ProprietaryKey:ty ] )? $( ( $ProprietaryValue:ty ) )?
             ),+ $(,)?
         } $(,)?
     ) => {
@@ -58,9 +65,10 @@ macro_rules! joinable_struct {
             source: $Source,
             $(#[$result_meta])*
             result: $Result,
+            conflicts: $Conflict, $Field,
             fields: {
-                $( $(#[$field_meta])* $field: $T, )+
-                $( $(#[$proprietary_meta])* $proprietary_vis $proprietary: $P, )+
+                $( $(#[$field_meta])* $field: $T => $Variant $( [ $Key ] )? $( ( $Value ) )?, )+
+                $( $(#[$proprietary_meta])* $proprietary_vis $proprietary: $P => $ProprietaryVariant $( [ $ProprietaryKey ] )? $( ( $ProprietaryValue ) )?, )+
             }
         }
 
@@ -127,9 +135,10 @@ macro_rules! joinable_struct {
         source: $Source:ident,
         $(#[$result_meta:meta])*
         result: $Result:ident,
+        conflicts: $Conflict:ident, $Field:ident,
         fields: {
             $( $(#[$field_meta:meta])* $vis:vis $field:ident : $T:ty
-                 ),+ $(,)?
+                => $Variant:ident $( [ $Key:ty ] )? $( ( $Value:ty ) )? ),+ $(,)?
         }
     ) => {
         $(#[$source_meta])*
@@ -220,6 +229,45 @@ macro_rules! joinable_struct {
             }
         }
 
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum $Field<'a> {
+            $( $Variant $( (&'a $Key) )?, )+
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        pub enum $Conflict<'a> {
+            $( $Variant { $( key: &'a $Key, )? values: &'a $crate::Conflict<joinable_struct!(@conflict_value $T $(, $Value)?)> }, )+
+        }
+
+        impl<'a> $Conflict<'a> {
+            pub fn path(&self) -> $Field<'a> {
+                match self {
+                    $( Self::$Variant { $( key: joinable_struct!(@conflict_key $Key, key), )? .. } => {
+                        joinable_struct!(@conflict_path $Field $Variant key $( [ $Key ] )?)
+                    }, )+
+                }
+            }
+        }
+
+        impl $Result {
+            /// Borrow each conflicted field, retaining its keydata and value type.
+            pub fn conflicts(&self) -> impl Iterator<Item = $Conflict<'_>> {
+                // Exhaustive destructuring requires a mapping for every field.
+                let Self { $( $field, )+ } = self;
+                std::iter::empty()
+                    $( .chain($crate::lattice::conflicts::Conflicts::conflicts($field)
+                        .map(joinable_struct!(@conflict_item $Conflict $Variant $( [ $Key ] )?))) )+
+            }
+        }
+
+        impl $crate::lattice::conflicts::Conflicts for $Result {
+            type Item<'a> = $Conflict<'a>;
+
+            fn conflicts(&self) -> impl Iterator<Item = Self::Item<'_>> {
+                Self::conflicts(self)
+            }
+        }
+
         impl $crate::lattice::lift::ResultWrapped for $Result {
             type Clean = $Source;
 
@@ -248,6 +296,19 @@ macro_rules! joinable_struct {
             }
         }
     };
+
+    (@conflict_key $Key:ty, $key:ident) => { $key };
+    (@conflict_path $Field:ident $Variant:ident $key:ident [ $Key:ty ]) => { $Field::$Variant(*$key) };
+    (@conflict_path $Field:ident $Variant:ident $key:ident) => { $Field::$Variant };
+    (@conflict_item $Conflict:ident $Variant:ident [ $Key:ty ]) => {
+        |(key, values)| $Conflict::$Variant { key, values }
+    };
+    (@conflict_item $Conflict:ident $Variant:ident) => {
+        |values| $Conflict::$Variant { values }
+    };
+    (@conflict_value $T:ty) => { $T };
+    (@conflict_value $T:ty, $Value:ty) => { $Value };
+
 }
 
 // Outside the `coverage(off)` test module, so that this expansion of the
@@ -261,10 +322,11 @@ mod sample {
         source: Sample,
         /// Result-domain form of [`Sample`].
         result: ResultSample,
+        conflicts: SampleConflict, SampleField,
         fields: {
-            pub scalar: u8,
-            pub option: std::option::Option<u8>,
-            pub map: BTreeMap<u8, u8>,
+            pub scalar: u8 => Scalar,
+            pub option: std::option::Option<u8> => Option(u8),
+            pub map: BTreeMap<u8, u8> => Map[u8](u8),
         }
     }
 
@@ -324,9 +386,28 @@ mod tests {
     }
 
     #[test]
-    fn conflicting_fields_preserve_failed_unwrap() {
+    fn conflicting_fields_retain_typed_paths() {
         let joined = sample(1, 2, 3).wrap().join(sample(4, 5, 6).wrap());
         assert!(!joined.is_ok());
+        use super::sample::SampleField;
+        assert_eq!(
+            joined.conflicts().map(|c| c.path()).collect::<Vec<_>>(),
+            [
+                SampleField::Scalar,
+                SampleField::Option,
+                SampleField::Map(&0)
+            ]
+        );
+        use super::sample::SampleConflict;
+        for (conflict, expected) in joined.conflicts().zip([[1, 4], [2, 5], [3, 6]]) {
+            match conflict {
+                SampleConflict::Scalar { values }
+                | SampleConflict::Option { values }
+                | SampleConflict::Map { values, .. } => {
+                    assert_eq!(values.into_iter().copied().collect::<Vec<_>>(), expected);
+                }
+            }
+        }
         assert_eq!(ResultWrapped::try_unwrap(joined.clone()), Err(joined));
     }
 }

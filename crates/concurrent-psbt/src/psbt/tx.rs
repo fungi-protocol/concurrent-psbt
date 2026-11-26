@@ -8,8 +8,9 @@ use bitcoin::{EcdsaSighashType, OutPoint};
 use psbt_v2::v2::Psbt;
 
 use crate::lattice::join::Join;
-use crate::{Lift, ResultWrapped};
+use crate::{Conflicts, Lift, ResultWrapped};
 
+use super::conflicts::PsbtConflict;
 use super::global::{Global, InvalidGlobal, ResultGlobal, SortSeed};
 use super::input::{DuplicateInput, Input, InputSet, ResultInputSet, SortKey};
 use super::output::{DuplicateOutput, InvalidOutput, Output, OutputSet, ResultOutputSet, UniqueId};
@@ -35,8 +36,8 @@ pub struct UnorderedPsbt {
 ///
 /// The join combines global fields, matches inputs by outpoint, and matches
 /// outputs by unique ID. A contribution that adds a member to a frozen set
-/// creates a membership conflict. Use [`Self::try_unwrap`] to recover the
-/// merged PSBT when there are no conflicts.
+/// creates a membership conflict. Use [`Self::conflicts`] to inspect field
+/// and membership conflicts and [`Self::try_unwrap`] to recover the merged PSBT.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultUnorderedPsbt {
     pub(crate) global: ResultGlobal,
@@ -328,6 +329,17 @@ impl Join for ResultUnorderedPsbt {
 }
 
 impl ResultUnorderedPsbt {
+    /// Borrow every conflict with its typed PSBT path and alternatives.
+    /// Input and output identities are stable across ordering; iteration order
+    /// between entries is unspecified.
+    pub fn conflicts(&self) -> impl Iterator<Item = PsbtConflict<'_>> {
+        self.global
+            .conflicts()
+            .map(PsbtConflict::from)
+            .chain(self.inputs.conflicts().map(PsbtConflict::from))
+            .chain(self.outputs.conflicts().map(PsbtConflict::from))
+    }
+
     /// Parse a v2 PSBT directly into the result domain, as
     /// [`UnorderedPsbt::try_from_psbt`] then [`wrap`](UnorderedPsbt::wrap).
     ///
@@ -384,9 +396,70 @@ impl ResultWrapped for ResultUnorderedPsbt {
     }
 }
 
+impl Conflicts for ResultUnorderedPsbt {
+    type Item<'a> = PsbtConflict<'a>;
+
+    fn conflicts(&self) -> impl Iterator<Item = Self::Item<'_>> {
+        Self::conflicts(self)
+    }
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    #[cfg(feature = "prop-tests")]
+    mod conflict_properties {
+        use super::*;
+        use crate::psbt::conflicts::ConflictPath;
+        use crate::psbt::global::GlobalField;
+        use crate::psbt::input::InputField;
+        use crate::psbt::output::OutputField;
+        use crate::{Conflicts, Lift, ResultWrapped};
+        use bitcoin::hashes::Hash;
+        use proptest::prelude::*;
+        use std::collections::HashMap;
+
+        proptest! {
+            #[test]
+            fn nested_psbt_conflicts_locate_scope_entry_and_keydata(
+                left_values in any::<[u8; 3]>(), right_values in any::<[u8; 3]>(),
+                txid_byte in any::<u8>(), outer_key in any::<u8>(), same in any::<bool>(),
+                keydata in proptest::collection::vec(any::<u8>(), 0..8),
+            ) {
+                let right_values = if same { left_values } else { right_values };
+                let key = psbt_v2::raw::Key { type_value: 0x80, key: keydata };
+                let outpoint = OutPoint { txid: bitcoin::Txid::from_byte_array([txid_byte; 32]), vout: 0 };
+                let id = UniqueId::try_from(vec![1; 16]).unwrap();
+                let make = |values: [u8; 3]| {
+                    let mut input = psbt_v2::v2::Input::new(&outpoint);
+                    input.unknowns.insert(key.clone(), vec![values[1]]);
+                    let mut output = v2_output_with_uid(vec![1; 16]);
+                    output.unknowns.insert(key.clone(), vec![values[2]]);
+                    let mut psbt = v2_psbt(vec![input], vec![output]);
+                    psbt.global.unknowns.insert(key.clone(), vec![values[0]]);
+                    UnorderedPsbt::try_from_psbt(psbt).unwrap()
+                };
+                let left = HashMap::from([(outer_key, Some(make(left_values)))]);
+                let right = HashMap::from([(outer_key, Some(make(right_values)))]);
+                let joined = left.clone().wrap().join(right.wrap());
+                let mut expected = Vec::new();
+                if left_values[0] != right_values[0] { expected.push(ConflictPath::Global(GlobalField::Unknown(&key))); }
+                if left_values[1] != right_values[1] { expected.push(ConflictPath::Input { outpoint: &outpoint, field: InputField::Unknown(&key) }); }
+                if left_values[2] != right_values[2] { expected.push(ConflictPath::Output { id: &id, field: OutputField::Unknown(&key) }); }
+                let actual: Vec<_> = Conflicts::conflicts(&joined).map(|(found_key, conflict)| {
+                    assert_eq!(found_key, &outer_key);
+                    conflict.path()
+                }).collect();
+                prop_assert_eq!(&actual, &expected);
+                prop_assert_eq!(ResultWrapped::is_ok(&joined), expected.is_empty());
+                if expected.is_empty() {
+                    prop_assert_eq!(ResultWrapped::try_unwrap(joined), Ok(left));
+                } else {
+                    prop_assert_eq!(ResultWrapped::try_unwrap(joined.clone()), Err(joined));
+                }
+            }
+        }
+    }
     use super::*;
     use crate::lattice::join::Join;
     use crate::psbt::output::OutputUniqueIdExt;
@@ -435,6 +508,107 @@ mod tests {
                 inputs: InputSet::try_from_inputs([input]).unwrap(),
                 outputs: OutputSet::try_from_outputs([output]).unwrap(),
             }
+        }
+
+        #[test]
+        fn conflicts_have_full_paths_and_typed_values() {
+            use crate::conflicts::{ConflictPath, PsbtConflict};
+            use crate::global::{GlobalConflict, GlobalField};
+            use crate::input::InputField;
+            use crate::output::OutputField;
+            use psbt_v2::raw;
+
+            let key = raw::Key {
+                type_value: 0x80,
+                key: vec![1, 2],
+            };
+            let build = |value| {
+                let mut global = Global::default();
+                global.set_tx_version(transaction::Version(value));
+                let mut input = Input::new(&outpoint(1));
+                input.set_sequence(Some(Sequence(value as u32)));
+                input.set_unknowns([(key.clone(), vec![value as u8])].into());
+                let output = Output::new(
+                    UniqueId::try_from(vec![7; 16]).unwrap(),
+                    Amount::from_sat(value as u64),
+                    ScriptBuf::new(),
+                );
+                UnorderedPsbt {
+                    global,
+                    inputs: InputSet::try_from_inputs([input]).unwrap(),
+                    outputs: OutputSet::try_from_outputs([output]).unwrap(),
+                }
+                .wrap()
+            };
+            let joined = build(1).join(build(2));
+            let conflicts: Vec<_> = joined.conflicts().collect();
+            let paths: Vec<_> = conflicts.iter().map(|c| c.path()).collect();
+            assert_eq!(
+                paths,
+                [
+                    ConflictPath::Global(GlobalField::TxVersion),
+                    ConflictPath::Input {
+                        outpoint: &outpoint(1),
+                        field: InputField::Sequence
+                    },
+                    ConflictPath::Input {
+                        outpoint: &outpoint(1),
+                        field: InputField::Unknown(&key)
+                    },
+                    ConflictPath::Output {
+                        id: &UniqueId::try_from(vec![7; 16]).unwrap(),
+                        field: OutputField::Amount
+                    },
+                ]
+            );
+            let PsbtConflict::Global(GlobalConflict::TxVersion { values }) = conflicts[0] else {
+                panic!("expected transaction versions");
+            };
+            assert_eq!(
+                values.into_iter().copied().collect::<Vec<_>>(),
+                [transaction::Version(1), transaction::Version(2)]
+            );
+            assert_eq!(singleton(1).wrap().conflicts().count(), 0);
+        }
+
+        #[test]
+        fn membership_conflicts_are_reported_once_per_scope() {
+            use crate::conflicts::{ConflictPath, PsbtConflict};
+            use std::collections::HashSet;
+
+            let freeze = |a: UnorderedPsbt| UnorderedPsbt {
+                inputs: a.inputs.freeze(),
+                outputs: a.outputs.freeze(),
+                ..a
+            };
+            let joined = freeze(singleton(1))
+                .wrap()
+                .join(freeze(singleton(2)).wrap())
+                .join(singleton(3).wrap());
+            let conflicts: Vec<_> = joined.conflicts().collect();
+            assert_eq!(
+                conflicts.iter().map(|c| c.path()).collect::<Vec<_>>(),
+                [
+                    ConflictPath::InputMembership,
+                    ConflictPath::OutputMembership
+                ]
+            );
+            let PsbtConflict::InputMembership(sets) = &conflicts[0] else {
+                panic!("input membership");
+            };
+            assert_eq!(sets.len(), 3);
+            assert!(sets.contains(&HashSet::from([&outpoint(1)])));
+            assert!(sets.contains(&HashSet::from([&outpoint(2)])));
+            assert!(sets.contains(&HashSet::from([&outpoint(1), &outpoint(2), &outpoint(3)])));
+            let PsbtConflict::OutputMembership(sets) = &conflicts[1] else {
+                panic!("output membership");
+            };
+            let ids = [1, 2, 3].map(|byte| UniqueId::try_from(vec![byte; 16]).unwrap());
+            assert_eq!(sets.len(), 3);
+            assert!(sets.contains(&HashSet::from([&ids[0]])));
+            assert!(sets.contains(&HashSet::from([&ids[1]])));
+            assert!(sets.contains(&ids.iter().collect()));
+            assert_eq!(joined.clone().try_unwrap(), Err(joined));
         }
 
         #[test]
@@ -952,8 +1126,8 @@ mod tests {
 
             #[test]
             fn is_ok_iff_try_unwrap_succeeds(r in arb_result_unordered_psbt()) {
-                let is_ok = ResultWrapped::is_ok(&r);
-                prop_assert_eq!(is_ok, ResultWrapped::try_unwrap(r).is_ok());
+                prop_assert_eq!(r.conflicts().next().is_none(), r.is_ok());
+                prop_assert_eq!(r.is_ok(), r.try_unwrap().is_ok());
             }
 
             #[test]

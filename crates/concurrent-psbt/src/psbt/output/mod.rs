@@ -28,22 +28,23 @@ joinable_struct! {
     source: Output,
     /// Result-domain counterpart of [`Output`].
     result: ResultOutput,
+    conflicts: OutputConflict, OutputField,
     v2: psbt_v2::v2::Output,
     fields: {
-        amount: Amount,
-        script_pubkey: ScriptBuf,
-        redeem_script: Option<ScriptBuf>,
-        witness_script: Option<ScriptBuf>,
-        bip32_derivations: BTreeMap<PublicKey, KeySource>,
-        tap_internal_key: Option<XOnlyPublicKey>,
-        tap_tree: Option<TapTree>,
-        tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
-        proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
-        unknowns: BTreeMap<raw::Key, Vec<u8>>,
+        amount: Amount => Amount,
+        script_pubkey: ScriptBuf => ScriptPubkey,
+        redeem_script: Option<ScriptBuf> => RedeemScript(ScriptBuf),
+        witness_script: Option<ScriptBuf> => WitnessScript(ScriptBuf),
+        bip32_derivations: BTreeMap<PublicKey, KeySource> => Bip32Derivation[PublicKey](KeySource),
+        tap_internal_key: Option<XOnlyPublicKey> => TapInternalKey(XOnlyPublicKey),
+        tap_tree: Option<TapTree> => TapTree(TapTree),
+        tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)> => TapKeyOrigin[XOnlyPublicKey]((Vec<TapLeafHash>, KeySource)),
+        proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>> => Proprietary[raw::ProprietaryKey](Vec<u8>),
+        unknowns: BTreeMap<raw::Key, Vec<u8>> => Unknown[raw::Key](Vec<u8>),
     },
     proprietary: {
-        unique_id: UniqueId = UniqueIdField,
-        pub(crate) sort_key: Option<SortKey> = SortKeyField<PSBT_OUT_SORT_KEY_SUBTYPE>,
+        unique_id: UniqueId = UniqueIdField => UniqueId,
+        pub(crate) sort_key: Option<SortKey> = SortKeyField<PSBT_OUT_SORT_KEY_SUBTYPE> => SortKey(SortKey),
     },
 }
 
@@ -254,6 +255,10 @@ mod tests {
                 ..output(1)
             };
             let joined = with_amount(100).wrap().join(with_amount(200).wrap());
+            assert_eq!(
+                joined.conflicts().map(|c| c.path()).collect::<Vec<_>>(),
+                [OutputField::Amount]
+            );
             assert_eq!(joined.clone().try_unwrap(), Err(joined));
         }
 
@@ -371,6 +376,7 @@ mod tests {
 
             #[test]
             fn is_ok_iff_try_unwrap_succeeds(r in arb_result_output()) {
+                prop_assert_eq!(r.conflicts().next().is_none(), r.is_ok());
                 prop_assert_eq!(r.is_ok(), r.try_unwrap().is_ok());
             }
 
